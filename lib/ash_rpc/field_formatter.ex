@@ -59,19 +59,13 @@ defmodule AshRpc.FieldFormatter do
   """
   def parse_input_field(field_name, formatter)
       when is_binary(field_name) or is_atom(field_name) do
-    internal_name = parse_field_name(field_name, formatter)
-
-    case internal_name do
+    case parse_field_name(field_name, formatter) do
       name when is_binary(name) ->
         try do
           String.to_existing_atom(name)
         rescue
-          ArgumentError ->
-            name
+          ArgumentError -> name
         end
-
-      name when is_atom(name) ->
-        name
 
       name ->
         name
@@ -306,27 +300,16 @@ defmodule AshRpc.FieldFormatter do
   end
 
   defp format_single_sort_field(field_with_modifier, formatter) do
-    case field_with_modifier do
-      "++" <> field_name ->
-        formatted_field = parse_input_field(field_name, formatter)
-        "++#{formatted_field}"
+    {modifier, field_name} =
+      case field_with_modifier do
+        "++" <> field_name -> {"++", field_name}
+        "--" <> field_name -> {"--", field_name}
+        "+" <> field_name -> {"+", field_name}
+        "-" <> field_name -> {"-", field_name}
+        field_name -> {"", field_name}
+      end
 
-      "--" <> field_name ->
-        formatted_field = parse_input_field(field_name, formatter)
-        "--#{formatted_field}"
-
-      "+" <> field_name ->
-        formatted_field = parse_input_field(field_name, formatter)
-        "+#{formatted_field}"
-
-      "-" <> field_name ->
-        formatted_field = parse_input_field(field_name, formatter)
-        "-#{formatted_field}"
-
-      field_name ->
-        formatted_field = parse_input_field(field_name, formatter)
-        "#{formatted_field}"
-    end
+    modifier <> to_string(parse_input_field(field_name, formatter))
   end
 
   # Private helper for parsing field names from client format to internal format

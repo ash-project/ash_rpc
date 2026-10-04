@@ -11,6 +11,7 @@ defmodule AshRpc.InputFormatter do
   formatting of nested values using `%Ash.Info.Manifest.Type{}` structs.
   """
 
+  alias Ash.Info.Manifest.Type
   alias AshRpc.{Introspection, ValueFormatter}
   alias AshRpc.Manifest.Custom
 
@@ -30,20 +31,11 @@ defmodule AshRpc.InputFormatter do
 
   defp get_action(_runtime, _resource, %{} = action), do: action
 
-  defp format_data(data, resource, action_name_or_action, runtime) do
-    case data do
-      map when is_map(map) and not is_struct(map) ->
-        format_map(map, resource, action_name_or_action, runtime)
+  defp format_data(data, resource, action_name_or_action, runtime)
+       when is_map(data) and not is_struct(data),
+       do: format_map(data, resource, action_name_or_action, runtime)
 
-      list when is_list(list) ->
-        Enum.map(list, fn item ->
-          format_data(item, resource, action_name_or_action, runtime)
-        end)
-
-      other ->
-        other
-    end
-  end
+  defp format_data(data, _resource, _action_name_or_action, _runtime), do: data
 
   defp format_map(map, resource, action_name_or_action, runtime) do
     action = get_action(runtime, resource, action_name_or_action)
@@ -81,90 +73,45 @@ defmodule AshRpc.InputFormatter do
       end)
   end
 
-  # Resolve the field type to %Ash.Info.Manifest.Type{} and handle struct resources specially
-  defp format_value(
-         value,
-         %Ash.Info.Manifest.Type{kind: kind} = type_info,
-         runtime
-       )
-       when kind in [:struct, :map] do
-    inst = type_info.instance_of || type_info.module
-
-    if inst && Introspection.ash_resource?(inst) && is_map(value) && not is_struct(value) do
-      formatted_data =
-        ValueFormatter.format(value, type_info, [], :input, runtime)
-
-      cast_map_to_struct(formatted_data, inst)
-    else
-      ValueFormatter.format(value, type_info, [], :input, runtime)
-    end
-  end
-
-  defp format_value(
-         value,
-         %Ash.Info.Manifest.Type{kind: :resource} = type_info,
-         runtime
-       ) do
-    inst = type_info.resource_module || type_info.module
-
-    if inst && is_map(value) && not is_struct(value) do
-      formatted_data =
-        ValueFormatter.format(value, type_info, [], :input, runtime)
-
-      cast_map_to_struct(formatted_data, inst)
-    else
-      ValueFormatter.format(value, type_info, [], :input, runtime)
-    end
-  end
-
-  # Embedded resources: only format field names, don't cast to struct.
-  # Ash handles embedded resource input casting internally.
-  defp format_value(
-         value,
-         %Ash.Info.Manifest.Type{kind: :embedded_resource} = type_info,
-         runtime
-       ) do
-    ValueFormatter.format(value, type_info, [], :input, runtime)
-  end
-
-  defp format_value(
-         value,
-         %Ash.Info.Manifest.Type{kind: :array} = type_info,
-         runtime
-       ) do
-    item_type = type_info.item_type
-
-    if item_type &&
-         match?(%Ash.Info.Manifest.Type{kind: k} when k in [:struct, :resource], item_type) do
-      # Non-embedded struct/resource items need struct casting
-      inst = item_type.instance_of || item_type.resource_module || item_type.module
-
-      if inst && Introspection.ash_resource?(inst) && is_list(value) do
-        Enum.map(value, fn item ->
-          if is_map(item) && not is_struct(item) do
-            formatted_item =
-              ValueFormatter.format(item, item_type, [], :input, runtime)
-
-            cast_map_to_struct(formatted_item, inst)
-          else
-            item
-          end
-        end)
-      else
-        ValueFormatter.format(value, type_info, [], :input, runtime)
-      end
-    else
-      # Embedded resources and everything else: just format, Ash handles casting
-      ValueFormatter.format(value, type_info, [], :input, runtime)
-    end
-  end
-
-  defp format_value(value, %Ash.Info.Manifest.Type{} = type_info, runtime) do
-    ValueFormatter.format(value, type_info, [], :input, runtime)
-  end
-
-  # Fallback for nil type
   defp format_value(value, nil, _runtime), do: value
+
+  defp format_value(value, %Type{kind: :array, item_type: item_type} = type, runtime)
+       when is_list(value) do
+    case item_type && struct_cast_target(item_type) do
+      nil -> ValueFormatter.format(value, type, [], :input, runtime)
+      module -> Enum.map(value, &format_array_item(&1, item_type, module, runtime))
+    end
+  end
+
+  defp format_value(value, %Type{} = type, runtime) do
+    formatted = ValueFormatter.format(value, type, [], :input, runtime)
+
+    case struct_cast_target(type) do
+      nil -> formatted
+      module when is_map(value) and not is_struct(value) -> cast_map_to_struct(formatted, module)
+      _module -> formatted
+    end
+  end
+
+  defp format_array_item(item, item_type, module, runtime)
+       when is_map(item) and not is_struct(item) do
+    item
+    |> ValueFormatter.format(item_type, [], :input, runtime)
+    |> cast_map_to_struct(module)
+  end
+
+  defp format_array_item(item, _item_type, _module, _runtime), do: item
+
+  # Non-embedded struct/resource inputs bound to an Ash resource are cast to the
+  # resource struct after key formatting; Ash casts everything else (embedded
+  # resources included) itself. A `:map` type never has a resource as its
+  # effective module, so it never casts.
+  defp struct_cast_target(%Type{kind: kind} = type) when kind in [:struct, :map, :resource] do
+    module = Type.effective_resource(type)
+    if Introspection.ash_resource?(module), do: module
+  end
+
+  defp struct_cast_target(_type), do: nil
 
   defp cast_map_to_struct(map, struct_module) when is_map(map) and is_atom(struct_module) do
     with {:ok, casted} <-

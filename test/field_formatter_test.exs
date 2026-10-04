@@ -60,6 +60,24 @@ defmodule AshRpc.FieldFormatterTest do
              "userName"
   end
 
+  test "format_sort_string/2 keeps every modifier and parses field names" do
+    assert FieldFormatter.format_sort_string(
+             "++viewCount,--title,+id,-isActive,title",
+             :camel_case
+           ) ==
+             "++view_count,--title,+id,-is_active,title"
+
+    assert FieldFormatter.format_sort_string(["-viewCount", "title"], :camel_case) ==
+             "-view_count,title"
+
+    assert FieldFormatter.format_sort_string(nil, :camel_case) == nil
+  end
+
+  test "parse_input_field/2 returns an existing atom or the parsed string" do
+    assert FieldFormatter.parse_input_field("viewCount", :camel_case) == :view_count
+    assert FieldFormatter.parse_input_field("noSuchFieldXyz", :camel_case) == "no_such_field_xyz"
+  end
+
   test "Case conversions" do
     assert AshRpc.Case.snake_to_camel_case("user_name") == "userName"
     assert AshRpc.Case.snake_to_pascal_case("user_name") == "UserName"
