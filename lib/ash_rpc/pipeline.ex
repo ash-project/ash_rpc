@@ -33,7 +33,6 @@ defmodule AshRpc.Pipeline do
 
   alias AshRpc.{
     InputFormatter,
-    OutputFormatter,
     Request,
     RequestedFieldsProcessor,
     ResultProcessor,
@@ -87,12 +86,7 @@ defmodule AshRpc.Pipeline do
              runtime
            ),
          :ok <- validate_top_level_query_params(normalized_params, action, entrypoint),
-         requested_fields <-
-           RequestedFieldsProcessor.atomize_requested_fields(
-             normalized_params[:fields] || [],
-             resource,
-             runtime
-           ),
+         requested_fields = normalized_params[:fields] || [],
          {:ok, {select, load, template}} <-
            process_fields_unless_validation_mode(
              runtime,
@@ -673,10 +667,8 @@ defmodule AshRpc.Pipeline do
   end
 
   defp execute_update_action(%Request{} = request, opts) do
-    bulk_opts = bulk_opts(request, opts) ++ [select: request.select, load: request.load]
-
     with {:ok, query} <- bulk_target_query(request, opts) do
-      case Ash.bulk_update(query, request.action.name, request.input, bulk_opts) do
+      case Ash.bulk_update(query, request.action.name, request.input, bulk_opts(request, opts)) do
         %Ash.BulkResult{status: :success, records: [record]} ->
           {:ok, record}
 
@@ -691,10 +683,7 @@ defmodule AshRpc.Pipeline do
 
   defp execute_destroy_action(%Request{} = request, opts) do
     with {:ok, query} <- bulk_target_query(request, opts) do
-      query
-      |> apply_select_and_load(request)
-      |> Ash.bulk_destroy(request.action.name, request.input, bulk_opts(request, opts))
-      |> case do
+      case Ash.bulk_destroy(query, request.action.name, request.input, bulk_opts(request, opts)) do
         %Ash.BulkResult{status: :success, records: [record]} -> {:ok, record}
         %Ash.BulkResult{status: :success, records: []} -> {:ok, %{}}
         result -> bulk_error(result)
@@ -730,7 +719,11 @@ defmodule AshRpc.Pipeline do
       tenant: opts[:tenant],
       context: opts[:context] || %{},
       actor: opts[:actor],
-      domain: request.entrypoint.domain
+      domain: request.entrypoint.domain,
+      # The bulk action applies select/load to the returned records; select/load
+      # set on the target query are not carried over to them.
+      select: request.select,
+      load: request.load
     ]
 
     case request.entrypoint.read_action do
@@ -861,17 +854,17 @@ defmodule AshRpc.Pipeline do
   end
 
   # Formats action output based on action return type
-  # - Resource-returning actions use OutputFormatter for full resource field mapping
+  # - Resource-returning actions are formatted against the resource (pages too)
   # - Composite types (typed maps, typed structs) use ValueFormatter with type constraints
   # - Unconstrained maps are passed through unchanged — the action opted out of
   #   typing, so its keys are the caller's responsibility and must not be renamed
   defp format_action_output(data, action, default_resource, runtime) do
     if action.type != :action do
-      OutputFormatter.format(data, default_resource, action.name, runtime)
+      format_resource_output(data, default_resource, runtime)
     else
       case Introspection.return_classification(action, runtime.type_lookup) do
         {:ok, type, resource_module} when type in [:resource, :array_of_resource] ->
-          OutputFormatter.format(data, resource_module, action.name, runtime)
+          format_resource_output(data, resource_module, runtime)
 
         {:ok, type, _}
         when type in [:typed_map, :array_of_typed_map, :typed_struct, :array_of_typed_struct] ->
@@ -884,6 +877,28 @@ defmodule AshRpc.Pipeline do
           format_generic_action_output(data, action, runtime)
       end
     end
+  end
+
+  # Page keys (count, limit, …) are pagination metadata, not resource fields;
+  # only the results are formatted against the resource.
+  defp format_resource_output(%{type: page_type} = page, resource, runtime)
+       when page_type in [:offset, :keyset] and not is_struct(page) do
+    Enum.into(page, %{}, fn
+      {:results, results} when is_list(results) ->
+        {FieldFormatter.format_field_name(:results, runtime.output_formatter),
+         format_resource_output(results, resource, runtime)}
+
+      {key, value} ->
+        {FieldFormatter.format_field_name(key, runtime.output_formatter), value}
+    end)
+  end
+
+  defp format_resource_output(list, resource, runtime) when is_list(list),
+    do: Enum.map(list, &format_resource_output(&1, resource, runtime))
+
+  defp format_resource_output(data, resource, runtime) do
+    type = %Ash.Info.Manifest.Type{kind: :resource, module: resource, resource_module: resource}
+    ValueFormatter.format(data, type, [], :output, runtime)
   end
 
   defp format_generic_action_output(data, action, runtime) do
