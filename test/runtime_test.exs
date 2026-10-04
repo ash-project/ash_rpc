@@ -12,13 +12,7 @@ defmodule AshRpc.RuntimeTest do
 
     @impl AshRpc.Profile
     def manifest do
-      {:ok, m} =
-        Ash.Info.Manifest.Generator.generate(
-          otp_app: :ash_rpc,
-          action_entrypoints: [{AshRpc.Test.Post, :read}]
-        )
-
-      m
+      AshRpc.Test.ManifestBuilder.generate!([{AshRpc.Test.Post, :read}])
     end
   end
 

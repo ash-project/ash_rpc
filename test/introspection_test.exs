@@ -8,11 +8,11 @@ defmodule AshRpc.IntrospectionTest do
   alias AshRpc.Introspection
 
   setup_all do
-    {:ok, manifest} =
-      Ash.Info.Manifest.Generator.generate(
-        otp_app: :ash_rpc,
-        action_entrypoints: [{AshRpc.Test.Post, :read}, {AshRpc.Test.Post, :word_count}]
-      )
+    manifest =
+      AshRpc.Test.ManifestBuilder.generate!([
+        {AshRpc.Test.Post, :read},
+        {AshRpc.Test.Post, :word_count}
+      ])
 
     %{manifest: manifest, actions: Ash.Info.Manifest.action_lookup(manifest)}
   end

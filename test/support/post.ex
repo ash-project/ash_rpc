@@ -36,6 +36,37 @@ defmodule AshRpc.Test.Post do
       accept [:title, :view_count]
     end
 
+    action :stats_summary, AshRpc.Test.PostStats do
+      run fn _input, _context -> {:ok, %{word_count_1: 3, is_featured?: true}} end
+    end
+
+    action :totals, :map do
+      constraints fields: [
+                    total: [type: :integer],
+                    by_kind: [type: :map, constraints: [fields: [drafts: [type: :integer]]]]
+                  ]
+
+      run fn _input, _context -> {:ok, %{total: 2, by_kind: %{drafts: 1}}} end
+    end
+
+    action :location, :tuple do
+      constraints fields: [lat: [type: :float], lng: [type: :float]]
+      run fn _input, _context -> {:ok, {1.0, 2.0}} end
+    end
+
+    action :payload, :union do
+      constraints types: [
+                    text: [type: :string],
+                    stats: [type: AshRpc.Test.PostStats]
+                  ]
+
+      run fn _input, _context -> {:ok, "hello"} end
+    end
+
+    action :ping do
+      run fn _input, _context -> :ok end
+    end
+
     action :word_count, :integer do
       argument :text, :string, allow_nil?: false
 

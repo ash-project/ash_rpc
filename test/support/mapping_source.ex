@@ -6,7 +6,7 @@ defmodule AshRpc.Test.MappingSource do
   @moduledoc false
   @behaviour AshRpc.MappingSource
 
-  @exposed [AshRpc.Test.Author, AshRpc.Test.Post, AshRpc.Test.PostSettings]
+  @exposed [AshRpc.Test.Author, AshRpc.Test.Ledger, AshRpc.Test.Post, AshRpc.Test.PostSettings]
 
   @impl true
   def input_formatter, do: :camel_case

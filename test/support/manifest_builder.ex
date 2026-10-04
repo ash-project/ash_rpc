@@ -11,8 +11,16 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"update_post", AshRpc.Test.Post, :update},
     {"destroy_post", AshRpc.Test.Post, :destroy},
     {"word_count", AshRpc.Test.Post, :word_count},
+    {"stats_summary", AshRpc.Test.Post, :stats_summary},
+    {"totals", AshRpc.Test.Post, :totals},
+    {"location", AshRpc.Test.Post, :location},
+    {"payload", AshRpc.Test.Post, :payload},
+    {"ping", AshRpc.Test.Post, :ping},
     {"list_authors", AshRpc.Test.Author, :read},
-    {"create_author", AshRpc.Test.Author, :create}
+    {"create_author", AshRpc.Test.Author, :create},
+    {"create_ledger", AshRpc.Test.Ledger, :create},
+    {"list_ledgers", AshRpc.Test.Ledger, :read},
+    {"page_ledgers", AshRpc.Test.Ledger, :paged}
   ]
 
   @doc "Cached default manifest (camelCase in/out)."
@@ -28,6 +36,14 @@ defmodule AshRpc.Test.ManifestBuilder do
     end
   end
 
+  @doc "Undecorated manifest for `entrypoints` (any `:action_entrypoints` form)."
+  def generate!(entrypoints) do
+    {:ok, manifest} =
+      Ash.Info.Manifest.Generator.generate(otp_app: :ash_rpc, action_entrypoints: entrypoints)
+
+    manifest
+  end
+
   @doc "Builds a fresh manifest; `opts` are passed to the decorator."
   def build(opts \\ []) do
     entrypoints =
@@ -35,9 +51,8 @@ defmodule AshRpc.Test.ManifestBuilder do
         %{resource: resource, action: action, config: %{ash_rpc_test: %{name: name}}}
       end
 
-    {:ok, manifest} =
-      Ash.Info.Manifest.Generator.generate(otp_app: :ash_rpc, action_entrypoints: entrypoints)
-
-    AshRpc.Manifest.Decorator.decorate(manifest, AshRpc.Test.MappingSource, opts)
+    entrypoints
+    |> generate!()
+    |> AshRpc.Manifest.Decorator.decorate(AshRpc.Test.MappingSource, opts)
   end
 end
