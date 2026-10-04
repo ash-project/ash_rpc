@@ -11,8 +11,8 @@ SPDX-License-Identifier: MIT
 **AshRpc** is a client-agnostic RPC runtime for Ash. It turns a wire request
 (`%{"action" => …, "input" => …, "fields" => …}`) into an Ash action call
 and returns a client-formatted response map. It has no code generation and no
-DSL: extensions such as ash_typescript build an `Ash.Info.Manifest`, decorate it
-with ash_rpc, and mount an endpoint.
+DSL: an extension builds an `Ash.Info.Manifest`, decorates it with ash_rpc,
+and mounts an endpoint.
 
 **Key Features**: manifest decoration with client-facing names, a four-stage
 request pipeline, type-driven field selection (relationships, calculations,
@@ -34,10 +34,11 @@ A function with no callers in this repo is not necessarily dead code.
 | Change a consumer's code without being asked | Report the needed consumer changes, and leave any edits you were asked to make uncommitted |
 
 ### Rule 2: No References to Consumers
-Nothing under `lib/` may name an extension built on ash_rpc. Anything
-client-specific (TypeScript names, generated-client wording) belongs in a
-`MappingSource`, a `Profile`, or the extension itself. When you need a neutral
-default, put it in a profile callback the way `stale_client_hint/0` does.
+Nothing under `lib/`, `test/` or `agent-docs/` (and nothing in this file) may
+name an extension built on ash_rpc. Anything client-specific (client-language
+names, generated-client wording) belongs in a `MappingSource`, a `Profile`, or
+the extension itself. When you need a neutral default, put it in a profile
+callback the way `stale_client_hint/0` does.
 
 ### Rule 3: The Runtime Reads the Manifest, Not Ash
 Runtime code gets action, resource and type shape only from `AshRpc.Runtime`
@@ -101,7 +102,7 @@ formatter.
 | Purpose | Location |
 |---------|----------|
 | **Public API** | `lib/ash_rpc.ex` (`run_action/4`, `validate_action/4`, `error_response/3`, `failure_response/3`) |
-| **Behaviours** | `lib/ash_rpc/profile.ex`, `lib/ash_rpc/mapping_source.ex`, `lib/ash_rpc/error_handler.ex` |
+| **Behaviours** | `lib/ash_rpc/profile.ex`, `lib/ash_rpc/mapping_source.ex`, `lib/ash_rpc/error_handler.ex`, `lib/ash_rpc/default_error_handler.ex` (the default `error_handler/1` result) |
 | **Runtime / entrypoint / context / request** | `lib/ash_rpc/runtime.ex`, `entrypoint.ex`, `context.ex`, `request.ex` |
 | **Manifest decoration** | `lib/ash_rpc/manifest/decorator.ex` (pure: manifest in, manifest out) |
 | **`custom.ash_rpc` readers, lookups, `redecorate/2`** | `lib/ash_rpc/manifest.ex`, `lib/ash_rpc/manifest/custom.ex` |
@@ -112,10 +113,10 @@ formatter.
 | **Field processing (entry point)** | `lib/ash_rpc/requested_fields_processor.ex` (delegator) |
 | **Client name → atom** | `lib/ash_rpc/field_processing/atomizer.ex` |
 | **Type-driven field selection** | `lib/ash_rpc/field_processing/field_selector.ex`, `field_selector/validation.ex` |
-| **Load restrictions** | `lib/ash_rpc/load_restrictions.ex` (checked from `field_selector.ex`) |
 | **Result extraction** | `lib/ash_rpc/result_processor.ex`, `lib/ash_rpc/field_extractor.ex` |
 | **Value formatting** | `lib/ash_rpc/value_formatter.ex` (`input_formatter.ex` delegates to it; the pipeline formats output through it directly) |
 | **Field-name casing** | `lib/ash_rpc/field_formatter.ex`, `lib/ash_rpc/case.ex` |
+| **Load-restriction normalization** | `lib/ash_rpc/load_restrictions.ex` (`normalize/1` in `parse_request`, `check!/2` from the field selector) |
 | **Error protocol + impls** | `lib/ash_rpc/error.ex` |
 | **Error pipeline** | `lib/ash_rpc/errors.ex` (Ash errors), `error_builder.ex` (pipeline reasons), `error_formatter.ex` |
 | **Transports (optional deps)** | `lib/ash_rpc/plug.ex`, `lib/ash_rpc/channel.ex` |
@@ -124,15 +125,16 @@ formatter.
 
 | Fixture | Purpose |
 |---------|---------|
-| `domain.ex` | `AshRpc.Test.Domain` (Author, Post, Secret) |
-| `post.ex`, `author.ex`, `secret.ex` | ETS resources. `Secret` is deliberately **not exposed** |
-| `post_settings.ex`, `post_stats.ex` | Embedded resource / typed map with field-name overrides |
-| `mapping_source.ex` | `AshRpc.Test.MappingSource`: exposure, `isActive`, `body`, `wordCount1` overrides |
-| `manifest_builder.ex` | Wire entrypoints (`list_posts`, `create_post`, `word_count`, …). `manifest/0` is cached, `build/1` builds fresh |
+| `domain.ex` | `AshRpc.Test.Domain`: every fixture resource |
+| `mapping_source.ex` | `AshRpc.Test.MappingSource`: exposure list, name overrides, row opts → `%AshRpc.Entrypoint{}` |
+| `manifest_builder.ex` | Wire entrypoints in `@entrypoints`. `manifest/0` is cached, `build/1` builds fresh, `generate!/1` returns an undecorated manifest |
 | `profile.ex` | `AshRpc.Test.Profile` |
-| `endpoint.ex` | Phoenix socket/endpoint for channel tests |
+| `endpoint.ex` | Phoenix socket/endpoint/channel for channel tests |
+| `error_cases.ex` | One reason per `ErrorBuilder` clause, for the golden test |
 
-To add a wire action for a test, add it to `@entrypoints` in `manifest_builder.ex`.
+Resources, embedded types, calculations and changes are listed in
+`agent-docs/testing.md`. To add a wire action for a test, add a row to
+`@entrypoints` in `manifest_builder.ex`; row opts set `%AshRpc.Entrypoint{}` fields.
 
 ## Command Reference
 
@@ -150,6 +152,27 @@ mix usage_rules.sync              # Regenerate the usage-rules block of this fil
 from an existing file of the same kind. Formats without comment syntax need a
 `<file>.license` sidecar (see `mix.lock.license`).
 
+## Documentation Index
+
+### Core Files
+
+| File | Purpose |
+|------|---------|
+| [troubleshooting.md](agent-docs/troubleshooting.md) | Symptom → cause → fix, and how to reproduce a problem in a test |
+| [development-workflows.md](agent-docs/development-workflows.md) | Changing the pipeline, adding wire actions, fixtures and error reasons, consumer compatibility |
+| [testing.md](agent-docs/testing.md) | Suite layout, `ManifestBuilder`, varying the manifest, test patterns, full fixtures table |
+
+### Feature Docs
+
+| Working On | See Documentation | Test Files |
+|------------|-------------------|------------|
+| **MappingSource, decoration, entrypoints, client names, formatters** | [features/decoration.md](agent-docs/features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
+| **Pipeline stages, validation, transports, tenant, filter/sort/page, get actions** | [features/pipeline.md](agent-docs/features/pipeline.md) | `test/run_action_test.exs`, `test/validation_test.exs`, `test/context_test.exs`, `test/plug_test.exs`, `test/channel_test.exs`, `test/multitenancy_test.exs`, `test/filter_sort_test.exs`, `test/get_actions_test.exs` |
+| **Field selection, calculations, aggregates, nested query options, unions, load restrictions** | [features/field-selection.md](agent-docs/features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs` |
+| **Value/input formatting, union input, unconstrained maps, name mapping** | [features/formatting.md](agent-docs/features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs` |
+| **Action metadata** | [features/action-metadata.md](agent-docs/features/action-metadata.md) | `test/action_metadata_test.exs` |
+| **Errors, handlers, wire error shape** | [features/errors.md](agent-docs/features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs` |
+
 ## Key Architecture Concepts
 
 ### Compile Time vs Runtime
@@ -159,7 +182,8 @@ from an existing file of the same kind. Formats without comment syntax need a
   names, expected input keys, return classification and `lookups`.
 - **Runtime:** `AshRpc.Runtime.new(profile, opts)` reads that decoration once
   per request. The runtime never calls the mapping source. The one exception is
-  `type_field_names/1`, the fallback for types missing from the type lookup.
+  `type_field_names/1`, the fallback for types missing from the type lookup
+  or carrying no decorated overrides.
 - `Runtime.new/2` raises `ArgumentError` ("has no custom.ash_rpc decoration")
   when it gets an undecorated manifest.
 
@@ -174,7 +198,8 @@ Entry points are `AshRpc.run_action/4` and `AshRpc.validate_action/4` (profile, 
 
 `validate_action` stops after stage 1 and runs `AshRpc.Validation`.
 Validation is native (no AshPhoenix). Missing inputs produce `required`,
-bad argument casts produce `invalid_argument`, and atomic validations on
+bad argument casts produce `invalid_argument` (generic actions:
+`internal_error`, see `agent-docs/features/pipeline.md`), and atomic validations on
 update/destroy only run during `run_action`.
 
 ### Action Shape Contract
@@ -203,19 +228,26 @@ a stale client could cause carry `details.hint` from the profile's `stale_client
 | Error | Cause | Solution |
 |-------|-------|----------|
 | "has no custom.ash_rpc decoration" `ArgumentError` | Raw `Ash.Info.Manifest` passed to the runtime | Decorate with `AshRpc.Manifest.Decorator.decorate/3` (or use the fixture `ManifestBuilder`) |
-| `AshRpc.Manifest.NameCollisionError` | Two fields/args map to the same client name | Fix `field_names` / `argument_names` / `type_field_names` overrides |
+| `AshRpc.Manifest.NameCollisionError` | Two fields/args map to the same client name | Fix `field_names` / `argument_names` overrides |
 | Formatter change in a test has no effect | Formatters are fixed at decoration time | `ManifestBuilder.build(output_formatter: …)` or `AshRpc.Manifest.redecorate/2`, then pass `manifest:` |
 | Test sees unexpected data/state | `ManifestBuilder.manifest/0` is cached in `:persistent_term` | Use `build/1` for a variant manifest. Don't mutate the cached one |
 | `action_not_found` | Wire name not in `@entrypoints`, or `entrypoint/1` returned `nil` | Add it to `manifest_builder.ex` |
 | `unknown_field` through a relationship | Destination resource not exposed | Add it to `@exposed` in the test mapping source (not `Secret`, which stays unexposed on purpose) |
 | `UndefinedFunctionError` on `AshRpc.Plug` / `AshRpc.Channel` | plug/phoenix not in the consumer's deps | They're optional deps. Add them in the consumer |
+| `invalid_query_opts` | Query envelope on a non-relationship or to-one field, `args` mixed with query opts, or `page` mixed with bare `limit`/`offset` | Use the envelope only on has_many/many_to_many; pick `page` or `limit`/`offset` |
+| `filter_not_supported` / `sort_not_supported` | `details.reason` `disabled`: the entrypoint sets `enable_filter?`/`enable_sort?: false`. `unsupported`: the param is on a non-list action (a `get?`/`get_by` entrypoint or a non-read action) or the relationship isn't filterable/sortable | Remove the param, or flip the entrypoint flag |
+| `pagination_not_supported` | `page` on a non-list action or an action without pagination, or nested `page` on a relationship whose read action has no pagination | Add pagination to that read action, or use bare `limit`/`offset` |
+| `load_not_allowed` / `load_denied` | Requested field is outside the entrypoint's `{:allow, …}` list, or inside its `{:deny, …}` list | Change `load_restrictions` on the entrypoint (see `agent-docs/features/field-selection.md`) |
+| `invalid_union_input` "must be a map" | Bare value for a union input | Wrap it: `%{"member_name" => value}` |
+| `invalid_union_input` "does not contain any valid member key" | Map has no key naming a member | Use a member name from `vars.expectedMembers` |
+| `invalid_union_input` "contains multiple member keys" | More than one member key in the map | Send exactly one member key |
 | `reuse lint` failure | New file without an SPDX header | Add the header (or a `.license` sidecar) |
 
 ## Safety Checklist
 
 - ✅ `mix check` passes (not just `mix test`)
 - ✅ Public API changes checked and tested against known consumers
-- ✅ No consumer names in `lib/`
+- ✅ No consumer names in `lib/`, `test/`, `agent-docs/` or this file
 - ✅ Runtime code reads shape from `runtime` lookups only
 - ✅ New files carry SPDX headers
 - ✅ Regression test written before the fix
