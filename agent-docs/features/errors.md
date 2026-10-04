@@ -185,6 +185,12 @@ reason shape. Lists (e.g. bulk results) are built element by element, and any
 exception or Ash error is passed to `AshRpc.Errors.to_errors/6` with the
 scope, so domain handlers apply to execution errors too.
 
+The `AshRpc.ErrorBuilder` moduledoc ("Error types") lists every `type` a
+pipeline reason produces, with its cause. `test/error_builder_golden_test.exs`
+"the moduledoc's Error types section lists exactly the pipeline reason types"
+keeps that list in step with `error_cases.ex`, so a new clause needs a bullet
+there too.
+
 `test/support/error_cases.ex` holds one representative reason per clause,
 keyed by a label. `test/error_builder_golden_test.exs` snapshots the wire output
 of `AshRpc.error_response(AshRpc.Test.Profile, reason)` for each case in its

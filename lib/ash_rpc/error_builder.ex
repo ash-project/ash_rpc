@@ -8,6 +8,97 @@ defmodule AshRpc.ErrorBuilder do
 
   Provides clear, actionable error messages for all failure modes with
   detailed context for debugging and client consumption.
+
+  ## Error types
+
+  Each pipeline reason becomes an error map whose `type` is one of the
+  following. Types marked *(hint)* can be caused by a client built against an
+  older manifest, and carry the profile's `stale_client_hint/0` in
+  `details.hint`. The others are request shapes a conforming client never sends.
+
+  Action and parameters:
+
+  - `action_not_found` *(hint)*: the `action` param names no entrypoint.
+  - `missing_required_parameter` *(hint)*: the `action` or `fields` param is
+    missing or empty.
+  - `invalid_input_format`: `input` is not a map.
+
+  Field selection:
+
+  - `invalid_fields_type`: `fields` is not a list.
+  - `empty_fields_array`: `fields` is an empty list.
+  - `unknown_field` *(hint)*: the field is not a public field of the resource
+    or typed value, the relationship's destination is not exposed, or a
+    `fields` entry is neither a name nor a `{name: spec}` map.
+  - `unknown_map_field` *(hint)*: the field is not in a map type's `fields`
+    constraints.
+  - `unknown_union_field` *(hint)*: the name is not a member of the union.
+  - `requires_field_selection` *(hint)*: a relationship, embedded resource,
+    union or typed value was requested without a nested field list, or with an
+    empty one.
+  - `invalid_field_selection` *(hint)*: a nested field list was given for an
+    aggregate or calculation with a primitive type, or for an action whose
+    return type is primitive.
+  - `field_does_not_support_nesting` *(hint)*: a nested specification was
+    given for a primitive attribute or calculation.
+  - `unsupported_field_combination` *(hint)*: a relationship's nested
+    specification is not a list.
+  - `duplicate_field`: the same field is requested more than once at one level.
+  - `invalid_field_format` *(hint)*: `args` were given inside a typed value,
+    tuple or union member, or a calculation that requires arguments was
+    selected by name only.
+  - `invalid_calculation_args` *(hint)*: a calculation's `args` are missing or
+    empty when required, given to a calculation that takes none, or replaced
+    by a nested field map.
+
+  Union input:
+
+  - `invalid_union_input`: a union input is not a map *(hint)*, contains no
+    member key *(hint)*, or contains more than one member key.
+
+  Load restrictions:
+
+  - `load_not_allowed` *(hint)*: a requested load is outside the entrypoint's
+    `{:allow, paths}` restriction.
+  - `load_denied` *(hint)*: a requested load is inside the entrypoint's
+    `{:deny, paths}` restriction.
+
+  Query options:
+
+  - `filter_not_supported` / `sort_not_supported` *(hint)*: `filter` / `sort`
+    sent where the entrypoint disables it (`details.reason` `disabled`), or to a
+    non-list action or a relationship that isn't filterable/sortable
+    (`unsupported`).
+  - `pagination_not_supported` *(hint)*: `page` sent to a non-list action or
+    an action without pagination, or a nested `page` on a relationship whose
+    read action has no pagination.
+  - `invalid_pagination`: `page` is not a map or has unknown keys. *(hint)*
+    when a nested relationship `page` is not a map or has keys its pagination
+    type rejects.
+  - `invalid_query_opts`: a query-option envelope on a field that is not a
+    has_many/many_to_many relationship *(hint)*, `args` combined with query
+    options, or `page` combined with bare `limit`/`offset`.
+
+  Identity and `getBy`:
+
+  - `missing_identity` *(hint)*: an action that requires an `identity` got
+    none.
+  - `invalid_identity`: the `identity` keys match no configured identity
+    *(hint)*, a primary key was sent where the action has no primary-key
+    identity, or an identity value is not a scalar.
+  - `missing_required_input` *(hint)*: required `getBy` fields are missing.
+  - `unexpected_get_by_fields` *(hint)*: `getBy` contains fields the
+    entrypoint does not allow.
+  - `invalid_get_by`: a `getBy` value is not a scalar.
+
+  Fallbacks:
+
+  - `field_validation_error` *(hint)*: any other `{atom, term}` reason.
+  - `unknown_error`: a reason no clause recognises.
+
+  Exceptions and Ash errors are not pipeline reasons. They go through
+  `AshRpc.Errors.to_errors/6`, and their `type` comes from the `AshRpc.Error`
+  protocol impl (or is the underscored exception name).
   """
 
   alias AshRpc.{Errors, FieldFormatter}

@@ -953,6 +953,27 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
              @golden |> Map.keys() |> Enum.sort()
   end
 
+  test "the moduledoc's Error types section lists exactly the pipeline reason types" do
+    runtime = AshRpc.Runtime.new(AshRpc.Test.Profile)
+
+    emitted =
+      for {_label, reason} <- ErrorCases.cases(),
+          not is_exception(reason) and not is_list(reason),
+          into: MapSet.new(),
+          do: AshRpc.ErrorBuilder.build_error_response(runtime, reason).type
+
+    {:docs_v1, _, _, _, %{"en" => moduledoc}, _, _} = Code.fetch_docs(AshRpc.ErrorBuilder)
+    [_, section] = String.split(moduledoc, "## Error types")
+
+    documented =
+      ~r/^- `([a-z_]+)`(?: \/ `([a-z_]+)`)?/m
+      |> Regex.scan(section)
+      |> Enum.flat_map(&tl/1)
+      |> MapSet.new()
+
+    assert documented == emitted
+  end
+
   for {label, _reason} <- ErrorCases.cases() do
     test "wire output for #{label} is unchanged" do
       {_, reason} = List.keyfind(ErrorCases.cases(), unquote(label), 0)
