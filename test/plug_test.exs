@@ -29,4 +29,11 @@ defmodule AshRpc.PlugTest do
     assert conn.status == 200
     assert %{"success" => false, "errors" => [_ | _]} = Jason.decode!(conn.resp_body)
   end
+
+  test "pipeline exceptions respond 200 with a wire error" do
+    conn = AshRpc.Plug.run(post(%{"action" => %{"not" => "a string"}}), AshRpc.Test.Profile)
+
+    assert conn.status == 200
+    assert %{"success" => false, "errors" => [_ | _]} = Jason.decode!(conn.resp_body)
+  end
 end

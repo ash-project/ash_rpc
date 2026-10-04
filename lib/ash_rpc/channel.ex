@@ -43,17 +43,9 @@ if Code.ensure_loaded?(Phoenix.Channel) do
     end
 
     @spec run(module(), Phoenix.Socket.t(), map()) :: map()
-    def run(profile, socket, params) do
-      AshRpc.run_action(profile, socket, params)
-    rescue
-      e -> AshRpc.error_response(profile, e)
-    end
+    def run(profile, socket, params), do: AshRpc.run_action(profile, socket, params)
 
     @spec validate(module(), Phoenix.Socket.t(), map()) :: map()
-    def validate(profile, socket, params) do
-      AshRpc.validate_action(profile, socket, params)
-    rescue
-      e -> AshRpc.error_response(profile, e)
-    end
+    def validate(profile, socket, params), do: AshRpc.validate_action(profile, socket, params)
   end
 end

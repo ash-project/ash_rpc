@@ -7,7 +7,7 @@ defmodule AshRpc.RunActionTest do
 
   @profile AshRpc.Test.Profile
 
-  defp ctx, do: %AshRpc.Context{actor: nil, tenant: nil, context: %{}, transport: :direct}
+  defp ctx, do: %AshRpc.Context{}
 
   test "create then list through the wire contract" do
     assert %{"success" => true, "data" => %{"title" => "Hello"}} =
@@ -53,14 +53,42 @@ defmodule AshRpc.RunActionTest do
              )
   end
 
-  test "validate_action succeeds without persisting" do
-    assert %{"success" => true} =
-             AshRpc.validate_action(@profile, ctx(), %{
-               "action" => "create_post",
-               "input" => %{"title" => "x"}
+  test "run_action and validate_action turn pipeline exceptions into wire errors" do
+    params = %{"action" => %{"not" => "a string"}}
+
+    assert %{"success" => false, "errors" => [%{"type" => _} | _]} =
+             AshRpc.run_action(@profile, ctx(), params)
+
+    assert %{"success" => false, "errors" => [%{"type" => _} | _]} =
+             AshRpc.validate_action(@profile, ctx(), params)
+  end
+
+  test "update returns only the selected fields and loads relationships" do
+    author = Ash.create!(AshRpc.Test.Author, %{name: "Ada"})
+    post = Ash.create!(AshRpc.Test.Post, %{title: "Old", view_count: 3, author_id: author.id})
+
+    assert %{"success" => true, "data" => data} =
+             AshRpc.run_action(@profile, ctx(), %{
+               "action" => "update_post",
+               "identity" => post.id,
+               "input" => %{"title" => "New"},
+               "fields" => ["title", %{"author" => ["name"]}]
              })
 
-    assert %{"data" => []} =
-             AshRpc.run_action(@profile, ctx(), %{"action" => "list_posts", "fields" => ["id"]})
+    assert data == %{"title" => "New", "author" => %{"name" => "Ada"}}
+  end
+
+  test "destroy returns only the selected fields and loads relationships" do
+    author = Ash.create!(AshRpc.Test.Author, %{name: "Ada"})
+    post = Ash.create!(AshRpc.Test.Post, %{title: "Gone", view_count: 3, author_id: author.id})
+
+    assert %{"success" => true, "data" => data} =
+             AshRpc.run_action(@profile, ctx(), %{
+               "action" => "destroy_post",
+               "identity" => post.id,
+               "fields" => ["title", %{"author" => ["name"]}]
+             })
+
+    assert data == %{"title" => "Gone", "author" => %{"name" => "Ada"}}
   end
 end

@@ -62,6 +62,7 @@ defmodule AshRpc.ValidationTest do
              run(%{"action" => "list_posts", "fields" => ["title"]})
   end
 
+  @tag :capture_log
   test "the read_action used for the lookup is the entrypoint's" do
     manifest = AshRpc.Test.ManifestBuilder.manifest()
 

@@ -9,7 +9,8 @@ defmodule AshRpc do
   Each extension mounts its own endpoint and calls these functions with its
   `AshRpc.Profile`. Responses are client-formatted maps (never tuples):
   `%{"success" => true, "data" => …}` or `%{"success" => false, "errors" => […]}`,
-  with key casing from the manifest's output formatter.
+  with key casing from the manifest's output formatter. Exceptions raised
+  while handling a request are returned as failure responses too.
   """
 
   alias AshRpc.{Context, Pipeline, Runtime, Validation}
@@ -34,6 +35,8 @@ defmodule AshRpc do
       {:error, reason} ->
         Pipeline.error_response(runtime, reason, nil)
     end
+  rescue
+    e -> error_response(profile, e, opts)
   end
 
   @spec validate_action(module(), source(), map(), opts()) :: map()
@@ -45,6 +48,8 @@ defmodule AshRpc do
       {:ok, request} -> request |> Validation.validate() |> Pipeline.format_output(request)
       {:error, reason} -> Pipeline.error_response(runtime, reason, nil)
     end
+  rescue
+    e -> error_response(profile, e, opts)
   end
 
   @doc "Client-formatted failure response for a pipeline error reason or exception."
