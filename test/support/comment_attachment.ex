@@ -2,16 +2,15 @@
 #
 # SPDX-License-Identifier: MIT
 
-defmodule AshRpc.Test.PostSettings do
+defmodule AshRpc.Test.CommentAttachment do
   @moduledoc false
   use Ash.Resource, data_layer: :embedded
 
   attributes do
-    attribute :allow_comments, :boolean, default: true, public?: true
-    attribute :theme_name, :string, public?: true
+    attribute :url, :string, allow_nil?: false, public?: true
   end
 
   calculations do
-    calculate :theme_label, :string, expr("theme:" <> theme_name), public?: true
+    calculate :label, :string, expr("file:" <> url), public?: true
   end
 end

@@ -6,7 +6,18 @@ defmodule AshRpc.Test.MappingSource do
   @moduledoc false
   @behaviour AshRpc.MappingSource
 
-  @exposed [AshRpc.Test.Author, AshRpc.Test.Ledger, AshRpc.Test.Post, AshRpc.Test.PostSettings]
+  @exposed [
+    AshRpc.Test.Author,
+    AshRpc.Test.Comment,
+    AshRpc.Test.CommentAttachment,
+    AshRpc.Test.Ledger,
+    AshRpc.Test.Note,
+    AshRpc.Test.NoteReply,
+    AshRpc.Test.Post,
+    AshRpc.Test.PostSettings,
+    AshRpc.Test.PostTag,
+    AshRpc.Test.Tag
+  ]
 
   @impl true
   def input_formatter, do: :camel_case
@@ -18,7 +29,7 @@ defmodule AshRpc.Test.MappingSource do
   def exposed_resource?(resource), do: resource in @exposed
 
   @impl true
-  def field_names(AshRpc.Test.Author), do: %{is_active?: "isActive"}
+  def field_names(AshRpc.Test.Author), do: %{is_active?: "isActive", is_prolific?: "isProlific"}
   def field_names(_resource), do: %{}
 
   @impl true
@@ -31,14 +42,19 @@ defmodule AshRpc.Test.MappingSource do
 
   def type_field_names(_type), do: nil
 
+  # Row opts from `ManifestBuilder` set non-default entrypoint fields; struct!/2
+  # raises KeyError on a typo so a bad row fails the manifest build.
   @impl true
-  def entrypoint(%Ash.Info.Manifest.Entrypoint{config: %{ash_rpc_test: %{name: name}}} = e) do
-    %AshRpc.Entrypoint{
-      name: name,
-      domain: AshRpc.Test.Domain,
-      resource: e.resource,
-      action: e.action.name
-    }
+  def entrypoint(%Ash.Info.Manifest.Entrypoint{config: %{ash_rpc_test: %{name: name} = cfg}} = e) do
+    struct!(
+      %AshRpc.Entrypoint{
+        name: name,
+        domain: AshRpc.Test.Domain,
+        resource: e.resource,
+        action: e.action.name
+      },
+      Map.get(cfg, :opts, [])
+    )
   end
 
   def entrypoint(_entrypoint), do: nil

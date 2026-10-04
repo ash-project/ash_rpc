@@ -24,6 +24,10 @@ defmodule AshRpc.EntrypointTest do
   test "the test mapping source implements the behaviour" do
     behaviours = AshRpc.Test.MappingSource.module_info(:attributes)[:behaviour]
     assert AshRpc.MappingSource in behaviours
-    assert AshRpc.Test.MappingSource.field_names(AshRpc.Test.Author) == %{is_active?: "isActive"}
+
+    assert AshRpc.Test.MappingSource.field_names(AshRpc.Test.Author) == %{
+             is_active?: "isActive",
+             is_prolific?: "isProlific"
+           }
   end
 end

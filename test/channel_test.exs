@@ -8,14 +8,6 @@ defmodule AshRpc.ChannelTest do
 
   @endpoint AshRpc.Test.Endpoint
 
-  defmodule RpcChannel do
-    use Phoenix.Channel
-    use AshRpc.Channel, profile: AshRpc.Test.Profile
-
-    @impl true
-    def join("rpc:" <> _, _payload, socket), do: {:ok, socket}
-  end
-
   setup_all do
     start_supervised!({Phoenix.PubSub, name: AshRpc.Test.PubSub})
     start_supervised!(AshRpc.Test.Endpoint)
@@ -29,7 +21,7 @@ defmodule AshRpc.ChannelTest do
     {:ok, _, socket} =
       AshRpc.Test.Socket
       |> socket("user", %{ash_actor: nil, ash_tenant: nil})
-      |> subscribe_and_join(RpcChannel, "rpc:lobby")
+      |> subscribe_and_join(AshRpc.Test.RpcChannel, "rpc:lobby")
 
     %{socket: socket}
   end

@@ -17,3 +17,12 @@ defmodule AshRpc.Test.Endpoint do
   @moduledoc false
   use Phoenix.Endpoint, otp_app: :ash_rpc
 end
+
+defmodule AshRpc.Test.RpcChannel do
+  @moduledoc false
+  use Phoenix.Channel
+  use AshRpc.Channel, profile: AshRpc.Test.Profile
+
+  @impl true
+  def join("rpc:" <> _, _payload, socket), do: {:ok, socket}
+end

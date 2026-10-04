@@ -16,11 +16,33 @@ defmodule AshRpc.Test.Author do
     attribute :is_active?, :boolean, default: true, public?: true
   end
 
+  identities do
+    identity :name_active, [:name, :is_active?], pre_check_with: AshRpc.Test.Domain
+  end
+
   relationships do
     has_many :posts, AshRpc.Test.Post, public?: true
   end
 
+  calculations do
+    calculate :is_prolific?, :boolean, expr(post_count > 1), public?: true
+  end
+
+  aggregates do
+    count :post_count, :posts, public?: true
+  end
+
   actions do
     defaults [:read, :destroy, create: [:name, :is_active?], update: [:name, :is_active?]]
+
+    read :me do
+      filter expr(id == ^actor(:id))
+    end
+
+    update :update_me do
+      accept [:name]
+    end
+
+    destroy :destroy_me
   end
 end

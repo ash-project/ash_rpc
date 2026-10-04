@@ -8,8 +8,13 @@ defmodule AshRpc.Test.Domain do
 
   resources do
     resource AshRpc.Test.Author
+    resource AshRpc.Test.Comment
     resource AshRpc.Test.Ledger
+    resource AshRpc.Test.Note
+    resource AshRpc.Test.NoteReply
     resource AshRpc.Test.Post
+    resource AshRpc.Test.PostTag
     resource AshRpc.Test.Secret
+    resource AshRpc.Test.Tag
   end
 end
