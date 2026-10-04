@@ -82,6 +82,35 @@ defmodule AshRpc.TypedFieldSelectionTest do
     end
   end
 
+  describe "embedded resources" do
+    test "nested fields select attributes and load calculations" do
+      assert %{
+               "success" => true,
+               "data" => %{"settings" => settings}
+             } =
+               AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                 "action" => "create_post",
+                 "input" => %{"title" => "Embedded", "settings" => %{"themeName" => "dark"}},
+                 "fields" => [%{"settings" => ["themeName", "themeLabel"]}]
+               })
+
+      assert settings == %{"themeName" => "dark", "themeLabel" => "theme:dark"}
+    end
+
+    test "a bare embedded field is requires_field_selection" do
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "requires_field_selection",
+                   "fields" => ["settings"],
+                   "vars" => %{"fieldType" => "Embedded_resource"}
+                 }
+               ]
+             } = run("list_posts", ["settings"])
+    end
+  end
+
   describe "requires_field_selection on typed values" do
     test "top-level typed return keeps the pathless wire shape" do
       rt = AshRpc.Runtime.new(AshRpc.Test.Profile)
