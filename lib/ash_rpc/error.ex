@@ -18,7 +18,7 @@ defprotocol AshRpc.Error do
   - `:vars` - A map of variables to interpolate into messages
   - `:fields` - A list of affected field names (for field-level errors)
   - `:path` - The path to the error location in the data structure
-  - `:details` - An optional map with extra details
+  - `:details` - (optional) A map with extra details, e.g. `:suggestion`
 
   ## Example Implementation
 
@@ -82,20 +82,7 @@ defimpl AshRpc.Error, for: Ash.Error.Query.NotFound do
   end
 end
 
-defimpl AshRpc.Error, for: Ash.Error.Changes.Required do
-  def to_error(error) do
-    %{
-      message: Exception.message(error),
-      short_message: "Required field",
-      vars: Map.new(error.vars || []) |> Map.put(:field, error.field),
-      type: "required",
-      fields: List.wrap(error.field),
-      path: error.path || []
-    }
-  end
-end
-
-defimpl AshRpc.Error, for: Ash.Error.Query.Required do
+defimpl AshRpc.Error, for: [Ash.Error.Changes.Required, Ash.Error.Query.Required] do
   def to_error(error) do
     %{
       message: Exception.message(error),
@@ -149,20 +136,7 @@ defimpl AshRpc.Error, for: Ash.Error.Changes.InvalidAttribute do
   end
 end
 
-defimpl AshRpc.Error, for: Ash.Error.Changes.InvalidArgument do
-  def to_error(error) do
-    %{
-      message: Map.get(error, :message) || Exception.message(error),
-      short_message: "Invalid argument",
-      vars: Map.new(error.vars || []) |> Map.put(:field, Map.get(error, :field)),
-      type: "invalid_argument",
-      fields: List.wrap(Map.get(error, :field)),
-      path: error.path || []
-    }
-  end
-end
-
-defimpl AshRpc.Error, for: Ash.Error.Query.InvalidArgument do
+defimpl AshRpc.Error, for: [Ash.Error.Changes.InvalidArgument, Ash.Error.Query.InvalidArgument] do
   def to_error(error) do
     %{
       message: Map.get(error, :message) || Exception.message(error),

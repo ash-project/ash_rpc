@@ -168,6 +168,7 @@ defmodule AshRpc.ErrorsTest do
     end
   end
 
+  @tag :capture_log
   test "show_raised_errors? exposes the exception message for that domain only" do
     rt = Runtime.new(RaisingDetailProfile)
     error = NoImplError.exception([])

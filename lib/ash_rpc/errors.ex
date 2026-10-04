@@ -33,12 +33,11 @@ defmodule AshRpc.Errors do
           list(map())
   def to_errors(runtime, errors, domain \\ nil, resource \\ nil, action \\ nil, context \\ %{})
 
-  def to_errors(runtime, errors, domain, resource, action, context) do
-    ash_error = Ash.Error.to_error_class(errors)
-
-    ash_error
+  def to_errors(runtime, errors, domain, resource, _action, context) do
+    errors
+    |> Ash.Error.to_error_class()
     |> unwrap_errors()
-    |> Enum.map(&process_single_error(&1, runtime, domain, resource, action, context))
+    |> Enum.map(&process_single_error(&1, runtime, domain, resource, context))
     |> List.flatten()
     |> Enum.reject(&is_nil/1)
     |> Enum.map(&format_error_field_names(&1, resource, runtime))
@@ -64,38 +63,12 @@ defmodule AshRpc.Errors do
     [error]
   end
 
-  defp process_single_error(error, runtime, domain, resource, _action, context) do
-    # Check if we should show raised errors
-    show_raised_errors? = profile_show_raised_errors?(runtime, domain)
-
+  defp process_single_error(error, runtime, domain, resource, context) do
     transformed_error =
-      if show_raised_errors? and is_exception(error) do
-        # When show_raised_errors? is true, always expose the actual exception message
-        %{
-          message: Exception.message(error),
-          short_message: error.__struct__ |> Module.split() |> List.last(),
-          type: Macro.underscore(error.__struct__ |> Module.split() |> List.last()),
-          vars: %{},
-          fields: [],
-          path: Map.get(error, :path, [])
-        }
+      if profile_show_raised_errors?(runtime, domain) and is_exception(error) do
+        raised_error(error)
       else
-        # Use protocol implementation or fallback
-        if ErrorProtocol.impl_for(error) do
-          try do
-            ErrorProtocol.to_error(error)
-          rescue
-            e ->
-              Logger.warning("""
-              Failed to transform error via protocol: #{inspect(e)}
-              Original error: #{inspect(error)}
-              """)
-
-              fallback_error_response(error, false)
-          end
-        else
-          handle_unimplemented_error(error, false)
-        end
+        protocol_error(error)
       end
 
     transformed_error = maybe_policy_breakdown(transformed_error, error, runtime)
@@ -113,6 +86,38 @@ defmodule AshRpc.Errors do
   defp resource_error_handler(resource) do
     if resource && function_exported?(resource, :handle_rpc_error, 2),
       do: {resource, :handle_rpc_error, []}
+  end
+
+  # show_raised_errors? exposes the actual exception message
+  defp raised_error(error) do
+    name = error.__struct__ |> Module.split() |> List.last()
+
+    %{
+      message: Exception.message(error),
+      short_message: name,
+      type: Macro.underscore(name),
+      vars: %{},
+      fields: [],
+      path: Map.get(error, :path, [])
+    }
+  end
+
+  defp protocol_error(error) do
+    if ErrorProtocol.impl_for(error) do
+      try do
+        ErrorProtocol.to_error(error)
+      rescue
+        e ->
+          Logger.warning("""
+          Failed to transform error via protocol: #{inspect(e)}
+          Original error: #{inspect(error)}
+          """)
+
+          fallback_error_response(error)
+      end
+    else
+      handle_unimplemented_error(error)
+    end
   end
 
   defp apply_error_handler({module, function, args}, error, context) do
@@ -190,7 +195,7 @@ defmodule AshRpc.Errors do
   defp profile_show_raised_errors?(%{profile: profile}, domain),
     do: profile.show_raised_errors?(domain)
 
-  defp handle_unimplemented_error(error, _show_raised_errors?) when is_exception(error) do
+  defp handle_unimplemented_error(error) when is_exception(error) do
     uuid = Ash.UUID.generate()
 
     # Log the full error details for debugging (only visible server-side)
@@ -219,7 +224,7 @@ defmodule AshRpc.Errors do
     generic_internal_error(uuid, Map.get(error, :path, []))
   end
 
-  defp handle_unimplemented_error(error, _show_raised_errors?) do
+  defp handle_unimplemented_error(error) do
     uuid = Ash.UUID.generate()
 
     Logger.warning("""
@@ -231,7 +236,8 @@ defmodule AshRpc.Errors do
     generic_internal_error(uuid, [])
   end
 
-  defp fallback_error_response(error, _show_raised_errors?) when is_exception(error) do
+  # Ash.Error.to_error_class/1 wraps non-exceptions, so only exceptions reach an impl
+  defp fallback_error_response(error) when is_exception(error) do
     %{
       message: "something went wrong",
       short_message: "Error",
@@ -239,17 +245,6 @@ defmodule AshRpc.Errors do
       vars: %{},
       fields: [],
       path: Map.get(error, :path, [])
-    }
-  end
-
-  defp fallback_error_response(_error, _show_raised_errors?) do
-    %{
-      message: "something went wrong",
-      short_message: "Error",
-      type: "error",
-      vars: %{},
-      fields: [],
-      path: []
     }
   end
 
