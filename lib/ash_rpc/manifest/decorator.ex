@@ -181,7 +181,7 @@ defmodule AshRpc.Manifest.Decorator do
   defp decorate_type(%Manifest.Type{} = type, ctx) do
     module = Manifest.Type.effective_module(type)
 
-    case is_atom(module) and not is_nil(module) and Code.ensure_loaded?(module) and
+    case not is_nil(module) and Code.ensure_loaded?(module) and
            ctx.source.type_field_names(module) do
       mapping when is_map(mapping) ->
         overrides = Map.new(mapping)
