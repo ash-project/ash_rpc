@@ -12,12 +12,13 @@ defmodule AshRpc.ErrorHandler do
 
   ## Context
 
-  The context map passed to handle_error/2 may contain:
-  - `:domain` - The domain module
-  - `:resource` - The resource module
-  - `:action` - The action being performed
-  - `:actor` - The actor performing the action
-  - Additional application-specific context
+  The context passed to `handle_error/2` is the request's Ash context map
+  (`%AshRpc.Context{}.context`: the `Ash.PlugHelpers` context on a conn, or
+  the `ash_context` socket assign). Errors raised before the entrypoint
+  resolves, and exceptions rescued at the top level, get `%{}`.
+
+  The domain is not part of the context: the profile picks a handler per
+  domain through `error_handler/1`.
 
   ## Example Implementation
 
