@@ -59,6 +59,12 @@ _A declarative, extensible framework for building Elixir applications._
 ## ash:testing usage
 @deps/ash/usage-rules/testing.md
 <!-- ash:testing-end -->
+<!-- ex_check-start -->
+## ex_check usage
+_ex_check_
+
+@deps/ex_check/usage-rules.md
+<!-- ex_check-end -->
 <!-- usage_rules-start -->
 ## usage_rules usage
 _A config-driven dev tool for Elixir projects to manage AGENTS.md files and agent skills from dependencies_

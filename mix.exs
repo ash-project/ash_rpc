@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 ash_rpc contributors <https://github.com/ash-project/ash_rpc/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshRpc.MixProject do
   use Mix.Project
 
@@ -10,19 +14,21 @@ defmodule AshRpc.MixProject do
       consolidate_protocols: Mix.env() != :test,
       elixirc_paths: elixirc_paths(Mix.env()),
       usage_rules: usage_rules(),
+      aliases: aliases(),
       deps: deps()
     ]
   end
 
   # Read by `mix usage_rules.sync`: link the usage rules relevant to developing
   # this library into AGENTS.md as `@deps/...` references. Same as
-  # ash_typescript minus spark, igniter and ex_check: ash_rpc defines no Spark
-  # DSLs or Igniter tasks, and usage_rules only links direct dependencies.
+  # ash_typescript minus spark and igniter: ash_rpc defines no Spark DSLs or
+  # Igniter tasks, and usage_rules only links direct dependencies.
   defp usage_rules do
     [
       file: "AGENTS.md",
       usage_rules: [
         {:ash, link: :at, except: [:migrations, :generating_code]},
+        {:ex_check, link: :at},
         {:usage_rules, link: :at, except: [:otp]}
       ]
     ]
@@ -40,7 +46,20 @@ defmodule AshRpc.MixProject do
       {:plug, "~> 1.14", optional: true},
       {:phoenix, "~> 1.7", optional: true},
       {:credo, ">= 0.0.0", only: [:dev, :test], runtime: false},
-      {:usage_rules, "~> 1.2", only: [:dev], runtime: false}
+      {:dialyxir, ">= 0.0.0", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.37", only: [:dev, :test], runtime: false},
+      {:sobelow, ">= 0.0.0", only: [:dev, :test], runtime: false},
+      {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false},
+      {:usage_rules, "~> 1.2", only: [:dev], runtime: false},
+      {:ex_check, "~> 0.12", only: [:dev, :test]}
+    ]
+  end
+
+  defp aliases do
+    [
+      sobelow: "sobelow --skip",
+      credo: "credo --strict",
+      sync_usage_rules: ["usage_rules.sync"]
     ]
   end
 end
