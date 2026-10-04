@@ -166,8 +166,9 @@ defmodule AshRpc.FieldFormatter do
   as-is.
 
   Used for any payload that is handed to the client without going through a
-  type-driven formatter — RPC responses and typed controller error bodies both
-  rely on this so their field names agree.
+  type-driven formatter. RPC responses and an extension's own payloads (for
+  example error bodies it builds itself) can both use it, so their field names
+  agree.
 
   ## Examples
 

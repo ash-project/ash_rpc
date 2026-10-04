@@ -1371,7 +1371,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
   # Called at every point where this module appends to the Ash load statement:
   # a load can only reach the load statement through one of these calls, so the
-  # action's allowed_loads/denied_loads cannot be bypassed by a load shape the
+  # entrypoint's load_restrictions cannot be bypassed by a load shape the
   # check doesn't know about.
   defp check_load_allowed!(path, internal_name, ctx) do
     LoadRestrictions.check!(path ++ [internal_name], ctx.load_restrictions)

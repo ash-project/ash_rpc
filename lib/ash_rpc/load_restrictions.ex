@@ -4,9 +4,10 @@
 
 defmodule AshRpc.LoadRestrictions do
   @moduledoc """
-  Enforcement of an RPC action's `allowed_loads` / `denied_loads` options.
+  Enforcement of an entrypoint's `load_restrictions` (`{:allow, paths}` /
+  `{:deny, paths}`).
 
-  `normalize/1` turns the DSL spec into pre-normalized path lists once per
+  `normalize/1` turns the restriction spec into pre-normalized path lists once per
   request. `check!/2` is then called by
   `AshRpc.FieldProcessing.FieldSelector` at every point where it
   appends to the Ash load statement, so a load cannot reach the load statement
@@ -59,8 +60,8 @@ defmodule AshRpc.LoadRestrictions do
   # For nested specs: [comments: [:todo]] => [[:comments, :todo]] (NOT [:comments])
   #
   # The key distinction:
-  # - denied_loads: [:user] - denies user and all children
-  # - denied_loads: [comments: [:todo]] - only denies comments.todo, NOT comments itself
+  # - {:deny, [:user]} - denies user and all children
+  # - {:deny, [comments: [:todo]]} - only denies comments.todo, NOT comments itself
   defp normalize_paths(restrictions) when is_list(restrictions) do
     Enum.flat_map(restrictions, fn
       field when is_atom(field) ->
@@ -80,13 +81,13 @@ defmodule AshRpc.LoadRestrictions do
 
   defp normalize_paths(_), do: []
 
-  # Check if a path is allowed by the allowed_loads specification
+  # Check if a path is allowed by an {:allow, paths} restriction
   # A path is allowed ONLY if:
   # 1. It exactly matches an allowed path, OR
   # 2. It's a prefix of an allowed path (intermediate load needed to reach deeper allowed paths)
   #
-  # Note: Unlike denied_loads, we do NOT allow children of allowed paths automatically.
-  # If you want to allow user.todos, you must explicitly add [user: [:todos]] to allowed_loads.
+  # Note: Unlike {:deny, paths}, we do NOT allow children of allowed paths automatically.
+  # If you want to allow user.todos, you must explicitly add [user: [:todos]] to the allow list.
   defp path_allowed?(path, allowed_paths) do
     Enum.any?(allowed_paths, fn allowed_path ->
       # Exact match or path is a prefix (intermediate load)
@@ -94,7 +95,7 @@ defmodule AshRpc.LoadRestrictions do
     end)
   end
 
-  # Check if a path is denied by the denied_loads specification
+  # Check if a path is denied by a {:deny, paths} restriction
   # A path is denied if it matches or starts with a denied path
   defp path_denied?(path, denied_paths) do
     Enum.any?(denied_paths, fn denied_path ->

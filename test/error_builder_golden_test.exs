@@ -311,7 +311,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
             "suggestion" =>
-              "Remove these fields from your request or check allowed_loads configuration"
+              "Remove these fields from your request or check the entrypoint's load_restrictions"
           },
           "fields" => ["author.posts"],
           "message" => "Loading the following fields is not allowed: %{fields}",
@@ -498,8 +498,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "suggestion" =>
-              "Check that the action is properly configured in your domain's rpc block"
+            "suggestion" => "Check that the action name matches a configured entrypoint"
           },
           "fields" => [],
           "message" => "RPC action %{actionName} not found",
@@ -525,8 +524,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "suggestion" =>
-              "Check that the action is properly configured in your domain's rpc block"
+            "suggestion" => "Check that the action name matches a configured entrypoint"
           },
           "fields" => [],
           "message" => "RPC action %{actionName} not found",
@@ -656,7 +654,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
             "reason" => :disabled,
             "suggestion" =>
-              "Remove the sort key. Sorting is unavailable because the RPC action disables it (enable_sort?: false) or the relationship is not sortable?"
+              "Remove the sort key. Sorting is unavailable because the entrypoint disables it (enable_sort?: false) or the relationship is not sortable?"
           },
           "fields" => ["author.posts"],
           "message" => "Relationship %{field} does not support sorting",
@@ -916,7 +914,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
             "reason" => :disabled,
             "suggestion" =>
-              "Remove the filter key. Filtering is unavailable because the RPC action disables it (enable_filter?: false) or the relationship is not filterable?"
+              "Remove the filter key. Filtering is unavailable because the entrypoint disables it (enable_filter?: false) or the relationship is not filterable?"
           },
           "fields" => ["author.posts"],
           "message" => "Relationship %{field} does not support filtering",

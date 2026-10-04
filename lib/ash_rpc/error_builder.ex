@@ -75,7 +75,7 @@ defmodule AshRpc.ErrorBuilder do
     drift(ctx, "action_not_found", "RPC action %{action_name} not found", "Action not found",
       vars: %{action_name: action_name},
       details: %{
-        suggestion: "Check that the action is properly configured in your domain's rpc block"
+        suggestion: "Check that the action name matches a configured entrypoint"
       }
     )
   end
@@ -415,7 +415,8 @@ defmodule AshRpc.ErrorBuilder do
       fields: disallowed_paths,
       details: %{
         disallowed_paths: disallowed_paths,
-        suggestion: "Remove these fields from your request or check allowed_loads configuration"
+        suggestion:
+          "Remove these fields from your request or check the entrypoint's load_restrictions"
       }
     )
   end
@@ -623,7 +624,7 @@ defmodule AshRpc.ErrorBuilder do
           details: %{
             reason: reason,
             suggestion:
-              "Remove the filter key. Filtering is unavailable because the RPC action disables it (enable_filter?: false) or the relationship is not filterable?"
+              "Remove the filter key. Filtering is unavailable because the entrypoint disables it (enable_filter?: false) or the relationship is not filterable?"
           }
         ]
     )
@@ -654,7 +655,7 @@ defmodule AshRpc.ErrorBuilder do
           details: %{
             reason: reason,
             suggestion:
-              "Remove the sort key. Sorting is unavailable because the RPC action disables it (enable_sort?: false) or the relationship is not sortable?"
+              "Remove the sort key. Sorting is unavailable because the entrypoint disables it (enable_sort?: false) or the relationship is not sortable?"
           }
         ]
     )
