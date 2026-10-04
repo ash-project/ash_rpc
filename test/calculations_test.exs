@@ -121,6 +121,21 @@ defmodule AshRpc.CalculationsTest do
       assert %{"type" => "invalid_calculation_args", "fields" => ["scoredStats"]} =
                single_error(list_posts([%{"scoredStats" => %{"fields" => ["wordCount1"]}}]))
     end
+
+    test "an args key the calculation doesn't define fails when Ash builds the load" do
+      seed_post()
+
+      # Arg keys reach Ash as strings. A key naming an existing atom is
+      # Ash.Error.Invalid.NoSuchInput, which has no AshRpc.Error impl.
+      assert %{"type" => "internal_error", "path" => ["load"]} =
+               single_error(list_posts([%{"excerpt" => %{"args" => %{"title" => 1}}}]))
+
+      # A key naming no existing atom fails atom conversion instead.
+      unknown_key = "no_such_arg_#{System.unique_integer([:positive])}"
+
+      assert %{"type" => "unknown_error", "path" => ["load"]} =
+               single_error(list_posts([%{"excerpt" => %{"args" => %{unknown_key => 1}}}]))
+    end
   end
 
   test "calculation_requires_args: a calculation with arguments requested as a bare name" do
