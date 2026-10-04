@@ -40,7 +40,7 @@ defmodule AshRpc.RuntimeTest do
     end
   end
 
-  test "from_manifest/2 works without a profile (typed controllers/channels)" do
+  test "from_manifest/2 works without a profile" do
     runtime = Runtime.from_manifest(AshRpc.Test.ManifestBuilder.manifest())
     assert runtime.profile == nil
     assert runtime.output_formatter == :camel_case

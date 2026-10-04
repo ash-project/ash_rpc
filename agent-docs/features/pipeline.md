@@ -62,7 +62,7 @@ Runtime code never reads globals or app env (see `AGENTS.md` Rule 3).
   profile's manifest ("manifest: option overrides the profile's manifest").
 - `AshRpc.Runtime.from_manifest(manifest, profile \\ nil)` builds one without a
   profile, for callers that only need lookups and formatters
-  (`test/runtime_test.exs` "from_manifest/2 works without a profile …").
+  (`test/runtime_test.exs` "from_manifest/2 works without a profile").
 
 ## `AshRpc.Context`
 
