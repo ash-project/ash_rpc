@@ -4,169 +4,53 @@
 
 defmodule AshRpc.FieldProcessing.Atomizer do
   @moduledoc """
-  Handles preprocessing of requested fields, converting map keys to atoms
-  while preserving field name strings for later reverse mapping lookup.
+  Applies a resource's field-name overrides to the top level of a field selection.
 
-  Field name strings are preserved so that downstream processors can perform
-  proper reverse mapping lookups using the original client field names.
-  The actual conversion to atoms happens in the field processor after
-  the correct internal field name has been resolved.
+  Only top-level names and the keys of top-level maps name fields on
+  `resource`; nested selections belong to each field's destination type and
+  are left as sent. `AshRpc.FieldProcessing.FieldSelector` applies
+  `atomize_field/3` at every resource level as it recurses, so the runtime
+  pipeline does not call `atomize_requested_fields/3`; it remains for callers
+  that pre-process selections (e.g. an extension validating stored queries).
   """
 
   alias AshRpc.Manifest.Custom
 
   @doc """
-  Processes requested fields, converting map keys to atoms for navigation
-  while preserving field name strings for reverse mapping.
-
-  For resources with field_names DSL mappings, those are applied to convert
-  client names to internal names. For other types (TypedStructs, NewTypes),
-  strings are preserved for the field processor to handle.
-
-  ## Parameters
-
-  - `requested_fields` - List of strings/atoms or maps for relationships
-  - `resource` - Optional resource module for field_names DSL lookup
-  - `runtime` - The `AshRpc.Runtime` (input formatter and resource lookup)
+  Applies `resource`'s field-name overrides to the top level of `requested_fields`.
 
   ## Examples
 
-      iex> atomize_requested_fields(["id", "title", %{"user" => ["id", "name"]}], nil, runtime)
-      [:id, :title, %{user: ["id", "name"]}]
-
-      iex> atomize_requested_fields([%{"self" => %{"args" => %{"prefix" => "test"}}}], nil, runtime)
-      [%{self: %{args: %{prefix: "test"}}}]
+      # With an override `is_active?: "isActive"` on MyApp.User:
+      atomize_requested_fields(["id", "isActive", %{"posts" => ["title"]}], MyApp.User, runtime)
+      #=> ["id", :is_active?, %{"posts" => ["title"]}]
   """
   def atomize_requested_fields(requested_fields, resource, runtime)
       when is_list(requested_fields) do
-    formatter = runtime.input_formatter
-    Enum.map(requested_fields, &process_field(&1, formatter, resource, runtime))
+    Enum.map(requested_fields, &atomize_field(&1, resource, runtime))
   end
 
   @doc """
-  Processes a single field, which can be a string, atom, or map structure.
-
-  For string field names:
-  - If resource has a field_names mapping for this client name, returns the mapped atom
-  - Otherwise, preserves the string for downstream reverse mapping lookup
-
-  For map structures:
-  - Converts map keys to atoms (for relationship/calculation navigation)
-  - Preserves nested field name strings
+  Applies `resource`'s field-name overrides to one selection entry: a field
+  name, or the keys of a map. Other entries are returned unchanged.
   """
-  def process_field(field, formatter, resource, runtime)
+  def atomize_field(field_name, resource, runtime) when is_binary(field_name),
+    do: original_name(field_name, resource, runtime)
 
-  def process_field(field_name, _formatter, resource, runtime) when is_binary(field_name) do
-    # For resources, check field_names DSL mapping first
-    res_struct = resolve_resource(runtime, resource)
+  def atomize_field(%{} = field_map, resource, runtime),
+    do: Map.new(field_map, fn {key, value} -> {atomize_field(key, resource, runtime), value} end)
 
-    if Custom.exposed?(res_struct) do
-      case Custom.original_field_name(res_struct, field_name) do
-        original when is_atom(original) and not is_nil(original) -> original
-        _ -> field_name
-      end
+  def atomize_field(other, _resource, _runtime), do: other
+
+  defp original_name(name, resource, runtime) do
+    res_struct = Map.get(runtime.resource_lookup, resource)
+
+    with true <- Custom.exposed?(res_struct),
+         original when is_atom(original) and not is_nil(original) <-
+           Custom.original_field_name(res_struct, name) do
+      original
     else
-      field_name
+      _ -> name
     end
   end
-
-  def process_field(field_name, _formatter, _resource, _runtime) when is_atom(field_name) do
-    field_name
-  end
-
-  def process_field(%{} = field_map, formatter, resource, runtime) do
-    is_calc_args = is_calculation_args_map?(field_map)
-
-    Enum.into(field_map, %{}, fn {key, value} ->
-      atom_key = convert_map_key_to_atom(key, formatter, resource, runtime)
-
-      processed_value =
-        if is_calc_args and envelope_opt_key?(key) do
-          # Query-option values (page/filter/sort/limit/offset) are opaque here;
-          # the FieldSelector formats them with the top-level formatter machinery.
-          value
-        else
-          process_field_value(value, formatter, resource, is_calc_args, runtime)
-        end
-
-      {atom_key, processed_value}
-    end)
-  end
-
-  def process_field(other, _formatter, _resource, _runtime) do
-    other
-  end
-
-  defp convert_map_key_to_atom(key, _formatter, resource, runtime) when is_binary(key) do
-    res_struct = resolve_resource(runtime, resource)
-
-    if Custom.exposed?(res_struct) do
-      case Custom.original_field_name(res_struct, key) do
-        original when is_atom(original) and not is_nil(original) -> original
-        _ -> key
-      end
-    else
-      key
-    end
-  end
-
-  defp convert_map_key_to_atom(key, _formatter, _resource, _runtime) when is_atom(key) do
-    key
-  end
-
-  @query_opt_atom_keys [:page, :filter, :sort, :limit, :offset]
-  @query_opt_string_keys Enum.map(@query_opt_atom_keys, &Atom.to_string/1)
-  @envelope_atom_keys [:args, :fields | @query_opt_atom_keys]
-  @envelope_string_keys Enum.map(@envelope_atom_keys, &Atom.to_string/1)
-
-  defp is_calculation_args_map?(map) when is_map(map) do
-    Enum.any?(@envelope_atom_keys, &Map.has_key?(map, &1)) or
-      Enum.any?(@envelope_string_keys, &Map.has_key?(map, &1))
-  end
-
-  defp envelope_opt_key?(key) when is_binary(key), do: key in @query_opt_string_keys
-  defp envelope_opt_key?(key) when is_atom(key), do: key in @query_opt_atom_keys
-
-  @doc """
-  Processes field values, handling lists and nested maps.
-
-  For calculation args (maps with args/fields keys), converts all strings.
-  For field selection lists, preserves strings for type-aware reverse mapping.
-  """
-  def process_field_value(
-        value,
-        formatter,
-        resource \\ nil,
-        atomize_strings \\ true,
-        runtime
-      )
-
-  def process_field_value(list, formatter, resource, atomize_strings, runtime)
-      when is_list(list) do
-    Enum.map(list, fn
-      field_name when is_binary(field_name) ->
-        if atomize_strings do
-          process_field(field_name, formatter, resource, runtime)
-        else
-          field_name
-        end
-
-      %{} = map ->
-        process_field(map, formatter, resource, runtime)
-
-      other ->
-        other
-    end)
-  end
-
-  def process_field_value(%{} = map, formatter, resource, _atomize_strings, runtime) do
-    process_field(map, formatter, resource, runtime)
-  end
-
-  def process_field_value(primitive, _formatter, _resource, _atomize_strings, _runtime) do
-    primitive
-  end
-
-  defp resolve_resource(_runtime, nil), do: nil
-  defp resolve_resource(runtime, resource), do: Map.get(runtime.resource_lookup, resource)
 end

@@ -301,72 +301,6 @@ defmodule AshRpc.Introspection do
   def embedded_resource?(_), do: false
 
   @doc """
-  Recursively unwraps Ash.Type.NewType to get the underlying type and constraints.
-
-  When a type is wrapped in one or more NewType wrappers, this function
-  recursively unwraps them until it reaches the base type. If the NewType
-  has a `typescript_field_names/0` callback and the constraints don't already
-  have an `instance_of` key, it will add the NewType module as `instance_of`
-  to preserve the reference for field name mapping.
-
-  ## Parameters
-  - `type` - The type to unwrap (e.g., MyApp.CustomType)
-  - `constraints` - The constraints for the type
-
-  ## Returns
-  A tuple `{unwrapped_type, unwrapped_constraints}` where:
-  - `unwrapped_type` is the final underlying type after all NewType unwrapping
-  - `unwrapped_constraints` are the final constraints, potentially augmented with `instance_of`
-
-  ## Examples
-
-      iex> # Simple NewType with typescript_field_names
-      iex> AshRpc.Introspection.unwrap_new_type(MyApp.TaskStats, [])
-      {Ash.Type.Struct, [fields: [...], instance_of: MyApp.TaskStats]}
-
-      iex> # Nested NewTypes (outermost with callback wins)
-      iex> AshRpc.Introspection.unwrap_new_type(MyApp.Wrapper, [])
-      {Ash.Type.String, [max_length: 100, instance_of: MyApp.Wrapper]}
-
-      iex> # Non-NewType (returns unchanged)
-      iex> AshRpc.Introspection.unwrap_new_type(Ash.Type.String, [max_length: 50])
-      {Ash.Type.String, [max_length: 50]}
-  """
-  def unwrap_new_type(type, constraints) when is_atom(type) do
-    if Ash.Type.NewType.new_type?(type) do
-      subtype = Ash.Type.NewType.subtype_of(type)
-
-      # Get constraints from the NewType
-      # Ash.Type.NewType.constraints/2 only returns passed constraints when lazy_init? is false,
-      # but do_init/1 returns the full merged constraints including subtype_constraints
-      constraints =
-        case type.do_init(constraints) do
-          {:ok, merged_constraints} -> merged_constraints
-          {:error, _} -> constraints
-        end
-
-      # Preserve reference to outermost NewType with typescript_field_names
-      # Only add instance_of if:
-      # 1. This NewType has typescript_field_names callback
-      # 2. Constraints don't already have instance_of (preserves outermost)
-      augmented_constraints =
-        if Code.ensure_loaded?(type) and
-             function_exported?(type, :typescript_field_names, 0) and
-             not Keyword.has_key?(constraints, :instance_of) do
-          Keyword.put(constraints, :instance_of, type)
-        else
-          constraints
-        end
-
-      {subtype, augmented_constraints}
-    else
-      {type, constraints}
-    end
-  end
-
-  def unwrap_new_type(type, constraints), do: {type, constraints}
-
-  @doc """
   Checks if constraints specify an instance_of that is an Ash resource.
 
   ## Examples
@@ -407,8 +341,9 @@ defmodule AshRpc.Introspection do
 
   @doc """
   Resolves a named type's full definition: from the type lookup first, then
-  directly from the module for named types the manifest doesn't carry (e.g. a
-  NewType referenced only by a typed controller route).
+  directly from the module. The fallback serves callers that format values
+  of types from outside the manifest; types reached through an entrypoint
+  are always in the type lookup.
   """
   def named_type_definition(type_lookup, module) do
     Ash.Info.Manifest.get_type(type_lookup, module) ||
@@ -443,6 +378,58 @@ defmodule AshRpc.Introspection do
       map -> Map.new(map)
     end
   end
+
+  @doc "True when `module` has client field-name overrides (see `type_field_name_overrides/2`)."
+  @spec has_field_name_overrides?(AshRpc.Runtime.t(), module() | nil) :: boolean()
+  def has_field_name_overrides?(_runtime, nil), do: false
+
+  def has_field_name_overrides?(runtime, module),
+    do: not is_nil(type_field_name_overrides(runtime, module))
+
+  @doc """
+  Classifies a manifest type for type-directed traversal (result extraction,
+  value formatting, field selection). A `:type_ref` is resolved leniently via
+  `named_type_definition/2`, so named types the manifest doesn't carry still
+  classify.
+
+    * `{:array, item_type}`
+    * `{:resource, module}` — resources, embedded resources, and structs/maps
+      whose effective module is an Ash resource
+    * `{:union, type}`
+    * `{:typed_struct, type}` — struct/map/tuple/keyword with field-name overrides
+    * `{:fields, type}` — struct/map/tuple/keyword without overrides
+    * `{:other, type}` — everything else (`type` is nil for an unresolvable ref)
+  """
+  @spec classify_type(Ash.Info.Manifest.Type.t() | nil, AshRpc.Runtime.t()) ::
+          {:array | :union | :typed_struct | :fields | :other, Ash.Info.Manifest.Type.t() | nil}
+          | {:resource, module()}
+  def classify_type(%Ash.Info.Manifest.Type{kind: :type_ref, module: module}, runtime) do
+    runtime.type_lookup
+    |> named_type_definition(module)
+    |> classify_type(runtime)
+  end
+
+  def classify_type(%Ash.Info.Manifest.Type{kind: :array, item_type: item_type}, _runtime),
+    do: {:array, item_type}
+
+  def classify_type(%Ash.Info.Manifest.Type{kind: kind} = type, _runtime)
+      when kind in [:resource, :embedded_resource],
+      do: {:resource, Ash.Info.Manifest.Type.effective_resource(type)}
+
+  def classify_type(%Ash.Info.Manifest.Type{kind: :union} = type, _runtime), do: {:union, type}
+
+  def classify_type(%Ash.Info.Manifest.Type{kind: kind} = type, runtime)
+      when kind in [:struct, :map, :tuple, :keyword] do
+    module = Ash.Info.Manifest.Type.effective_module(type)
+
+    cond do
+      kind in [:struct, :map] and ash_resource?(module) -> {:resource, module}
+      has_field_name_overrides?(runtime, module) -> {:typed_struct, type}
+      true -> {:fields, type}
+    end
+  end
+
+  def classify_type(type, _runtime), do: {:other, type}
 
   @doc "Client name of an action input: accepted attribute → field naming, argument → overrides."
   def format_input_name(

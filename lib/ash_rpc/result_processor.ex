@@ -32,17 +32,9 @@ defmodule AshRpc.ResultProcessor do
   @spec process(term(), map() | list(), module() | nil, AshRpc.Runtime.t()) :: term()
   def process(result, extraction_template, resource, rt) do
     case result do
-      %Ash.Page.Offset{results: results} = page ->
-        build_page_map(
-          page,
-          extract_list_fields(results, extraction_template, resource, rt)
-        )
-
-      %Ash.Page.Keyset{results: results} = page ->
-        build_page_map(
-          page,
-          extract_list_fields(results, extraction_template, resource, rt)
-        )
+      %page_struct{results: results} = page
+      when page_struct in [Ash.Page.Offset, Ash.Page.Keyset] ->
+        build_page_map(page, extract_list_fields(results, extraction_template, resource, rt))
 
       [] ->
         []
@@ -199,44 +191,13 @@ defmodule AshRpc.ResultProcessor do
         template,
         rt
       ) do
-    inst = Type.effective_module(type_info)
-
-    case type_info.kind do
-      :type_ref ->
-        full_type = Ash.Info.Manifest.get_type!(rt.type_lookup, type_info.module)
-        extract_value(value, full_type, [], template, rt)
-
-      :array ->
-        extract_array_value(value, type_info.item_type, template, rt)
-
-      kind when kind in [:resource, :embedded_resource] ->
-        resource = Type.effective_resource(type_info)
-        extract_resource_value(value, resource, template, rt)
-
-      :union ->
-        extract_union_value(value, type_info, template, rt)
-
-      kind when kind in [:struct, :map] ->
-        cond do
-          inst && is_atom(inst) && Introspection.ash_resource?(inst) ->
-            extract_resource_value(value, inst, template, rt)
-
-          has_field_name_overrides?(rt, inst) ->
-            extract_typed_struct_value(value, type_info, template, rt)
-
-          true ->
-            extract_typed_map_value(value, type_info, template, rt)
-        end
-
-      kind when kind in [:tuple, :keyword] ->
-        if has_field_name_overrides?(rt, inst) do
-          extract_typed_struct_value(value, type_info, template, rt)
-        else
-          extract_typed_map_value(value, type_info, template, rt)
-        end
-
-      _ ->
-        normalize_primitive(value, rt)
+    case Introspection.classify_type(type_info, rt) do
+      {:array, item_type} -> extract_array_value(value, item_type, template, rt)
+      {:resource, resource} -> extract_resource_value(value, resource, template, rt)
+      {:union, type} -> extract_union_value(value, type, template, rt)
+      {:typed_struct, type} -> extract_typed_struct_value(value, type, template, rt)
+      {:fields, type} -> extract_typed_map_value(value, type, template, rt)
+      {:other, _type} -> normalize_primitive(value, rt)
     end
   end
 
@@ -257,27 +218,20 @@ defmodule AshRpc.ResultProcessor do
 
     if value_is_resource_instance do
       if template == [] do
-        normalize_resource_struct(value, resource, rt)
+        normalize_resource_struct(value, rt)
       else
         normalized = FieldExtractor.normalize_for_extraction(value, template)
 
         Enum.reduce(template, %{}, fn field_spec, acc ->
           case field_spec do
             field_atom when is_atom(field_atom) ->
-              extract_resource_field(normalized, resource, field_atom, acc, rt)
+              extract_resource_field(normalized, resource, field_atom, [], acc, rt)
 
             {field_atom, nested_template} when is_atom(field_atom) ->
-              extract_resource_nested_field(
-                normalized,
-                resource,
-                field_atom,
-                nested_template,
-                acc,
-                rt
-              )
+              extract_resource_field(normalized, resource, field_atom, nested_template, acc, rt)
 
             %{field_name: field_name, index: _index} ->
-              extract_resource_field(normalized, resource, field_name, acc, rt)
+              extract_resource_field(normalized, resource, field_name, [], acc, rt)
 
             _ ->
               acc
@@ -292,7 +246,7 @@ defmodule AshRpc.ResultProcessor do
   defp extract_resource_value(value, _resource, _template, rt),
     do: normalize_primitive(value, rt)
 
-  defp extract_resource_field(data, resource, field_atom, acc, rt) do
+  defp extract_resource_field(data, resource, field_atom, template, acc, rt) do
     case Map.get(data, field_atom) do
       %Ash.ForbiddenField{} ->
         Map.put(acc, field_atom, nil)
@@ -302,33 +256,7 @@ defmodule AshRpc.ResultProcessor do
 
       value ->
         field_or_rel = get_field_or_relationship(resource, field_atom, rt)
-        extracted = extract_value(value, field_or_rel, [], [], rt)
-        Map.put(acc, field_atom, extracted)
-    end
-  end
-
-  defp extract_resource_nested_field(
-         data,
-         resource,
-         field_atom,
-         nested_template,
-         acc,
-         rt
-       ) do
-    case Map.get(data, field_atom) do
-      %Ash.ForbiddenField{} ->
-        Map.put(acc, field_atom, nil)
-
-      %Ash.NotLoaded{} ->
-        acc
-
-      nil ->
-        Map.put(acc, field_atom, nil)
-
-      value ->
-        field_or_rel = get_field_or_relationship(resource, field_atom, rt)
-        extracted = extract_value(value, field_or_rel, [], nested_template, rt)
-        Map.put(acc, field_atom, extracted)
+        Map.put(acc, field_atom, extract_value(value, field_or_rel, [], template, rt))
     end
   end
 
@@ -381,18 +309,22 @@ defmodule AshRpc.ResultProcessor do
 
   # Array Handler
   defp extract_array_value(value, inner_type, template, rt)
-       when is_list(value) do
-    value
-    |> Enum.map(fn item ->
-      case extract_value(item, inner_type, [], template, rt) do
-        :skip -> nil
-        result -> result
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-  end
+       when is_list(value),
+       do: extract_items(value, inner_type, template, rt)
 
   defp extract_array_value(value, _inner_type, _template, _rt), do: value
+
+  # Drops items the extraction filtered out (not loaded, forbidden, or a union
+  # member that wasn't requested) while keeping items that were nil to begin with.
+  defp extract_items(items, type, template, rt) do
+    Enum.flat_map(items, fn item ->
+      case extract_value(item, type, [], template, rt) do
+        :skip -> []
+        nil when not is_nil(item) -> []
+        result -> [result]
+      end
+    end)
+  end
 
   # TypedStruct Handler — struct types with field constraints
   defp extract_typed_struct_value(value, type_info, template, rt)
@@ -403,29 +335,9 @@ defmodule AshRpc.ResultProcessor do
 
   defp extract_typed_struct_value(value, type_info, template, rt)
        when is_map(value) do
-    normalized = FieldExtractor.normalize_for_extraction(value, template)
-
-    Enum.reduce(template, %{}, fn field_spec, acc ->
-      case field_spec do
-        field_atom when is_atom(field_atom) ->
-          field_value = Map.get(normalized, field_atom)
-          sub_type = Type.find_field_type(type_info, field_atom)
-          extracted = extract_value(field_value, sub_type, [], [], rt)
-          Map.put(acc, field_atom, extracted)
-
-        {field_atom, nested_template} when is_atom(field_atom) ->
-          field_value = Map.get(normalized, field_atom)
-          sub_type = Type.find_field_type(type_info, field_atom)
-
-          extracted =
-            extract_value(field_value, sub_type, [], nested_template, rt)
-
-          Map.put(acc, field_atom, extracted)
-
-        _ ->
-          acc
-      end
-    end)
+    value
+    |> FieldExtractor.normalize_for_extraction(template)
+    |> extract_template_fields(type_info, template, rt)
   end
 
   defp extract_typed_struct_value(value, _type_info, _template, rt),
@@ -459,33 +371,7 @@ defmodule AshRpc.ResultProcessor do
         end)
 
       true ->
-        Enum.reduce(template, %{}, fn field_spec, acc ->
-          case field_spec do
-            field_atom when is_atom(field_atom) ->
-              field_value = Map.get(normalized, field_atom)
-              sub_type = Type.find_field_type(type_info, field_atom)
-              extracted = extract_value(field_value, sub_type, [], [], rt)
-              Map.put(acc, field_atom, extracted)
-
-            {field_atom, nested_template} when is_atom(field_atom) ->
-              field_value = Map.get(normalized, field_atom)
-              sub_type = Type.find_field_type(type_info, field_atom)
-
-              extracted =
-                extract_value(field_value, sub_type, [], nested_template, rt)
-
-              Map.put(acc, field_atom, extracted)
-
-            %{field_name: field_name, index: _index} ->
-              field_value = Map.get(normalized, field_name)
-              sub_type = Type.find_field_type(type_info, field_name)
-              extracted = extract_value(field_value, sub_type, [], [], rt)
-              Map.put(acc, field_name, extracted)
-
-            _ ->
-              acc
-          end
-        end)
+        extract_template_fields(normalized, type_info, template, rt)
     end
   end
 
@@ -497,6 +383,29 @@ defmodule AshRpc.ResultProcessor do
 
   defp extract_typed_map_value(value, _type_info, _template, rt),
     do: normalize_primitive(value, rt)
+
+  # Extracts each template entry of a typed struct/map/tuple from its normalized
+  # map form, typing values by the field descriptors.
+  defp extract_template_fields(normalized, type_info, template, rt) do
+    Enum.reduce(template, %{}, fn
+      {field_atom, nested_template}, acc when is_atom(field_atom) ->
+        put_template_field(acc, normalized, type_info, field_atom, nested_template, rt)
+
+      %{field_name: field_name, index: _index}, acc ->
+        put_template_field(acc, normalized, type_info, field_name, [], rt)
+
+      field_atom, acc when is_atom(field_atom) ->
+        put_template_field(acc, normalized, type_info, field_atom, [], rt)
+
+      _other, acc ->
+        acc
+    end)
+  end
+
+  defp put_template_field(acc, normalized, type_info, field, template, rt) do
+    sub_type = Type.find_field_type(type_info, field)
+    Map.put(acc, field, extract_value(Map.get(normalized, field), sub_type, [], template, rt))
+  end
 
   defp extract_plain_map_value(value, template, rt) when is_map(value) do
     Enum.reduce(template, %{}, fn field_spec, acc ->
@@ -583,7 +492,7 @@ defmodule AshRpc.ResultProcessor do
 
       is_struct(value) && Introspection.ash_resource?(value.__struct__) ->
         # Resource structs: filter to public fields only
-        normalize_resource_struct_primitive(value, rt)
+        normalize_resource_struct(value, rt)
 
       is_struct(value) ->
         value
@@ -612,52 +521,21 @@ defmodule AshRpc.ResultProcessor do
     end
   end
 
-  defp normalize_resource_struct(value, resource, rt) do
-    case Map.get(rt.resource_lookup, resource) do
-      %Ash.Info.Manifest.Resource{fields: fields} when is_map(fields) ->
-        public_field_names = MapSet.new(Map.keys(fields))
+  # Resource structs keep only their public (manifest) fields; a resource the
+  # manifest doesn't carry keeps every field.
+  defp normalize_resource_struct(%resource{} = value, rt) do
+    map = Map.from_struct(value)
 
-        value
-        |> Map.from_struct()
-        |> Enum.reduce(%{}, fn {key, val}, acc ->
-          if MapSet.member?(public_field_names, key) do
-            Map.put(acc, key, normalize_primitive(val, rt))
-          else
-            acc
-          end
-        end)
+    map =
+      case Map.get(rt.resource_lookup, resource) do
+        %Ash.Info.Manifest.Resource{fields: fields} when is_map(fields) ->
+          Map.take(map, Map.keys(fields))
 
-      _ ->
-        normalize_primitive(value, rt)
-    end
-  end
+        _ ->
+          map
+      end
 
-  # Normalize a resource struct by filtering to public fields.
-  defp normalize_resource_struct_primitive(value, rt) when is_struct(value) do
-    resource = value.__struct__
-
-    case Map.get(rt.resource_lookup, resource) do
-      %Ash.Info.Manifest.Resource{fields: fields} when is_map(fields) ->
-        public_field_names = MapSet.new(Map.keys(fields))
-
-        value
-        |> Map.from_struct()
-        |> Enum.reduce(%{}, fn {key, val}, acc ->
-          if MapSet.member?(public_field_names, key) do
-            Map.put(acc, key, normalize_primitive(val, rt))
-          else
-            acc
-          end
-        end)
-
-      _ ->
-        # Resource not in spec — normalize all fields as a plain struct
-        value
-        |> Map.from_struct()
-        |> Enum.reduce(%{}, fn {key, val}, acc ->
-          Map.put(acc, key, normalize_primitive(val, rt))
-        end)
-    end
+    Map.new(map, fn {key, val} -> {key, normalize_primitive(val, rt)} end)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -686,14 +564,7 @@ defmodule AshRpc.ResultProcessor do
 
   defp extract_list_fields(results, extraction_template, resource, rt) do
     type = determine_data_type(List.first(results), resource, rt)
-
-    Enum.map(results, fn item ->
-      case extract_value(item, type, [], extraction_template, rt) do
-        :skip -> nil
-        result -> result
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
+    extract_items(results, type, extraction_template, rt)
   end
 
   defp extract_single_result(data, extraction_template, resource, rt)
@@ -728,7 +599,7 @@ defmodule AshRpc.ResultProcessor do
       is_struct(data) && Introspection.ash_resource?(data.__struct__) ->
         resolve_resource_type(data.__struct__, rt)
 
-      is_struct(data) && has_field_name_overrides?(rt, data.__struct__) ->
+      is_struct(data) && Introspection.has_field_name_overrides?(rt, data.__struct__) ->
         Ash.Info.Manifest.Generator.TypeResolver.resolve(Ash.Type.Struct,
           instance_of: data.__struct__
         )
@@ -800,9 +671,4 @@ defmodule AshRpc.ResultProcessor do
   defp resolve_union_type(_resource, _rt) do
     %Ash.Info.Manifest.Type{kind: :union, module: Ash.Type.Union, constraints: []}
   end
-
-  defp has_field_name_overrides?(_rt, nil), do: false
-
-  defp has_field_name_overrides?(rt, module),
-    do: not is_nil(Introspection.type_field_name_overrides(rt, module))
 end

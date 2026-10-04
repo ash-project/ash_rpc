@@ -128,62 +128,38 @@ defmodule AshRpc.ValueFormatter do
          direction,
          rt
        ) do
-    inst = Type.effective_module(type_info)
+    case Introspection.classify_type(type_info, rt) do
+      {:array, item_type} when is_list(value) ->
+        Enum.map(value, &do_format(&1, item_type, [], formatter, direction, rt))
 
-    case type_info.kind do
-      :type_ref ->
-        full_type = Introspection.named_type_definition(rt.type_lookup, type_info.module)
-        do_format(value, full_type, [], formatter, direction, rt)
+      {:array, _item_type} ->
+        value
 
-      :array ->
-        if is_list(value) do
-          Enum.map(value, fn item ->
-            do_format(item, type_info.item_type, [], formatter, direction, rt)
-          end)
-        else
-          value
-        end
-
-      kind when kind in [:resource, :embedded_resource] ->
-        resource = Type.effective_resource(type_info)
+      {:resource, resource} ->
         format_resource(value, resource, formatter, direction, rt)
 
-      :union ->
-        format_union(value, type_info, formatter, direction, rt)
+      {:union, type} ->
+        format_union(value, type, formatter, direction, rt)
 
-      :tuple ->
-        format_tuple(value, type_info, formatter, direction, rt)
+      {_, %Type{kind: :tuple} = type} ->
+        format_tuple(value, type, formatter, direction, rt)
 
-      :keyword ->
-        format_keyword(value, type_info, formatter, direction, rt)
+      {_, %Type{kind: :keyword} = type} ->
+        format_keyword(value, type, formatter, direction, rt)
 
-      kind when kind in [:struct, :map] ->
-        cond do
-          inst && is_atom(inst) && Introspection.ash_resource?(inst) ->
-            format_resource(value, inst, formatter, direction, rt)
+      {:typed_struct, type} ->
+        format_typed_struct(value, type, formatter, direction, rt)
 
-          has_field_name_overrides?(rt, inst) ->
-            format_typed_struct(value, type_info, formatter, direction, rt)
+      {:fields, type} ->
+        if Type.has_fields?(type),
+          do: format_typed_map(value, type, formatter, direction, rt),
+          else: value
 
-          Type.has_fields?(type_info) ->
-            format_typed_map(value, type_info, formatter, direction, rt)
+      {:other, nil} ->
+        value
 
-          true ->
-            value
-        end
-
-      _ ->
-        cond do
-          type_info.module == Ash.Type.Vector ->
-            format_vector(value)
-
-          is_custom_type_with_map_storage?(type_info.module) && is_map(value) &&
-              not is_struct(value) ->
-            format_map_keys_only(value, formatter, direction)
-
-          true ->
-            value
-        end
+      {:other, type} ->
+        format_scalar(value, type, formatter, direction)
     end
   end
 
@@ -203,10 +179,21 @@ defmodule AshRpc.ValueFormatter do
   # Catch-all for any unrecognized type — return value unchanged.
   defp do_format(value, _type, _constraints, _formatter, _direction, _rt), do: value
 
-  defp has_field_name_overrides?(_rt, nil), do: false
+  # ---------------------------------------------------------------------------
+  # Scalar Handler — vectors and custom map-storage types
+  # ---------------------------------------------------------------------------
 
-  defp has_field_name_overrides?(rt, module),
-    do: not is_nil(Introspection.type_field_name_overrides(rt, module))
+  defp format_scalar(value, %Type{module: Ash.Type.Vector}, _formatter, _direction),
+    do: format_vector(value)
+
+  defp format_scalar(value, %Type{module: module}, formatter, direction)
+       when is_map(value) and not is_struct(value) do
+    if is_custom_type_with_map_storage?(module),
+      do: format_map_keys_only(value, formatter, direction),
+      else: value
+  end
+
+  defp format_scalar(value, _type, _formatter, _direction), do: value
 
   defp is_custom_type_with_map_storage?(module) when is_atom(module) do
     Ash.Type.ash_type?(module) and
@@ -270,10 +257,6 @@ defmodule AshRpc.ValueFormatter do
 
   defp format_map_keys_only(value, _formatter, _direction), do: value
 
-  # ---------------------------------------------------------------------------
-  # Resource Handler
-  # ---------------------------------------------------------------------------
-
   # `%Ash.Vector{}` keeps its floats in a packed binary, which is not
   # JSON-encodable, so the wire format has to be a plain list of numbers. Result extraction
   # already ran `Map.from_struct/1` by the time formatting runs, hence the second
@@ -287,6 +270,10 @@ defmodule AshRpc.ValueFormatter do
   end
 
   defp format_vector(other), do: other
+
+  # ---------------------------------------------------------------------------
+  # Resource Handler
+  # ---------------------------------------------------------------------------
 
   defp format_resource(value, resource, formatter, direction, rt)
 
@@ -332,7 +319,7 @@ defmodule AshRpc.ValueFormatter do
 
   defp format_typed_struct(value, type_info, formatter, direction, rt)
        when is_map(value) do
-    {ts_field_names, reverse_map} = typed_struct_field_maps(type_info, rt)
+    {field_names, reverse_map} = typed_struct_field_maps(type_info, rt)
 
     Enum.into(value, %{}, fn {key, field_value} ->
       internal_key = convert_typed_struct_key(key, reverse_map, formatter, direction)
@@ -345,7 +332,7 @@ defmodule AshRpc.ValueFormatter do
       output_key =
         case direction do
           :input -> internal_key
-          :output -> get_typed_struct_output_key(internal_key, ts_field_names, formatter)
+          :output -> get_typed_struct_output_key(internal_key, field_names, formatter)
         end
 
       {output_key, formatted_value}
@@ -364,8 +351,8 @@ defmodule AshRpc.ValueFormatter do
 
   defp convert_typed_struct_key(key, _reverse_map, _formatter, _direction), do: key
 
-  defp get_typed_struct_output_key(internal_key, ts_field_names, formatter) do
-    case Map.get(ts_field_names, internal_key) do
+  defp get_typed_struct_output_key(internal_key, field_names, formatter) do
+    case Map.get(field_names, internal_key) do
       nil -> FieldFormatter.format_field_name(internal_key, formatter)
       client_name -> client_name
     end
@@ -477,7 +464,7 @@ defmodule AshRpc.ValueFormatter do
   defp dispatch_struct_or_map(map_value, type_info, formatter, direction, rt) do
     inst = Type.effective_module(type_info)
 
-    if has_field_name_overrides?(rt, inst) do
+    if Introspection.has_field_name_overrides?(rt, inst) do
       format_typed_struct(map_value, type_info, formatter, direction, rt)
     else
       format_typed_map(map_value, type_info, formatter, direction, rt)

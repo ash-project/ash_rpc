@@ -26,7 +26,8 @@ defmodule AshRpc.RequestedFieldsProcessor do
   alias AshRpc.FieldProcessing.{Atomizer, FieldSelector}
 
   @doc """
-  Atomizes requested fields by converting standalone strings to atoms and map keys to atoms.
+  Applies `resource`'s field-name overrides to the top level of a field selection.
+  See `AshRpc.FieldProcessing.Atomizer`.
   """
   defdelegate atomize_requested_fields(requested_fields, resource, runtime), to: Atomizer
 
