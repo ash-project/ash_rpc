@@ -48,8 +48,8 @@ defmodule AshRpc.ErrorBuilder do
     tuple or union member, or a calculation that requires arguments was
     selected by name only.
   - `invalid_calculation_args` *(hint)*: a calculation's `args` are missing or
-    empty when required, given to a calculation that takes none, or replaced
-    by a nested field map.
+    empty when required, given to a calculation that takes none, contain a key
+    the calculation doesn't define, or are replaced by a nested field map.
 
   Union input:
 

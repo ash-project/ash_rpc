@@ -71,7 +71,7 @@ Built-in impls live in `lib/ash_rpc/error.ex`:
 | `Ash.Error.Forbidden.Policy` | `forbidden` |
 | `Ash.Error.Forbidden.ForbiddenField` | `forbidden_field` |
 | `Ash.Error.Changes.InvalidAttribute` | `invalid_attribute` |
-| `Ash.Error.Changes.InvalidArgument`, `Ash.Error.Query.InvalidArgument` | `invalid_argument` |
+| `Ash.Error.Changes.InvalidArgument`, `Ash.Error.Query.InvalidArgument`, `Ash.Error.Action.InvalidArgument` | `invalid_argument` |
 | `Ash.Error.Page.InvalidKeyset` | `invalid_keyset` |
 | `Ash.Error.Query.InvalidPage` | `invalid_page` |
 | `Ash.Error.Invalid.TenantRequired` | `tenant_required` |
@@ -82,7 +82,7 @@ Built-in impls live in `lib/ash_rpc/error.ex`:
 Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
 
 - Changeset and query variants share one impl ("changeset and query Required
-  share one impl", "changeset and query InvalidArgument share one impl").
+  share one impl", "changeset, query and action InvalidArgument share one impl").
 - An impl that raises falls back to a generic `type: "error"`, `"something went
   wrong"` map that keeps the exception's path ("a raising AshRpc.Error impl"
   describe).

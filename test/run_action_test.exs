@@ -29,6 +29,19 @@ defmodule AshRpc.RunActionTest do
              })
   end
 
+  test "a bad argument cast on a generic action is invalid_argument" do
+    # `fields` is the internal name: error fields get resource field-name
+    # overrides only, not argument_names overrides (`body` on the wire).
+    assert %{
+             "success" => false,
+             "errors" => [%{"type" => "invalid_argument", "fields" => ["text"]}]
+           } =
+             AshRpc.run_action(@profile, ctx(), %{
+               "action" => "word_count",
+               "input" => %{"body" => %{"not" => "a string"}}
+             })
+  end
+
   test "unknown action and missing action" do
     assert %{"success" => false, "errors" => [%{"type" => "action_not_found"}]} =
              AshRpc.run_action(@profile, ctx(), %{"action" => "nope"})

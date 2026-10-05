@@ -111,7 +111,7 @@ Asserted in `test/calculations_test.exs`:
 | Wire `type` | Cause | Test |
 |---|---|---|
 | `requires_field_selection` | A relationship, embedded resource, union, typed value or complex calculation requested by bare name, or with missing/empty `fields` | calculations_test "a complex calculation requested as a bare name", "a complex calculation with args but missing or empty fields" |
-| `invalid_calculation_args` | `args` on a calculation that takes none, or a calculation with arguments sent without `args` | calculations_test "args on a calculation that takes none", "missing args on a calculation that takes arguments" |
+| `invalid_calculation_args` | `args` on a calculation that takes none, an `args` key the calculation doesn't define, or a calculation with arguments sent without `args` | calculations_test "args on a calculation that takes none", "an args key the calculation doesn't define is invalid_calculation_args", "missing args on a calculation that takes arguments" |
 | `invalid_field_format` | A calculation with arguments requested as a bare name (internal reason `calculation_requires_args`) | calculations_test "calculation_requires_args: a calculation with arguments requested as a bare name" |
 | `invalid_field_selection` | A `fields` key on a scalar calculation, or a nested selection on a primitive aggregate | calculations_test "invalid_field_selection: a fields key on a scalar calculation"; aggregates_test "nested selection on a primitive aggregate is invalid_field_selection" |
 | `field_does_not_support_nesting` | A nested list on a scalar calculation or attribute | calculations_test "field_does_not_support_nesting: nested fields on a scalar calculation" |

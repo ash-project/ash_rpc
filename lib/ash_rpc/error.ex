@@ -136,7 +136,12 @@ defimpl AshRpc.Error, for: Ash.Error.Changes.InvalidAttribute do
   end
 end
 
-defimpl AshRpc.Error, for: [Ash.Error.Changes.InvalidArgument, Ash.Error.Query.InvalidArgument] do
+defimpl AshRpc.Error,
+  for: [
+    Ash.Error.Changes.InvalidArgument,
+    Ash.Error.Query.InvalidArgument,
+    Ash.Error.Action.InvalidArgument
+  ] do
   def to_error(error) do
     %{
       message: Map.get(error, :message) || Exception.message(error),

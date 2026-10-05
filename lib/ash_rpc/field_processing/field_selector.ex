@@ -417,6 +417,9 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       calc_requires_args && !has_non_empty_args ->
         throw({:invalid_calculation_args, internal_name, path})
 
+      has_non_empty_args && undefined_arg_keys?(args, calc_field) ->
+        throw({:invalid_calculation_args, internal_name, path})
+
       true ->
         :ok
     end
@@ -805,6 +808,15 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       args when is_list(args) -> true
     end
   end
+
+  # Arg keys reach Ash as-is (usually strings), so an unknown key would only
+  # fail when Ash builds the load.
+  defp undefined_arg_keys?(args, calc) when is_map(args) do
+    names = MapSet.new(calc.arguments, &to_string(&1.name))
+    Enum.any?(Map.keys(args), &(to_string(&1) not in names))
+  end
+
+  defp undefined_arg_keys?(_args, _calc), do: false
 
   defp has_required_arguments?(calc) do
     case calc.arguments do

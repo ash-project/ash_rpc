@@ -101,20 +101,16 @@ An empty `fields` list counts as missing. Unions select members by name
 | Wire `type` | Cause | Test (`test/calculations_test.exs`) |
 |---|---|---|
 | `invalid_field_format` | A calculation that takes arguments requested as a bare name (`"excerpt"`). Internally `{:calculation_requires_args, …}` | "calculation_requires_args: a calculation with arguments requested as a bare name" |
-| `invalid_calculation_args` | `args` on a calculation that takes none, or `fields` without `args` on one that does | "invalid_calculation_args" describe |
+| `invalid_calculation_args` | `args` on a calculation that takes none, an `args` key the calculation doesn't define, or `fields` without `args` on one that does | "invalid_calculation_args" describe |
 | `invalid_field_selection` | A `fields` key on a scalar calculation | "invalid_field_selection: a fields key on a scalar calculation" |
 | `field_does_not_support_nesting` | A nested list on a scalar calculation (`%{"titleLength" => ["x"]}`) | "field_does_not_support_nesting: nested fields on a scalar calculation" |
 | `duplicate_field` | The same calculation requested twice with different args | "duplicate_field: the same calculation requested twice with different args" |
 
-The `args` map is not checked against the calculation's argument names by the
-field selector. An argument name the calculation doesn't define is rejected
-later by Ash when the load runs, with `path: ["load"]`. Arg keys reach Ash as
-strings, so the wire type depends on the atom table. A key that names an
-existing atom gives `Ash.Error.Invalid.NoSuchInput`, which has no
-`AshRpc.Error` impl: the client gets `internal_error` with an `errorId`, and a
-warning is logged. A key that names no existing atom fails atom conversion and
-becomes `unknown_error` (`test/calculations_test.exs` "an args key the calculation doesn't define
-fails when Ash builds the load").
+The field selector checks `args` keys against the calculation's argument names
+(compared as strings, since keys reach Ash as-is), so an undefined key is
+`invalid_calculation_args` before Ash builds the load
+(`test/calculations_test.exs` "an args key the calculation doesn't define is
+invalid_calculation_args").
 
 ### Embedded resource fields missing or erroring
 
@@ -222,5 +218,5 @@ See [action metadata](features/action-metadata.md).
 | `action_not_found` (`vars.actionName`) | The wire name isn't in the manifest's entrypoints: missing from `@entrypoints` in `test/support/manifest_builder.ex`, or the mapping source's `entrypoint/1` returned `nil` | Add the row (`test/run_action_test.exs` "unknown action and missing action") |
 | `missing_required_parameter` | No `action` param and no `entrypoint:` option | Send `action`, or pass `entrypoint:` |
 | A test sees stale or unexpected config | It mutated, or expected a change in, the cached `ManifestBuilder.manifest/0` | Build a fresh one with `build/1` |
-| `internal_error` or `unknown_error` with `path: ["load"]` | Ash rejected the load built from the selection (e.g. an `args` key the calculation doesn't define; `test/calculations_test.exs` "an args key the calculation doesn't define fails when Ash builds the load") | Reproduce with the field-selection view above and check the calculation's arguments |
+| `internal_error` or `unknown_error` with `path: ["load"]` | Ash rejected the load built from the selection | Reproduce with the field-selection view above and check the calculation's arguments |
 | Any other wire error | Look up the `type` in [`AGENTS.md`](../AGENTS.md#common-errors) Common Errors, then the `type`'s `build/2` clause in `lib/ash_rpc/error_builder.ex` | See [errors](features/errors.md) |

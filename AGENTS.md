@@ -198,8 +198,7 @@ Entry points are `AshRpc.run_action/4` and `AshRpc.validate_action/4` (profile, 
 
 `validate_action` stops after stage 1 and runs `AshRpc.Validation`.
 Validation is native (no AshPhoenix). Missing inputs produce `required`,
-bad argument casts produce `invalid_argument` (generic actions:
-`internal_error`, see `agent-docs/features/pipeline.md`), and atomic validations on
+bad argument casts produce `invalid_argument`, and atomic validations on
 update/destroy only run during `run_action`.
 
 ### Action Shape Contract

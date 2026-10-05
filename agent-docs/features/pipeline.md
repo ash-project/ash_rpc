@@ -203,11 +203,13 @@ changeset or action input without executing it and sends its errors through
   `read_action` (primary read when unset), so records hidden by it look missing
   ("the read_action used for the lookup is the entrypoint's", "update: unknown
   identity is not_found"). Existing records validate and stay unchanged.
-- A bad argument cast on a read, create, update or destroy is
-  `invalid_argument` (the changeset/query `InvalidArgument` impl,
-  `test/error_protocol_test.exs` "changeset and query InvalidArgument share one
-  impl"). Generic actions raise `Ash.Error.Action.InvalidArgument`, which has no
-  built-in `AshRpc.Error` impl, so a bad cast there is `internal_error`.
+- A bad argument cast is `invalid_argument` for every action type: the
+  changeset, query and generic-action `InvalidArgument` errors share one impl
+  (`test/error_protocol_test.exs` "changeset, query and action InvalidArgument
+  share one impl", `test/run_action_test.exs` "a bad argument cast on a generic
+  action is invalid_argument"). Its `fields` carry the internal argument name:
+  error fields get resource field-name overrides, not `argument_names`
+  overrides.
 - Atomic validations on update/destroy only run during `run_action`, so
   `validate_action` can succeed where `run_action` fails.
 

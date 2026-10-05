@@ -21,7 +21,7 @@ defmodule AshRpc.ErrorProtocolTest do
     assert AshRpc.Error.to_error(Ash.Error.Query.Required.exception(field: :title)) == expected
   end
 
-  test "changeset and query InvalidArgument share one impl" do
+  test "changeset, query and action InvalidArgument share one impl" do
     expected = %{
       message: "is bad",
       short_message: "Invalid argument",
@@ -31,7 +31,11 @@ defmodule AshRpc.ErrorProtocolTest do
       path: []
     }
 
-    for module <- [Ash.Error.Changes.InvalidArgument, Ash.Error.Query.InvalidArgument] do
+    for module <- [
+          Ash.Error.Changes.InvalidArgument,
+          Ash.Error.Query.InvalidArgument,
+          Ash.Error.Action.InvalidArgument
+        ] do
       assert AshRpc.Error.to_error(module.exception(field: :title, message: "is bad")) == expected
     end
   end
