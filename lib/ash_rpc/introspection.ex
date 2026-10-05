@@ -224,11 +224,15 @@ defmodule AshRpc.Introspection do
   defp classify_return_type(_type, _type_lookup), do: {:error, :not_field_selectable_type}
 
   @doc """
-  Gets the list of metadata fields that should be exposed for an RPC action.
+  Gets the list of metadata fields that should be exposed for an action.
+
+  A mapping source can use it to compute `AshRpc.Entrypoint.exposed_metadata_fields`.
 
   ## Parameters
 
-    * `rpc_action` - The RPC action configuration
+    * `config` - A map or struct with an optional `:show_metadata` key: `nil`
+      (or absent) exposes every metadata field the action declares, `false` or
+      `[]` exposes none, and a list exposes those fields
     * `ash_action` - The underlying Ash action
 
   ## Returns
@@ -249,8 +253,8 @@ defmodule AshRpc.Introspection do
       iex> AshRpc.Introspection.get_exposed_metadata_fields(%{show_metadata: [:total_count]}, %{metadata: [...]})
       [:total_count]
   """
-  def get_exposed_metadata_fields(rpc_action, ash_action) do
-    show_metadata = Map.get(rpc_action, :show_metadata, nil)
+  def get_exposed_metadata_fields(config, ash_action) do
+    show_metadata = Map.get(config, :show_metadata, nil)
 
     case show_metadata do
       nil -> Enum.map(Map.get(ash_action, :metadata, []), & &1.name)
