@@ -24,13 +24,18 @@ Documentation Index in `AGENTS.md`.
 | [action metadata](features/action-metadata.md) | `test/action_metadata_test.exs` |
 | [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs` |
 
-Two files belong to no feature doc:
+Four files belong to no feature doc:
 
 - `test/fixtures_test.exs`: smoke tests for the fixtures themselves (ETS
   persistence, the generator seeing the fixture domain, row opts reaching
   `%AshRpc.Entrypoint{}`, an unknown row opt failing the build).
 - `test/introspection_test.exs`: `AshRpc.Introspection` helpers (pagination
   predicates, return classification, metadata helpers, `ash_resource?/1`).
+- `test/doctest_test.exs`: runs the `iex>` examples in `lib/`. Add a `doctest`
+  line when a module gains its first example; examples must run without the
+  test fixtures, so they never name `AshRpc.Test.*`.
+- `test/security_regression_test.exs`: values that must never reach the wire
+  (`%Ash.ForbiddenField{}` contents, unserializable terms in error vars).
 
 ## `AshRpc.Test.ManifestBuilder`
 
@@ -204,13 +209,15 @@ Update `@golden` only for an intentional wire change; add a case to
 
 | File | Purpose |
 |------|---------|
-| `domain.ex` | `AshRpc.Test.Domain`: the nine fixture resources (embedded types are not listed) |
+| `domain.ex` | `AshRpc.Test.Domain`: the ten fixture resources (embedded types are not listed) |
 | `mapping_source.ex` | `AshRpc.Test.MappingSource`: `@exposed` list, overrides (`Author` `isActive`/`isProlific`, `word_count` argument `text` → `body`, `PostStats` `wordCount1`/`isFeatured`), row opts → `%AshRpc.Entrypoint{}` via `struct!/2` |
 | `manifest_builder.ex` | `AshRpc.Test.ManifestBuilder`: `@entrypoints` wire rows; `manifest/0`, `build/1`, `generate!/1` |
 | `profile.ex` | `AshRpc.Test.Profile`: `use AshRpc.Profile, manifest: AshRpc.Test.ManifestBuilder`, all callbacks default |
+| `error_handler_profiles.ex` | Profiles whose `error_handler/1` misbehaves, all backed by `AshRpc.Test.PartialErrorHandler`: `PartialHandlerProfile` (redacts `invalid_attribute`, no clause for anything else), `RaisingHandlerProfile` (raises), `ThrowingHandlerProfile` (throws) |
 | `endpoint.ex` | `AshRpc.Test.Socket`, `AshRpc.Test.Endpoint`, and `AshRpc.Test.RpcChannel` (`use AshRpc.Channel`, joins `"rpc:*"`) |
 | `error_cases.ex` | `AshRpc.Test.ErrorCases`: one reason per `ErrorBuilder` clause, for the golden test |
-| `post.ex` | `AshRpc.Test.Post`: the main resource. Typed-map `stats`, embedded `settings`, unconstrained `data`, `unique_slug` identity; relationships to `author`, unexposed `secret`, `comments` (plus offset-only/keyset-only variants), `tags`; calculations with and without args; aggregates; metadata actions; generic actions returning `:map`, typed map, tuple, union and nothing |
+| `post.ex` | `AshRpc.Test.Post`: the main resource. Typed-map `stats`, embedded `settings`, unconstrained `data`, `unique_slug` identity; relationships to `author`, unexposed `secret`, `comments` (plus offset-only/keyset-only variants), `tags`; calculations with and without args; aggregates; metadata actions; a `read_unviewed` read filtered to `view_count == 0` (the `read_action:` of `update_post_scoped`); generic actions returning `:map`, typed map, tuple, union and nothing |
+| `account.ex` | `AshRpc.Test.Account`: non-public `secret` and `internal_notes` attributes, and an `embedding` vector with `dimensions: 3` (`create_account`, `list_accounts`) |
 | `author.ex` | `AshRpc.Test.Author`: `is_active?` / `is_prolific?` (name overrides), `post_count` aggregate, `name_active` identity, actor-scoped `me` / `update_me` / `destroy_me` |
 | `comment.ex` | `AshRpc.Test.Comment`: has_many target. Union `attachment` (embedded `file` / string `note`), `weighted_rating` calc, reads with offset+keyset, offset-only, keyset-only and a `rated` read filtered by a `min_rating` argument |
 | `comment_attachment.ex` | `AshRpc.Test.CommentAttachment`: embedded union member with a `label` calculation |
