@@ -19,8 +19,8 @@ Documentation Index in `AGENTS.md`.
 |-------------|------------|
 | [decoration](features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
 | [pipeline](features/pipeline.md) | `test/run_action_test.exs`, `test/validation_test.exs`, `test/context_test.exs`, `test/plug_test.exs`, `test/channel_test.exs`, `test/multitenancy_test.exs`, `test/filter_sort_test.exs`, `test/get_actions_test.exs` |
-| [field selection](features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs` |
-| [formatting](features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs` |
+| [field selection](features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
+| [formatting](features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs` |
 | [action metadata](features/action-metadata.md) | `test/action_metadata_test.exs` |
 | [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs` |
 
@@ -209,8 +209,8 @@ Update `@golden` only for an intentional wire change; add a case to
 
 | File | Purpose |
 |------|---------|
-| `domain.ex` | `AshRpc.Test.Domain`: the ten fixture resources (embedded types are not listed) |
-| `mapping_source.ex` | `AshRpc.Test.MappingSource`: `@exposed` list, overrides (`Author` `isActive`/`isProlific`, `word_count` argument `text` → `body`, `PostStats` `wordCount1`/`isFeatured`), row opts → `%AshRpc.Entrypoint{}` via `struct!/2` |
+| `domain.ex` | `AshRpc.Test.Domain`: the sixteen fixture resources (embedded types are not listed) |
+| `mapping_source.ex` | `AshRpc.Test.MappingSource`: `@exposed` list, overrides (`Author` `isActive`/`isProlific`, `word_count` argument `text` → `body`, `PostStats` `wordCount1`/`isFeatured`, plus the theme overrides listed with each fixture below), row opts → `%AshRpc.Entrypoint{}` via `struct!/2` |
 | `manifest_builder.ex` | `AshRpc.Test.ManifestBuilder`: `@entrypoints` wire rows; `manifest/0`, `build/1`, `generate!/1` |
 | `profile.ex` | `AshRpc.Test.Profile`: `use AshRpc.Profile, manifest: AshRpc.Test.ManifestBuilder`, all callbacks default |
 | `error_handler_profiles.ex` | Profiles whose `error_handler/1` misbehaves, all backed by `AshRpc.Test.PartialErrorHandler`: `PartialHandlerProfile` (redacts `invalid_attribute`, no clause for anything else), `RaisingHandlerProfile` (raises), `ThrowingHandlerProfile` (throws) |
@@ -229,8 +229,24 @@ Update `@golden` only for an intentional wire change; add a case to
 | `secret.ex` | `AshRpc.Test.Secret`: in the domain but deliberately **not exposed**, for strict-exposure tests |
 | `post_settings.ex` | `AshRpc.Test.PostSettings`: embedded resource with a `theme_label` calculation |
 | `post_stats.ex` | `AshRpc.Test.PostStats`: `Ash.Type.NewType` map with fields `word_count_1` and `is_featured?` (client names via `type_field_names/1`) |
-| `calculations.ex` | Module calculations for `Post`: `Excerpt` (arg `length`), `ScoredStats` (arg `boost`, returns `PostStats`), `SelfPost` (returns the record) |
+| `calculations.ex` | Module calculations. For `Post`: `Excerpt` (arg `length`), `ScoredStats` (arg `boost`, returns `PostStats`), `SelfPost` (returns the record). For `Widget`: `FeaturedPost` (`strict_loads?: false`, wraps the loaded `post` in a union). For `Project`: `ProjectSummary` (a fixed `ProjectStats`), `ProjectReport` (two `ProjectMeta` rows, `total: 2`), `SelfRecords`, `IsLate` and `DaysLeft` (module calcs over `due_date`, so ETS needs no date functions) |
 | `changes.ex` | `Changes.Metadata` (the metadata values every `*_with_metadata` action sets), the read preparation and change that put them, and `MergeData` for `merge_post_data` |
+| `widget.ex` | `AshRpc.Test.Widget`: union theme. `content` (`:type_and_value`; embedded `text`/`checklist` members tagged by `content_type`, scalar `note`/`priority_value`), `status` (`:map_with_tag`, untyped `simple`/`detailed` maps tagged by `status_type`), `attachments` (array of tagged typed-map `file`/`image` members and a string `url`), `belongs_to :post`, `featured` calc (`WidgetItem`). Rows `create_widget`, `list_widgets`, `get_widget` |
+| `text_block.ex` | `AshRpc.Test.TextBlock`: embedded `content` member (`text`, `word_count`, `content_type`) with a `display_text` calc |
+| `checklist_block.ex` | `AshRpc.Test.ChecklistBlock`: embedded `content` member (`title`, typed-map `items` array, `is_active?` → `isActive`) with a `total_items` calc |
+| `widget_item.ex` | `AshRpc.Test.WidgetItem`: `Ash.Type.NewType` union with one `:struct` member (`post`, `instance_of: Post`) |
+| `place.ex` | `AshRpc.Test.Place`: keyword `options` and tuple `coordinates` with `fields`, `location` (`GeoPoint`), generic actions returning a keyword (`keyword_options`) and a tuple (`coordinates_info`). Rows `create_place`, `list_places`, `get_place`, `place_keyword_options`, `place_coordinates_info` |
+| `geo_point.ex` | `AshRpc.Test.GeoPoint`: tuple NewType (`lat_1`, `lng_1`, `is_verified?` → `lat1`, `lng1`, `isVerified` via `type_field_names/1`); also used by `Intake.location` |
+| `project.ex` | `AshRpc.Test.Project`: embedded `metadata` and `history` (array), custom `palette`, `due_date`/`started_at`/atom `priority`, TypedStruct `stats`, `has_many :notes`; calcs `summary`, `report` (typed map with embedded rows), `self` (arg `prefix`), `is_late`, `days_left`; `first` aggregates `first_note_meta` and `first_note_author_info`; generic `process_meta` and `process_meta_batch` taking embedded arguments. Rows `create_project`, `update_project`, `list_projects`, `get_project`, `process_project_meta`, `process_project_meta_batch` |
+| `project_note.ex` | `AshRpc.Test.ProjectNote`: has_many target of `Project` with embedded `meta` and a tagged union `author_info` (`meta` member tagged by `info_type`, string `anonymous`). Row `create_project_note` |
+| `project_meta.ex` | `AshRpc.Test.ProjectMeta` (embedded: `category`, `priority_score`, `is_urgent`, `deadline`, atom `status`, nested `detail`, `info_type` tag, non-public `internal_notes` its actions still accept; calcs `display_category` and `adjusted_priority` with required arg `multiplier`) and `AshRpc.Test.ProjectMetaDetail` (`note`, `level`) |
+| `project_stats.ex` | `AshRpc.Test.ProjectStats`: `Ash.TypedStruct` with a nested typed-map `metrics` field; `all_done?` → `allDone` |
+| `palette.ex` | `AshRpc.Test.Palette`: hand-rolled `use Ash.Type` with map storage (`primary`, `secondary`), which the runtime must treat as a primitive |
+| `catalog.ex` | `AshRpc.Test.Catalog`: generic actions only (ETS and a read exist for the data layer). Returns `{:array, :struct}` of `Post`, `{:array, :uuid}`, `TaskStats` and an array of it, `{:array, PostStats}`, unconstrained `{:array, :map}`, `:date`, `{:array, :date}`, a typed-map `digest`; struct arguments (`assign`, `assign_many`, `instance_of: Author`). Rows `catalog_<action>` |
+| `task_stats.ex` | `AshRpc.Test.TaskStats`: `Ash.TypedStruct`; `completed?` → `completed`, `is_urgent?` → `isUrgent` |
+| `intake.ex` | `AshRpc.Test.Intake`: input theme, every value shape carrying name overrides (`is_active?` → `isActive`, `version_1` → `version1`; `search` arguments `includeDeleted`, `filterBy1`); typed map, NewType maps, keyword and tuple NewTypes, embedded and nested embedded values, a `:type_and_value` and a `:map_with_tag` union; generic `process_data` with a NewType argument. Rows `create_intake`, `update_intake`, `search_intakes`, `process_intake_data` |
+| `intake_types.ex` | `Intake`'s NewTypes with `type_field_names/1` overrides: `IntakeStats` (`last_updated_at` deliberately unmapped), `IntakeDeep` holding `IntakeInner`, keyword `IntakePrefs`, union member `IntakeData`, argument type `IntakeInput` |
+| `intake_embedded.ex` | `Intake`'s embedded resources with `field_names/1` overrides: `IntakeProfile` (`bioText1`, `isPublic`), `IntakeSection` (`level1`, nested `profile`), `IntakeStatus` (`isFinal`, the `status` union member) |
 
 ## Regression Tests
 
