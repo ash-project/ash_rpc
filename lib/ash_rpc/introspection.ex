@@ -250,7 +250,7 @@ defmodule AshRpc.Introspection do
       []
 
       # Specific fields - expose only listed fields
-      iex> AshRpc.Introspection.get_exposed_metadata_fields(%{show_metadata: [:total_count]}, %{metadata: [...]})
+      iex> AshRpc.Introspection.get_exposed_metadata_fields(%{show_metadata: [:total_count]}, %{metadata: [%{name: :total_count}, %{name: :page_size}]})
       [:total_count]
   """
   def get_exposed_metadata_fields(config, ash_action) do
@@ -288,14 +288,13 @@ defmodule AshRpc.Introspection do
   def ash_resource?(_), do: false
 
   @doc """
-  Checks if a module is an embedded Ash resource.
+  Checks if a module is an embedded Ash resource (`data_layer: :embedded`).
+  Returns `false` for non-embedded resources and for modules that are not
+  resources.
 
   ## Examples
 
-      iex> AshRpc.Introspection.embedded_resource?(MyApp.Accounts.Address)
-      true
-
-      iex> AshRpc.Introspection.embedded_resource?(MyApp.Accounts.User)
+      iex> AshRpc.Introspection.embedded_resource?(String)
       false
   """
   def embedded_resource?(module) when is_atom(module) do
@@ -306,11 +305,12 @@ defmodule AshRpc.Introspection do
 
   @doc """
   Checks if constraints specify an instance_of that is an Ash resource.
+  `[instance_of: MyApp.Todo]` is `true` when `MyApp.Todo` is a resource.
 
   ## Examples
 
-      iex> AshRpc.Introspection.resource_instance_of?([instance_of: MyApp.Todo])
-      true
+      iex> AshRpc.Introspection.resource_instance_of?(instance_of: String)
+      false
 
       iex> AshRpc.Introspection.resource_instance_of?([])
       false

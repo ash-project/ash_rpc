@@ -66,8 +66,10 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
   ## Examples
 
-      iex> process(runtime, MyApp.Todo, :read, [:id, :title, %{user: [:id, :name]}])
-      {:ok, {[:id, :title], [{:user, [:id, :name]}], [:id, :title, {:user, [:id, :name]}]}}
+  With a runtime whose manifest exposes `MyApp.Todo` and its `user` relationship:
+
+      process(runtime, MyApp.Todo, :read, [:id, :title, %{user: [:id, :name]}])
+      #=> {:ok, {[:id, :title], [{:user, [:id, :name]}], [:id, :title, {:user, [:id, :name]}]}}
   """
   @spec process(AshRpc.Runtime.t(), module(), atom(), list(), keyword()) ::
           {:ok, select_result()} | {:error, term()}

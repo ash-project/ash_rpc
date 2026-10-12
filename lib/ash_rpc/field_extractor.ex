@@ -41,16 +41,16 @@ defmodule AshRpc.FieldExtractor do
   ## Examples
 
       # Map - returned as-is
-      iex> normalize_for_extraction(%{foo: 1, bar: 2}, [])
+      iex> AshRpc.FieldExtractor.normalize_for_extraction(%{foo: 1, bar: 2}, [])
       %{foo: 1, bar: 2}
 
       # Keyword list - converted to map
-      iex> normalize_for_extraction([foo: 1, bar: 2], [])
+      iex> AshRpc.FieldExtractor.normalize_for_extraction([foo: 1, bar: 2], [])
       %{foo: 1, bar: 2}
 
       # Tuple - converted using template indices
       iex> template = [%{field_name: :foo, index: 0}, %{field_name: :bar, index: 1}]
-      iex> normalize_for_extraction({1, 2}, template)
+      iex> AshRpc.FieldExtractor.normalize_for_extraction({1, 2}, template)
       %{foo: 1, bar: 2}
   """
   def normalize_for_extraction(data, extraction_template) do
