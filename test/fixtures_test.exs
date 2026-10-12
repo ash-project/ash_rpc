@@ -127,4 +127,139 @@ defmodule AshRpc.FixturesTest do
 
     assert [%{title: "unseen"}] = Ash.read!(AshRpc.Test.Post, action: :read_unviewed)
   end
+
+  test "the Widget fixture stores tagged, map_with_tag and array unions" do
+    post = Ash.create!(AshRpc.Test.Post, %{title: "featured"})
+
+    widget =
+      Ash.create!(AshRpc.Test.Widget, %{
+        content: %{content_type: "text", text: "hi"},
+        status: %{status_type: "simple", note: "ok"},
+        attachments: [%{attachment_type: "file", filename: "a.txt"}, "https://example.com"],
+        post_id: post.id
+      })
+
+    assert %Ash.Union{type: :text, value: %AshRpc.Test.TextBlock{text: "hi"}} = widget.content
+    assert %Ash.Union{type: :simple} = widget.status
+    assert [%Ash.Union{type: :file}, %Ash.Union{type: :url}] = widget.attachments
+
+    assert %{featured: %Ash.Union{type: :post, value: %AshRpc.Test.Post{title: "featured"}}} =
+             Ash.load!(widget, :featured)
+  end
+
+  test "the Place fixture stores keyword, tuple and tuple NewType values" do
+    place =
+      Ash.create!(AshRpc.Test.Place, %{
+        options: [priority: 3, category: "home", notify: true],
+        coordinates: {1.5, 2.5},
+        location: {10.0, 20.0, true}
+      })
+
+    assert [priority: 3, category: "home", notify: true] = place.options
+    assert {1.5, 2.5} = place.coordinates
+    assert {10.0, 20.0, true} = place.location
+
+    assert {:ok, [priority: 8, category: "work", notify: true, theme: :dark]} =
+             AshRpc.Test.Place
+             |> Ash.ActionInput.for_action(:keyword_options, %{})
+             |> Ash.run_action()
+  end
+
+  test "the Project fixture holds embedded, custom, typed-struct and aggregate values" do
+    project =
+      Ash.create!(AshRpc.Test.Project, %{
+        metadata: %{category: "work", priority_score: 5, internal_notes: "hidden"},
+        history: [%{category: "old"}],
+        palette: %{"primary" => "#000", "secondary" => "#fff"},
+        due_date: ~D[2099-12-31],
+        priority: :high,
+        stats: %{view_count: 1, metrics: %{focus_seconds: 10}}
+      })
+
+    Ash.create!(AshRpc.Test.ProjectNote, %{
+      project_id: project.id,
+      body: "n",
+      meta: %{category: "note"},
+      author_info: %{info_type: "meta", category: "author"}
+    })
+
+    assert %{primary: "#000", secondary: "#fff"} = project.palette
+    assert %AshRpc.Test.ProjectStats{view_count: 1} = project.stats
+
+    loaded =
+      Ash.load!(project, [
+        :summary,
+        :report,
+        :is_late,
+        :days_left,
+        :first_note_meta,
+        :first_note_author_info,
+        self: %{prefix: "p"},
+        metadata: [adjusted_priority: %{multiplier: 2}]
+      ])
+
+    assert %AshRpc.Test.ProjectStats{view_count: 42} = loaded.summary
+    assert %{total: 2, rows: [_, _]} = loaded.report
+    assert loaded.is_late == false
+    assert loaded.days_left == Date.diff(~D[2099-12-31], Date.utc_today())
+    assert %AshRpc.Test.ProjectMeta{category: "note"} = loaded.first_note_meta
+    assert %Ash.Union{type: :meta} = loaded.first_note_author_info
+    assert %AshRpc.Test.Project{} = loaded.self
+    assert loaded.metadata.adjusted_priority == 10
+
+    runtime = AshRpc.Runtime.new(AshRpc.Test.Profile)
+
+    %Ash.Info.Manifest.Resource{fields: meta_fields} =
+      runtime.resource_lookup[AshRpc.Test.ProjectMeta]
+
+    refute Map.has_key?(meta_fields, :internal_notes)
+  end
+
+  test "the Catalog fixture's generic actions return their declared shapes" do
+    Ash.create!(AshRpc.Test.Post, %{title: "listed"})
+    author = Ash.create!(AshRpc.Test.Author, %{name: "Ada"})
+
+    run = fn action, args ->
+      AshRpc.Test.Catalog |> Ash.ActionInput.for_action(action, args) |> Ash.run_action!()
+    end
+
+    assert [%AshRpc.Test.Post{title: "listed"}] = run.(:search_posts, %{})
+    assert [_id] = run.(:post_ids, %{})
+
+    assert %AshRpc.Test.TaskStats{total_count: 10, completed?: true} =
+             run.(:task_stats, %{task_id: Ash.UUID.generate()})
+
+    assert [%{"_id" => "a1"}] = run.(:raw_rows, %{})
+    assert ~D[2025-01-15] = run.(:publication_date, %{})
+    assert %{total_count: 1, settings_rows: [%AshRpc.Test.PostSettings{}]} = run.(:digest, %{})
+    assert %{assignee_name: "Ada"} = run.(:assign, %{assignee: author})
+  end
+
+  test "the Intake fixture casts every override-bearing shape" do
+    intake =
+      Ash.create!(AshRpc.Test.Intake, %{
+        user_name: "ada",
+        is_active?: true,
+        version_1: 2,
+        settings: %{notification_enabled: true},
+        stats: %{total_count_1: 3, is_complete?: false},
+        deep: %{display_name: "d", inner: %{max_retries_1: 4}},
+        preferences: [theme_1: "dark"],
+        location: {1.0, 2.0, false},
+        profile: %{display_name: "p", bio_text_1: "bio"},
+        history: [%{display_name: "h"}],
+        section: %{section_name: "s", profile: %{display_name: "inner"}},
+        content: %{content_type: "data", item_count: 1},
+        status: %{status_type: "active", message: "m"}
+      })
+
+    assert %{total_count_1: 3} = intake.stats
+    assert %{inner: %{max_retries_1: 4}} = intake.deep
+
+    assert %AshRpc.Test.IntakeSection{profile: %AshRpc.Test.IntakeProfile{display_name: "inner"}} =
+             intake.section
+
+    assert %Ash.Union{type: :data} = intake.content
+    assert %Ash.Union{type: :active, value: %AshRpc.Test.IntakeStatus{}} = intake.status
+  end
 end

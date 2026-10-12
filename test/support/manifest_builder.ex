@@ -91,7 +91,42 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"create_note_reply", AshRpc.Test.NoteReply, :create},
     # Private attributes and vectors
     {"create_account", AshRpc.Test.Account, :create},
-    {"list_accounts", AshRpc.Test.Account, :read}
+    {"list_accounts", AshRpc.Test.Account, :read},
+    # Unions
+    {"create_widget", AshRpc.Test.Widget, :create},
+    {"list_widgets", AshRpc.Test.Widget, :read},
+    {"get_widget", AshRpc.Test.Widget, :read, get?: true},
+    # Keyword and tuple
+    {"create_place", AshRpc.Test.Place, :create},
+    {"list_places", AshRpc.Test.Place, :read},
+    {"get_place", AshRpc.Test.Place, :read, get?: true},
+    {"place_keyword_options", AshRpc.Test.Place, :keyword_options},
+    {"place_coordinates_info", AshRpc.Test.Place, :coordinates_info},
+    # Embedded, custom and typed-struct values
+    {"create_project", AshRpc.Test.Project, :create},
+    {"update_project", AshRpc.Test.Project, :update},
+    {"list_projects", AshRpc.Test.Project, :read},
+    {"get_project", AshRpc.Test.Project, :read, get?: true},
+    {"create_project_note", AshRpc.Test.ProjectNote, :create},
+    {"process_project_meta", AshRpc.Test.Project, :process_meta},
+    {"process_project_meta_batch", AshRpc.Test.Project, :process_meta_batch},
+    # Generic-action returns and struct arguments
+    {"catalog_search_posts", AshRpc.Test.Catalog, :search_posts},
+    {"catalog_post_ids", AshRpc.Test.Catalog, :post_ids},
+    {"catalog_task_stats", AshRpc.Test.Catalog, :task_stats},
+    {"catalog_task_stats_list", AshRpc.Test.Catalog, :task_stats_list},
+    {"catalog_stats_list", AshRpc.Test.Catalog, :stats_list},
+    {"catalog_raw_rows", AshRpc.Test.Catalog, :raw_rows},
+    {"catalog_publication_date", AshRpc.Test.Catalog, :publication_date},
+    {"catalog_important_dates", AshRpc.Test.Catalog, :important_dates},
+    {"catalog_digest", AshRpc.Test.Catalog, :digest},
+    {"catalog_assign", AshRpc.Test.Catalog, :assign},
+    {"catalog_assign_many", AshRpc.Test.Catalog, :assign_many},
+    # Input and overrides
+    {"create_intake", AshRpc.Test.Intake, :create},
+    {"update_intake", AshRpc.Test.Intake, :update},
+    {"search_intakes", AshRpc.Test.Intake, :search},
+    {"process_intake_data", AshRpc.Test.Intake, :process_data}
   ]
 
   @doc "Cached default manifest (camelCase in/out)."

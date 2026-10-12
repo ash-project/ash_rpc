@@ -9,13 +9,19 @@ defmodule AshRpc.Test.Domain do
   resources do
     resource AshRpc.Test.Account
     resource AshRpc.Test.Author
+    resource AshRpc.Test.Catalog
     resource AshRpc.Test.Comment
+    resource AshRpc.Test.Intake
     resource AshRpc.Test.Ledger
     resource AshRpc.Test.Note
+    resource AshRpc.Test.Place
     resource AshRpc.Test.NoteReply
     resource AshRpc.Test.Post
     resource AshRpc.Test.PostTag
+    resource AshRpc.Test.Project
+    resource AshRpc.Test.ProjectNote
     resource AshRpc.Test.Secret
     resource AshRpc.Test.Tag
+    resource AshRpc.Test.Widget
   end
 end
