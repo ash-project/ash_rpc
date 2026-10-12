@@ -255,6 +255,12 @@ takes a nested list:
 
 - A bare union field (`"count"`) is `requires_field_selection`
   (`test/union_input_test.exs` "output selection must name members").
+- A member that needs nested fields (embedded resource, typed map) named bare
+  or with `[]` (`%{"content" => [%{"text" => []}]}`) is
+  `requires_field_selection` with `vars.fieldType` `Complex_type`
+  (`test/union_output_test.exs` "a bare complex member requires field
+  selection", "an empty selection on an embedded member requires field
+  selection"). A scalar member takes `[]` or a bare name.
 - `ResultProcessor.extract_union_value/4` returns `%{member => value}` for the
   active member, and `nil` when the active member wasn't requested. In arrays,
   items whose member wasn't requested are dropped and items that were `nil` are

@@ -1167,6 +1167,11 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       throw({:unknown_field, internal_name, error_type, path})
     end
 
+    # An empty selection on a complex member is the same as naming it bare.
+    if nested_fields == [] and requires_nested_selection?(member.type, ctx) do
+      throw({:requires_field_selection, :complex_type, internal_name, path})
+    end
+
     new_path = path ++ [internal_name]
 
     {_nested_select, nested_load, nested_template} =
