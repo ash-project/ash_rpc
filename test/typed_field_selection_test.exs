@@ -135,4 +135,129 @@ defmodule AshRpc.TypedFieldSelectionTest do
              } = run("totals", [%{"byKind" => []}])
     end
   end
+
+  describe "custom types" do
+    # Palette is a hand-rolled Ash.Type with map storage: it must be selected
+    # whole, like a primitive, and never offer field selection.
+    setup do
+      %{rt: AshRpc.Runtime.new(AshRpc.Test.Profile)}
+    end
+
+    test "a bare custom-type field is selected and comes back as a map" do
+      assert %{"success" => true, "data" => %{"id" => id} = data} =
+               AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                 "action" => "create_project",
+                 "input" => %{"palette" => %{"primary" => "red", "secondary" => "blue"}},
+                 "fields" => ["id", "palette"]
+               })
+
+      assert data == %{"id" => id, "palette" => %{"primary" => "red", "secondary" => "blue"}}
+    end
+
+    test "a bare custom-type field goes to select and the template", %{rt: rt} do
+      assert {:ok, {[:id, :palette], [], [:id, :palette]}} =
+               AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Project, :read, [
+                 "id",
+                 "palette"
+               ])
+    end
+
+    test "nested selection at the top level is field_does_not_support_nesting" do
+      for nested <- [["primary", "secondary"], %{"primary" => ["invalid"]}] do
+        assert %{
+                 "success" => false,
+                 "errors" => [
+                   %{
+                     "type" => "field_does_not_support_nesting",
+                     "fields" => ["palette"],
+                     "path" => [],
+                     "vars" => %{"field" => "palette"}
+                   }
+                 ]
+               } = run("list_projects", [%{"palette" => nested}])
+      end
+    end
+
+    test "nested selection through relationships reports the relationship path", %{rt: rt} do
+      fields = [%{"notes" => ["id", %{"project" => ["id", %{"palette" => ["primary"]}]}]}]
+
+      assert {:error, {:field_does_not_support_nesting, :palette, [:notes, :project]}} =
+               AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Project, :read, fields)
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "field_does_not_support_nesting",
+                   "fields" => ["notes.project.palette"],
+                   "path" => ["notes", "project"],
+                   "vars" => %{"field" => "notes.project.palette"}
+                 }
+               ]
+             } = run("list_projects", fields)
+    end
+
+    test "nested selection inside a calculation's fields reports the calculation path",
+         %{rt: rt} do
+      fields = [
+        %{
+          "self" => %{
+            "args" => %{"prefix" => "x"},
+            "fields" => ["id", %{"palette" => ["primary"]}]
+          }
+        }
+      ]
+
+      assert {:error, {:field_does_not_support_nesting, :palette, [:self]}} =
+               AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Project, :read, fields)
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "field_does_not_support_nesting",
+                   "fields" => ["self.palette"],
+                   "path" => ["self"],
+                   "vars" => %{"field" => "self.palette"}
+                 }
+               ]
+             } = run("list_projects", fields)
+    end
+
+    test "requesting a custom-type field twice is duplicate_field" do
+      for fields <- [["palette", "palette"], ["palette", %{"palette" => []}]] do
+        assert %{
+                 "success" => false,
+                 "errors" => [
+                   %{
+                     "type" => "duplicate_field",
+                     "fields" => ["palette"],
+                     "path" => [],
+                     "vars" => %{"field" => "palette"},
+                     "details" => details
+                   }
+                 ]
+               } = run("list_projects", fields)
+
+        refute Map.has_key?(details, "hint")
+      end
+    end
+
+    test "an unknown field next to a custom-type field is unknown_field" do
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "unknown_field",
+                   "fields" => ["nonExistent"],
+                   "path" => [],
+                   "vars" => %{
+                     "field" => "nonExistent",
+                     "resource" => "AshRpc.Test.Project"
+                   }
+                 }
+               ]
+             } = run("list_projects", ["id", "palette", "nonExistent"])
+    end
+  end
 end
