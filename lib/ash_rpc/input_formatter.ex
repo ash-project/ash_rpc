@@ -113,6 +113,9 @@ defmodule AshRpc.InputFormatter do
 
   defp struct_cast_target(_type), do: nil
 
+  # A map that fails the cast is passed on as formatted, so Ash's own cast
+  # reports it against the input (`invalid_argument`) instead of as raw
+  # keyword-list errors.
   defp cast_map_to_struct(map, struct_module) when is_map(map) and is_atom(struct_module) do
     with {:ok, casted} <-
            Ash.Type.cast_input(Ash.Type.Struct, map, instance_of: struct_module),
@@ -120,8 +123,7 @@ defmodule AshRpc.InputFormatter do
            Ash.Type.apply_constraints(Ash.Type.Struct, casted, instance_of: struct_module) do
       constrained
     else
-      {:error, error} -> throw(error)
-      :error -> throw("is invalid")
+      _ -> map
     end
   end
 

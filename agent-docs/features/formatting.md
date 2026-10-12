@@ -128,6 +128,10 @@ AshRpc.InputFormatter.format(data, resource, action_name_or_action, runtime)
 - Keys not in the map are passed through unchanged, still as client strings.
 - Non-embedded struct inputs whose type is backed by an Ash resource are cast to
   that resource struct after key formatting. Ash casts everything else itself.
+  A map that fails that cast is passed on as formatted, so Ash reports it:
+  an empty `assignee` map is one `invalid_argument` per missing struct field,
+  with `path` `["assignee"]` (`test/complex_input_test.exs` "an empty map fails
+  the struct cast with an invalid_argument per missing field").
 - Formatting errors are thrown inside the formatter and come back as
   `{:error, reason}` (for example the union errors below).
 
