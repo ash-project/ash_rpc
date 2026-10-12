@@ -214,6 +214,11 @@ See `test/errors_test.exs` "stale client hint" describe. The union-input
 multiple-member-keys error carries no hint either
 (`test/error_builder_golden_test.exs` "invalid_union_input_multiple_member_keys").
 
+`action_not_found` also carries `details.suggestion` from the profile's
+`action_not_found_suggestion/0` (default
+`AshRpc.Profile.default_action_not_found_suggestion/0`). It is omitted when the
+callback returns `nil`. See `test/errors_test.exs` "action_not_found suggestion".
+
 ## `AshRpc.ErrorFormatter`
 
 `AshRpc.ErrorFormatter.format(error, formatter)` formats every key of an error

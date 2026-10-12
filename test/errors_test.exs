@@ -71,6 +71,18 @@ defmodule AshRpc.ErrorsTest do
     def stale_client_hint, do: "Regenerate the client."
   end
 
+  defmodule CustomSuggestionProfile do
+    use AshRpc.Profile, manifest: AshRpc.Test.ManifestBuilder
+    @impl AshRpc.Profile
+    def action_not_found_suggestion, do: "Check the rpc block."
+  end
+
+  defmodule NoSuggestionProfile do
+    use AshRpc.Profile, manifest: AshRpc.Test.ManifestBuilder
+    @impl AshRpc.Profile
+    def action_not_found_suggestion, do: nil
+  end
+
   defmodule NoHintProfile do
     use AshRpc.Profile, manifest: AshRpc.Test.ManifestBuilder
     @impl AshRpc.Profile
@@ -139,6 +151,25 @@ defmodule AshRpc.ErrorsTest do
                rt,
                {:unknown_field, :nope, "field_constrained_type", []}
              )
+  end
+
+  describe "action_not_found suggestion" do
+    defp suggestion_details(profile),
+      do:
+        AshRpc.ErrorBuilder.build_error_response(Runtime.new(profile), {:action_not_found, "x"}).details
+
+    test "defaults to the client-neutral suggestion" do
+      assert suggestion_details(AshRpc.Test.Profile).suggestion ==
+               AshRpc.Profile.default_action_not_found_suggestion()
+    end
+
+    test "comes from the profile" do
+      assert suggestion_details(CustomSuggestionProfile).suggestion == "Check the rpc block."
+    end
+
+    test "is omitted when the profile returns nil" do
+      refute Map.has_key?(suggestion_details(NoSuggestionProfile), :suggestion)
+    end
   end
 
   describe "stale client hint" do

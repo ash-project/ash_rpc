@@ -20,6 +20,9 @@ defmodule AshRpc.ProfileTest do
     assert Defaults.show_raised_errors?(AshRpc.Test.Domain) == false
     assert Defaults.show_policy_breakdowns?() == false
     assert Defaults.stale_client_hint() == AshRpc.Profile.default_stale_client_hint()
+
+    assert Defaults.action_not_found_suggestion() ==
+             AshRpc.Profile.default_action_not_found_suggestion()
   end
 
   test "manifest: option resolves through AshRpc.Manifest.fetch!/1" do

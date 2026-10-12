@@ -14,7 +14,8 @@ defmodule AshRpc.Profile do
   and define `manifest/0` yourself to compute the manifest differently.
   Defaults: `error_handler/1` → `AshRpc.DefaultErrorHandler`,
   `show_raised_errors?/1` → `false`, `show_policy_breakdowns?/0` → `false`,
-  `stale_client_hint/0` → `default_stale_client_hint/0`.
+  `stale_client_hint/0` → `default_stale_client_hint/0`,
+  `action_not_found_suggestion/0` → `default_action_not_found_suggestion/0`.
   `error_handler/1` and `show_raised_errors?/1` receive `nil` before an
   entrypoint is resolved.
   """
@@ -36,6 +37,16 @@ defmodule AshRpc.Profile do
   def default_stale_client_hint do
     "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes."
   end
+
+  @doc """
+  `details.suggestion` on `action_not_found` errors. Return `nil` to omit it.
+  """
+  @callback action_not_found_suggestion() :: String.t() | nil
+
+  @doc "The client-neutral default for `c:action_not_found_suggestion/0`."
+  @spec default_action_not_found_suggestion() :: String.t()
+  def default_action_not_found_suggestion,
+    do: "Check that the action name matches a configured entrypoint"
 
   defmacro __using__(opts) do
     manifest_module = Keyword.get(opts, :manifest)
@@ -61,10 +72,14 @@ defmodule AshRpc.Profile do
       @impl AshRpc.Profile
       def stale_client_hint, do: AshRpc.Profile.default_stale_client_hint()
 
+      @impl AshRpc.Profile
+      def action_not_found_suggestion, do: AshRpc.Profile.default_action_not_found_suggestion()
+
       defoverridable error_handler: 1,
                      show_raised_errors?: 1,
                      show_policy_breakdowns?: 0,
-                     stale_client_hint: 0
+                     stale_client_hint: 0,
+                     action_not_found_suggestion: 0
     end
   end
 end

@@ -165,9 +165,7 @@ defmodule AshRpc.ErrorBuilder do
   defp build({:action_not_found, action_name}, ctx) do
     drift(ctx, "action_not_found", "RPC action %{action_name} not found", "Action not found",
       vars: %{action_name: action_name},
-      details: %{
-        suggestion: "Check that the action name matches a configured entrypoint"
-      }
+      details: suggestion_details(action_not_found_suggestion(ctx.runtime))
     )
   end
 
@@ -842,6 +840,14 @@ defmodule AshRpc.ErrorBuilder do
 
   defp stale_client_hint(%{profile: nil}), do: AshRpc.Profile.default_stale_client_hint()
   defp stale_client_hint(%{profile: profile}), do: profile.stale_client_hint()
+
+  defp action_not_found_suggestion(%{profile: nil}),
+    do: AshRpc.Profile.default_action_not_found_suggestion()
+
+  defp action_not_found_suggestion(%{profile: profile}), do: profile.action_not_found_suggestion()
+
+  defp suggestion_details(nil), do: %{}
+  defp suggestion_details(suggestion), do: %{suggestion: suggestion}
 
   defp drop_nil_hint(%{details: %{hint: nil} = details} = error),
     do: %{error | details: Map.delete(details, :hint)}
