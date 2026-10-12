@@ -13,6 +13,17 @@ defmodule AshRpc.CalculationsTest do
 
   defp list_posts(fields), do: run(%{"action" => "list_posts", "fields" => fields})
 
+  defp list_projects(fields), do: run(%{"action" => "list_projects", "fields" => fields})
+
+  defp process_project(fields),
+    do:
+      AshRpc.RequestedFieldsProcessor.process(
+        AshRpc.Runtime.new(@profile),
+        AshRpc.Test.Project,
+        :read,
+        fields
+      )
+
   defp parse(params),
     do: AshRpc.Pipeline.parse_request(AshRpc.Runtime.new(@profile), ctx(), params)
 
@@ -220,5 +231,225 @@ defmodule AshRpc.CalculationsTest do
 
     assert %{"type" => "duplicate_field", "fields" => ["excerpt"]} =
              single_error(run(params))
+  end
+
+  describe "typed-map calculation with an array of embedded rows" do
+    setup do
+      %{project: Ash.create!(AshRpc.Test.Project, %{})}
+    end
+
+    test "a nested selection on the rows returns only the requested row fields", %{
+      project: project
+    } do
+      assert %{"success" => true, "data" => [row]} =
+               list_projects([
+                 "id",
+                 %{"report" => ["total", %{"rows" => ["category", "priorityScore"]}]}
+               ])
+
+      assert row == %{
+               "id" => project.id,
+               "report" => %{
+                 "total" => 2,
+                 "rows" => [
+                   %{"category" => "work", "priorityScore" => 80},
+                   %{"category" => "personal", "priorityScore" => 20}
+                 ]
+               }
+             }
+    end
+
+    test "a plain string selection of the rows is accepted" do
+      assert %{"success" => true, "data" => [row]} =
+               list_projects([%{"report" => ["total", "rows"]}])
+
+      # The rows come back whole: every public attribute, the private
+      # `internal_notes` left out, and the embedded type's unloaded
+      # calculations as nil.
+      blank = %{
+        "adjustedPriority" => nil,
+        "deadline" => nil,
+        "detail" => nil,
+        "displayCategory" => nil,
+        "infoType" => nil,
+        "isUrgent" => nil,
+        "status" => nil
+      }
+
+      assert row == %{
+               "report" => %{
+                 "total" => 2,
+                 "rows" => [
+                   Map.merge(blank, %{"category" => "work", "priorityScore" => 80}),
+                   Map.merge(blank, %{"category" => "personal", "priorityScore" => 20})
+                 ]
+               }
+             }
+    end
+  end
+
+  describe "no-argument typed-struct calculation" do
+    setup do
+      %{project: Ash.create!(AshRpc.Test.Project, %{})}
+    end
+
+    test "selected fields only", %{project: project} do
+      assert %{"success" => true, "data" => [row]} =
+               list_projects(["id", %{"summary" => ["viewCount", "editCount"]}])
+
+      assert row == %{"id" => project.id, "summary" => %{"viewCount" => 42, "editCount" => 7}}
+    end
+
+    test "a nested typed-map field takes its own selection" do
+      assert %{"success" => true, "data" => [row]} =
+               list_projects([%{"summary" => ["viewCount", %{"metrics" => ["focusSeconds"]}]}])
+
+      assert row == %{"summary" => %{"viewCount" => 42, "metrics" => %{"focusSeconds" => 900}}}
+    end
+
+    test "every field, including a renamed one" do
+      assert %{"success" => true, "data" => [row]} =
+               list_projects([
+                 %{
+                   "summary" => [
+                     "viewCount",
+                     "editCount",
+                     "allDone",
+                     %{"metrics" => ["focusSeconds", "efficiency"]}
+                   ]
+                 }
+               ])
+
+      assert row == %{
+               "summary" => %{
+                 "viewCount" => 42,
+                 "editCount" => 7,
+                 "allDone" => false,
+                 "metrics" => %{"focusSeconds" => 900, "efficiency" => 0.85}
+               }
+             }
+    end
+
+    test "selection is a bare name to load and a field list in the template" do
+      assert {:ok, {[], [:summary], [{:summary, [:view_count, :edit_count]}]}} =
+               process_project([%{summary: [:view_count, :edit_count]}])
+
+      assert {:ok, {[], [:summary], [{:summary, [{:metrics, [:focus_seconds, :efficiency]}]}]}} =
+               process_project([%{summary: [%{metrics: [:focus_seconds, :efficiency]}]}])
+    end
+
+    test "a bare name is requires_field_selection" do
+      assert {:error, {:requires_field_selection, :calculation_complex, :summary, []}} =
+               process_project([:summary])
+
+      assert %{"type" => "requires_field_selection", "fields" => ["summary"], "path" => []} =
+               single_error(list_projects(["id", "summary"]))
+    end
+
+    test "an unknown field is unknown_field" do
+      assert %{
+               "type" => "unknown_field",
+               "fields" => ["summary.nonExistentField"],
+               "path" => ["summary"]
+             } = single_error(list_projects([%{"summary" => ["viewCount", "nonExistentField"]}]))
+    end
+
+    test "an unknown field inside the nested typed map is unknown_map_field" do
+      assert %{
+               "type" => "unknown_map_field",
+               "fields" => ["summary.metrics.invalidField"],
+               "path" => ["summary", "metrics"]
+             } =
+               single_error(
+                 list_projects([
+                   %{"summary" => [%{"metrics" => ["focusSeconds", "invalidField"]}]}
+                 ])
+               )
+    end
+  end
+
+  describe "resource calculation with arguments" do
+    test "args and fields return the record's fields, an atom attribute as a string" do
+      project = Ash.create!(AshRpc.Test.Project, %{priority: :medium, due_date: ~D[2030-01-01]})
+
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "get_project",
+                 "fields" => [
+                   "id",
+                   %{
+                     "self" => %{
+                       "args" => %{"prefix" => "p"},
+                       "fields" => ["id", "priority", "dueDate"]
+                     }
+                   },
+                   %{"summary" => ["viewCount"]}
+                 ]
+               })
+
+      assert data == %{
+               "id" => project.id,
+               "self" => %{"id" => project.id, "priority" => "medium", "dueDate" => "2030-01-01"},
+               "summary" => %{"viewCount" => 42}
+             }
+    end
+
+    test "args and fields split into a load with args and a template of fields" do
+      assert {:ok,
+              {[], [{:self, {%{prefix: "p"}, [:id, :priority]}}], [{:self, [:id, :priority]}]}} =
+               process_project([%{self: %{args: %{prefix: "p"}, fields: [:id, :priority]}}])
+    end
+  end
+
+  describe "union calculation with a resource-struct member" do
+    # `featured` is a no-arg calc whose union type has one `:struct` member,
+    # `post`; it is selected with `args: %{}` plus a member field selection.
+    @featured %{"featured" => %{"args" => %{}, "fields" => [%{"post" => ["id", "title"]}]}}
+
+    defp seed_widget(title) do
+      post = Ash.create!(AshRpc.Test.Post, %{title: title})
+      widget = Ash.create!(AshRpc.Test.Widget, %{post_id: post.id})
+      %{post: post, widget: widget}
+    end
+
+    test "a get selects the member's fields through the calculation" do
+      %{post: post, widget: widget} = seed_widget("featured")
+
+      assert run(%{"action" => "get_widget", "fields" => ["id", @featured]}) == %{
+               "success" => true,
+               "data" => %{
+                 "id" => widget.id,
+                 "featured" => %{"post" => %{"id" => post.id, "title" => "featured"}}
+               }
+             }
+    end
+
+    test "a list selects the member's fields for every record" do
+      %{post: first, widget: first_widget} = seed_widget("first")
+      %{post: second, widget: second_widget} = seed_widget("second")
+
+      assert %{"success" => true, "data" => data} =
+               run(%{"action" => "list_widgets", "fields" => ["id", @featured]})
+
+      assert Enum.sort_by(data, & &1["featured"]["post"]["title"]) == [
+               %{
+                 "id" => first_widget.id,
+                 "featured" => %{"post" => %{"id" => first.id, "title" => "first"}}
+               },
+               %{
+                 "id" => second_widget.id,
+                 "featured" => %{"post" => %{"id" => second.id, "title" => "second"}}
+               }
+             ]
+    end
+
+    test "the calculation is absent when not requested" do
+      %{widget: widget} = seed_widget("hidden")
+
+      assert run(%{"action" => "list_widgets", "fields" => ["id"]}) == %{
+               "success" => true,
+               "data" => [%{"id" => widget.id}]
+             }
+    end
   end
 end

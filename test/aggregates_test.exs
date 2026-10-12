@@ -248,4 +248,86 @@ defmodule AshRpc.AggregatesTest do
       assert titles(present) == ["one", "two"]
     end
   end
+
+  describe "first aggregates returning complex types" do
+    # One project with one note carrying an embedded `meta` and a `meta`
+    # member in its `author_info` union.
+    setup do
+      project = Ash.create!(AshRpc.Test.Project, %{})
+
+      Ash.create!(AshRpc.Test.ProjectNote, %{
+        project_id: project.id,
+        body: "Note with meta",
+        meta: %{category: "note", priority_score: 75, is_urgent: true},
+        author_info: %{info_type: "meta", category: "author-meta", priority_score: 50}
+      })
+
+      %{project: project}
+    end
+
+    test "a first aggregate returning an embedded resource takes a field selection", %{
+      project: project
+    } do
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "get_project",
+                 "fields" => [
+                   "id",
+                   %{"firstNoteMeta" => ["category", "priorityScore", "isUrgent"]}
+                 ]
+               })
+
+      assert data == %{
+               "id" => project.id,
+               "firstNoteMeta" => %{
+                 "category" => "note",
+                 "priorityScore" => 75,
+                 "isUrgent" => true
+               }
+             }
+    end
+
+    test "a first aggregate returning a union takes a member map selection", %{
+      project: project
+    } do
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "get_project",
+                 "fields" => [
+                   "id",
+                   %{
+                     "firstNoteAuthorInfo" => %{
+                       "meta" => ["category", "priorityScore"],
+                       "anonymous" => []
+                     }
+                   }
+                 ]
+               })
+
+      assert data == %{
+               "id" => project.id,
+               "firstNoteAuthorInfo" => %{
+                 "meta" => %{"category" => "author-meta", "priorityScore" => 50}
+               }
+             }
+    end
+
+    test "both complex first aggregates load together", %{project: project} do
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "get_project",
+                 "fields" => [
+                   "id",
+                   %{"firstNoteMeta" => ["category"]},
+                   %{"firstNoteAuthorInfo" => %{"meta" => ["category"], "anonymous" => []}}
+                 ]
+               })
+
+      assert data == %{
+               "id" => project.id,
+               "firstNoteMeta" => %{"category" => "note"},
+               "firstNoteAuthorInfo" => %{"meta" => %{"category" => "author-meta"}}
+             }
+    end
+  end
 end
