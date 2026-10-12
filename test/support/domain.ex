@@ -7,6 +7,7 @@ defmodule AshRpc.Test.Domain do
   use Ash.Domain, validate_config_inclusion?: false
 
   resources do
+    resource AshRpc.Test.Account
     resource AshRpc.Test.Author
     resource AshRpc.Test.Comment
     resource AshRpc.Test.Ledger

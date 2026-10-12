@@ -107,4 +107,24 @@ defmodule AshRpc.FixturesTest do
     assert [%{title: "n"}] = Ash.read!(AshRpc.Test.Note, tenant: "w1")
     assert [] = Ash.read!(AshRpc.Test.Note, tenant: "w2")
   end
+
+  test "the Account fixture keeps private attributes out of the manifest" do
+    runtime = AshRpc.Runtime.new(AshRpc.Test.Profile)
+    %Ash.Info.Manifest.Resource{fields: fields} = runtime.resource_lookup[AshRpc.Test.Account]
+
+    assert Map.has_key?(fields, :embedding)
+    refute Map.has_key?(fields, :secret)
+    refute Map.has_key?(fields, :internal_notes)
+
+    account = Ash.create!(AshRpc.Test.Account, %{handle: "a", secret: "s", embedding: [1, 2, 3]})
+    assert account.secret == "s"
+    assert %Ash.Vector{dimensions: 3} = account.embedding
+  end
+
+  test "Post.read_unviewed hides viewed posts" do
+    Ash.create!(AshRpc.Test.Post, %{title: "seen", view_count: 1})
+    Ash.create!(AshRpc.Test.Post, %{title: "unseen"})
+
+    assert [%{title: "unseen"}] = Ash.read!(AshRpc.Test.Post, action: :read_unviewed)
+  end
 end

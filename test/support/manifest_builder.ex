@@ -70,6 +70,7 @@ defmodule AshRpc.Test.ManifestBuilder do
      exposed_metadata_fields: []},
     # Identities and actor-scoped mutations
     {"update_post_by_slug", AshRpc.Test.Post, :update, identities: [:unique_slug]},
+    {"update_post_scoped", AshRpc.Test.Post, :update, read_action: :read_unviewed},
     {"update_author", AshRpc.Test.Author, :update},
     {"destroy_author", AshRpc.Test.Author, :destroy},
     {"update_author_by_identity", AshRpc.Test.Author, :update,
@@ -87,7 +88,10 @@ defmodule AshRpc.Test.ManifestBuilder do
     # Multitenancy
     {"list_notes", AshRpc.Test.Note, :read},
     {"create_note", AshRpc.Test.Note, :create},
-    {"create_note_reply", AshRpc.Test.NoteReply, :create}
+    {"create_note_reply", AshRpc.Test.NoteReply, :create},
+    # Private attributes and vectors
+    {"create_account", AshRpc.Test.Account, :create},
+    {"list_accounts", AshRpc.Test.Account, :read}
   ]
 
   @doc "Cached default manifest (camelCase in/out)."

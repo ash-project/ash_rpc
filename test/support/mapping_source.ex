@@ -7,6 +7,7 @@ defmodule AshRpc.Test.MappingSource do
   @behaviour AshRpc.MappingSource
 
   @exposed [
+    AshRpc.Test.Account,
     AshRpc.Test.Author,
     AshRpc.Test.Comment,
     AshRpc.Test.CommentAttachment,

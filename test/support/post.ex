@@ -97,6 +97,11 @@ defmodule AshRpc.Test.Post do
 
     read :get_by_slug
 
+    # Hides viewed posts; `update_post_scoped` looks records up through it.
+    read :read_unviewed do
+      filter expr(view_count == 0)
+    end
+
     create :create do
       primary? true
       accept [:title, :view_count, :stats, :settings, :author_id, :secret_id, :slug, :data]
