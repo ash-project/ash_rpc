@@ -220,4 +220,72 @@ defmodule AshRpc.ErrorsTest do
   test "the protocol impl itself never leaks a breakdown" do
     assert AshRpc.Error.to_error(policy_error()).message == "forbidden"
   end
+
+  describe "error handler failures fail closed" do
+    @secret "search backend unreachable at es.internal:9200 (token=S3cr3t-Pr0d-Pw)"
+
+    defp handle(profile, error),
+      do: Errors.to_errors(Runtime.new(profile), error, AshRpc.Test.Domain)
+
+    defp secret_error,
+      do: Ash.Error.Query.InvalidArgument.exception(field: :filter, message: @secret)
+
+    defp assert_fails_closed(response) do
+      assert response.type == "internal_error"
+      assert response.short_message == "Internal error"
+      assert is_binary(response.error_id)
+      assert response.vars == %{}
+      assert response.fields == []
+      refute String.contains?(response.message, "S3cr3t-Pr0d-Pw")
+      refute String.contains?(response.message, "es.internal")
+      refute inspect(response) =~ "S3cr3t-Pr0d-Pw"
+      refute inspect(response) =~ "es.internal"
+    end
+
+    test "an error class the handler matches is redacted" do
+      error = Ash.Error.Changes.InvalidAttribute.exception(field: :email, message: @secret)
+
+      [response] = handle(AshRpc.Test.PartialHandlerProfile, error)
+
+      assert response.message == "Invalid value."
+      refute String.contains?(response.message, "S3cr3t-Pr0d-Pw")
+      refute inspect(response) =~ "S3cr3t-Pr0d-Pw"
+    end
+
+    @tag capture_log: true
+    test "an error class the handler has no clause for returns a generic error, not the raw one" do
+      [response] = handle(AshRpc.Test.PartialHandlerProfile, secret_error())
+
+      assert_fails_closed(response)
+    end
+
+    @tag capture_log: true
+    test "a handler that raises returns a generic error, not the raw one" do
+      [response] = handle(AshRpc.Test.RaisingHandlerProfile, secret_error())
+
+      assert_fails_closed(response)
+    end
+
+    @tag capture_log: true
+    test "a handler that throws is treated the same as one that raises" do
+      [response] = handle(AshRpc.Test.ThrowingHandlerProfile, secret_error())
+
+      assert_fails_closed(response)
+    end
+
+    @tag capture_log: true
+    test "a raising handler fails closed on the wire" do
+      params = %{"action" => "create_post", "input" => %{}, "fields" => ["id"]}
+
+      assert %{"success" => false, "errors" => [_ | _] = errors} =
+               AshRpc.run_action(AshRpc.Test.RaisingHandlerProfile, %AshRpc.Context{}, params)
+
+      for error <- errors do
+        assert %{"type" => "internal_error", "errorId" => error_id} = error
+        assert is_binary(error_id)
+        assert error["fields"] == []
+        refute inspect(error) =~ "title is required"
+      end
+    end
+  end
 end
