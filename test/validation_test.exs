@@ -79,4 +79,46 @@ defmodule AshRpc.ValidationTest do
                entrypoint: entrypoint
              )
   end
+
+  test "a record the entrypoint's read_action hides is not_found for validate and run" do
+    hidden = Ash.create!(AshRpc.Test.Post, %{title: "Hidden", view_count: 5})
+
+    validate =
+      validate(%{
+        "action" => "update_post_scoped",
+        "identity" => hidden.id,
+        "input" => %{"title" => "probe"}
+      })
+
+    run =
+      run(%{
+        "action" => "update_post_scoped",
+        "identity" => hidden.id,
+        "input" => %{"title" => "probe"},
+        "fields" => ["id"]
+      })
+
+    assert %{"success" => false, "errors" => [%{"type" => "not_found"} | _]} = validate
+    assert %{"success" => false, "errors" => [%{"type" => "not_found"} | _]} = run
+    assert Ash.get!(AshRpc.Test.Post, hidden.id).title == "Hidden"
+  end
+
+  test "a record the entrypoint's read_action admits validates and updates" do
+    visible = Ash.create!(AshRpc.Test.Post, %{title: "Visible"})
+
+    assert %{"success" => true} =
+             validate(%{
+               "action" => "update_post_scoped",
+               "identity" => visible.id,
+               "input" => %{"title" => "new title"}
+             })
+
+    assert %{"success" => true, "data" => %{"title" => "new title"}} =
+             run(%{
+               "action" => "update_post_scoped",
+               "identity" => visible.id,
+               "input" => %{"title" => "new title"},
+               "fields" => ["title"]
+             })
+  end
 end
