@@ -84,4 +84,97 @@ defmodule AshRpc.FieldFormatterTest do
     assert AshRpc.Case.camel_to_snake_case("userName") == "user_name"
     assert AshRpc.Case.pascal_to_snake_case("UserName") == "user_name"
   end
+
+  describe "atom safety" do
+    test "resolves an existing field name to its atom" do
+      # :view_count exists as an atom because AshRpc.Test.Post has that attribute.
+      _ = :view_count
+      assert FieldFormatter.resolve_field_name("viewCount", :camel_case) == :view_count
+    end
+
+    test "passes atoms through unchanged" do
+      assert FieldFormatter.resolve_field_name(:already_atom, :camel_case) == :already_atom
+    end
+
+    test "never mints a new atom for an unknown field name" do
+      unique = "atom_bomb_field_name_#{System.unique_integer([:positive])}_xyz"
+      camel = "atomBombFieldName#{System.unique_integer([:positive])}Xyz"
+
+      refute atom_exists?(unique)
+
+      result = FieldFormatter.resolve_field_name(camel, :camel_case)
+
+      # Falls back to the formatted string, which field selection rejects as
+      # an unknown field rather than atomizing.
+      assert is_binary(result)
+      refute atom_exists?(result)
+    end
+
+    test "does not mint atoms for a batch of unique field names" do
+      names = for i <- 1..1_000, do: "atomBombBatch#{i}_#{System.unique_integer([:positive])}"
+
+      Enum.each(names, fn name ->
+        result = FieldFormatter.resolve_field_name(name, :camel_case)
+        assert is_binary(result)
+        refute atom_exists?(result)
+      end)
+    end
+
+    test "does not raise on field names longer than the 255-char atom limit" do
+      long = String.duplicate("a", 300)
+
+      result = FieldFormatter.resolve_field_name(long, :camel_case)
+      assert is_binary(result)
+    end
+  end
+
+  describe "atom safety in typed map field selection" do
+    # :stats_summary returns AshRpc.Test.PostStats, a NewType map whose client
+    # names come from the mapping source's type_field_names/1, so selection on it
+    # goes through the field-constrained type path rather than resource fields.
+    defp select_stats_summary_fields(fields) do
+      AshRpc.RequestedFieldsProcessor.process(
+        AshRpc.Runtime.new(AshRpc.Test.Profile),
+        AshRpc.Test.Post,
+        :stats_summary,
+        fields
+      )
+    end
+
+    test "an unknown field name is rejected without minting an atom" do
+      name = "zzAtomBombStat#{System.unique_integer([:positive])}"
+
+      refute atom_exists?(Macro.underscore(name))
+
+      assert {:error, {:unknown_field, unknown, "field_constrained_type", []}} =
+               select_stats_summary_fields([name])
+
+      assert is_binary(unknown)
+      refute atom_exists?(unknown)
+    end
+
+    test "a batch of unique unknown field names mints no atoms" do
+      names = for i <- 1..500, do: "zzAtomBombBatch#{i}_#{System.unique_integer([:positive])}"
+
+      Enum.each(names, fn name ->
+        assert {:error, {:unknown_field, unknown, _, _}} = select_stats_summary_fields([name])
+        assert is_binary(unknown)
+        refute atom_exists?(Macro.underscore(name))
+      end)
+    end
+
+    test "valid field names still resolve, including mapped ones" do
+      assert {:ok, {_select, _load, template}} =
+               select_stats_summary_fields(["wordCount1", "isFeatured"])
+
+      assert [:word_count_1, :is_featured?] = template
+    end
+  end
+
+  defp atom_exists?(name) when is_binary(name) do
+    _ = String.to_existing_atom(name)
+    true
+  rescue
+    ArgumentError -> false
+  end
 end
