@@ -214,7 +214,10 @@ and policy breakdowns (`show_policy_breakdowns?/0`), the resource-level handler,
 and finally the profile's `error_handler/1` for the domain. A handler that returns
 `nil` drops the error. Pipeline reasons such as
 `{:action_not_found, …}` become error maps in `ErrorBuilder`. Request errors that
-a stale client could cause carry `details.hint` from the profile's `stale_client_hint/0`.
+a stale client could cause carry `details.hint` from the profile's `stale_client_hint/0`,
+and `action_not_found` carries `details.suggestion` from `action_not_found_suggestion/0`.
+Exceptions raised during `run_action`/`validate_action` are logged with their
+stacktrace and returned as `unknown_error`.
 
 ### Core Patterns
 - **Type-driven dispatch**: `FieldSelector` and `ValueFormatter` both recurse on `{type, constraints}`

@@ -10,8 +10,11 @@ defmodule AshRpc do
   `AshRpc.Profile`. Responses are client-formatted maps (never tuples):
   `%{"success" => true, "data" => …}` or `%{"success" => false, "errors" => […]}`,
   with key casing from the manifest's output formatter. Exceptions raised
-  while handling a request are returned as failure responses too.
+  while handling a request are logged with their stacktrace and returned as
+  `unknown_error` failure responses.
   """
+
+  require Logger
 
   alias AshRpc.{Context, Pipeline, Runtime, Validation}
 
@@ -36,7 +39,7 @@ defmodule AshRpc do
         Pipeline.error_response(runtime, reason, nil)
     end
   rescue
-    e -> error_response(profile, e, opts)
+    e -> rescued_response(profile, e, __STACKTRACE__, opts)
   end
 
   @spec validate_action(module(), source(), map(), opts()) :: map()
@@ -49,7 +52,7 @@ defmodule AshRpc do
       {:error, reason} -> Pipeline.error_response(runtime, reason, nil)
     end
   rescue
-    e -> error_response(profile, e, opts)
+    e -> rescued_response(profile, e, __STACKTRACE__, opts)
   end
 
   @doc "Client-formatted failure response for a pipeline error reason or exception."
@@ -61,4 +64,9 @@ defmodule AshRpc do
   @spec failure_response(module(), [map()], opts()) :: map()
   def failure_response(profile, errors, opts \\ []) when is_list(errors),
     do: Pipeline.format_response(Runtime.new(profile, opts), %{success: false, errors: errors})
+
+  defp rescued_response(profile, exception, stacktrace, opts) do
+    Logger.error(Exception.format(:error, exception, stacktrace))
+    error_response(profile, exception, opts)
+  end
 end

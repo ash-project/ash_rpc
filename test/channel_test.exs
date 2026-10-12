@@ -42,6 +42,7 @@ defmodule AshRpc.ChannelTest do
     assert_reply(ref, :ok, %{"success" => false})
   end
 
+  @tag :capture_log
   test "pipeline exceptions become wire errors without crashing", %{socket: socket} do
     ref = push(socket, "run", %{"action" => %{"not" => "a string"}})
     assert_reply(ref, :ok, %{"success" => false, "errors" => [_ | _]})

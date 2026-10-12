@@ -50,6 +50,29 @@ defmodule AshRpc.RunActionTest do
              AshRpc.run_action(@profile, ctx(), %{})
   end
 
+  describe "exceptions raised while handling a request" do
+    import ExUnit.CaptureLog
+
+    # A non-string `action` raises inside parse_request; any raise works here.
+    test "run_action logs them with a stacktrace and returns unknown_error" do
+      {response, log} =
+        with_log(fn -> AshRpc.run_action(@profile, ctx(), %{"action" => 123}) end)
+
+      assert %{"success" => false, "errors" => [%{"type" => "unknown_error"}]} = response
+      assert log =~ "CaseClauseError"
+      assert log =~ "lib/ash_rpc/pipeline.ex"
+    end
+
+    test "validate_action logs them with a stacktrace and returns unknown_error" do
+      {response, log} =
+        with_log(fn -> AshRpc.validate_action(@profile, ctx(), %{"action" => 123}) end)
+
+      assert %{"success" => false, "errors" => [%{"type" => "unknown_error"}]} = response
+      assert log =~ "CaseClauseError"
+      assert log =~ "lib/ash_rpc/pipeline.ex"
+    end
+  end
+
   test "manifest: option changes output casing" do
     manifest = AshRpc.Test.ManifestBuilder.build(output_formatter: :pascal_case)
 
@@ -64,16 +87,6 @@ defmodule AshRpc.RunActionTest do
                },
                manifest: manifest
              )
-  end
-
-  test "run_action and validate_action turn pipeline exceptions into wire errors" do
-    params = %{"action" => %{"not" => "a string"}}
-
-    assert %{"success" => false, "errors" => [%{"type" => _} | _]} =
-             AshRpc.run_action(@profile, ctx(), params)
-
-    assert %{"success" => false, "errors" => [%{"type" => _} | _]} =
-             AshRpc.validate_action(@profile, ctx(), params)
   end
 
   test "update returns only the selected fields and loads relationships" do

@@ -31,7 +31,10 @@ defmodule AshRpc.PlugTest do
   end
 
   test "pipeline exceptions respond 200 with a wire error" do
-    conn = AshRpc.Plug.run(post(%{"action" => %{"not" => "a string"}}), AshRpc.Test.Profile)
+    {conn, _log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        AshRpc.Plug.run(post(%{"action" => %{"not" => "a string"}}), AshRpc.Test.Profile)
+      end)
 
     assert conn.status == 200
     assert %{"success" => false, "errors" => [_ | _]} = Jason.decode!(conn.resp_body)

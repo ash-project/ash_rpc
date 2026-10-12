@@ -36,9 +36,10 @@ is in [field selection](field-selection.md), value formatting in stage 4 is in
   or `%{"success" => false, "errors" => [...]}`. Key casing comes from the
   output formatter. Mutations with exposed metadata add a `"metadata"` key
   ([action metadata](action-metadata.md)).
-- Both functions `rescue` and return the exception as a failure response, so a
-  crash inside the pipeline is still a wire error (`test/run_action_test.exs`
-  "run_action and validate_action turn pipeline exceptions into wire errors").
+- Both functions `rescue`, log the exception with its stacktrace, and return it
+  as an `unknown_error` failure response, so a crash inside the pipeline is
+  still a wire error (`test/run_action_test.exs` "exceptions raised while
+  handling a request").
 
 ## `AshRpc.Runtime`
 
