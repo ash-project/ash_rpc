@@ -136,7 +136,7 @@ raw Ash result (`{:ok, result}` or `{:error, error}`).
 | `:read`, `action.get?` | `Ash.read_one/1` with select/load and the `getBy` filter. A nil result is `Ash.Error.Query.NotFound` unless `entrypoint.not_found_error?` is false |
 | `:read` | `Ash.read/1` with select/load, `filter` (`Ash.Query.filter_input/2`), `sort` (`Ash.Query.sort_input/2`) and `page` |
 | `:create` | `Ash.Changeset.for_create/4` with select/load, `Ash.create/1` |
-| `:update` / `:destroy` | `Ash.bulk_update/4` / `Ash.bulk_destroy/4` over a query narrowed by the identity and limited to 1, with `read_action: entrypoint.read_action` when set. Zero matched records is `not_found` for update and empty data for destroy |
+| `:update` / `:destroy` | `Ash.bulk_update/4` / `Ash.bulk_destroy/4` over a query narrowed by the identity and limited to 1, with `read_action: entrypoint.read_action` when set. Zero matched records is `not_found` for update and empty data for destroy. Ash's batch-index prefix on bulk error paths (`[0]`) is dropped, so an update error has the same `path` as on `validate_action` |
 | `:action` | `Ash.run_action/1`; a resource-returning action gets the requested loads applied with `Ash.load/3`; a bare `:ok` becomes `%{}` |
 
 Identity errors (`missing_identity`, `invalid_identity`) come from this stage,
@@ -208,9 +208,11 @@ changeset or action input without executing it and sends its errors through
   changeset, query and generic-action `InvalidArgument` errors share one impl
   (`test/error_protocol_test.exs` "changeset, query and action InvalidArgument
   share one impl", `test/run_action_test.exs` "a bad argument cast on a generic
-  action is invalid_argument"). Its `fields` carry the internal argument name:
-  error fields get resource field-name overrides, not `argument_names`
-  overrides.
+  action is invalid_argument"). Its `fields` and `vars.field` name the input
+  the way the client sent it: resource fields take their field-name
+  overrides, action arguments their `argument_names` overrides (`word_count`'s
+  `text` comes back as `body`; `test/field_name_translation_test.exs` "a
+  missing required mapped argument is reported under its client name").
 - Atomic validations on update/destroy only run during `run_action`, so
   `validate_action` can succeed where `run_action` fails.
 

@@ -9,6 +9,12 @@ defmodule AshRpc.RunActionTest do
 
   defp ctx, do: %AshRpc.Context{}
 
+  defp parse(params),
+    do: AshRpc.Pipeline.parse_request(AshRpc.Runtime.new(@profile), ctx(), params)
+
+  defp with_fields(params, :omit), do: params
+  defp with_fields(params, fields), do: Map.put(params, "fields", fields)
+
   test "create then list through the wire contract" do
     assert %{"success" => true, "data" => %{"title" => "Hello"}} =
              AshRpc.run_action(@profile, ctx(), %{
@@ -30,11 +36,17 @@ defmodule AshRpc.RunActionTest do
   end
 
   test "a bad argument cast on a generic action is invalid_argument" do
-    # `fields` is the internal name: error fields get resource field-name
-    # overrides only, not argument_names overrides (`body` on the wire).
+    # `text` is renamed `body` by argument_names; the error names it the way
+    # the client sent it.
     assert %{
              "success" => false,
-             "errors" => [%{"type" => "invalid_argument", "fields" => ["text"]}]
+             "errors" => [
+               %{
+                 "type" => "invalid_argument",
+                 "fields" => ["body"],
+                 "vars" => %{"field" => "body"}
+               }
+             ]
            } =
              AshRpc.run_action(@profile, ctx(), %{
                "action" => "word_count",
@@ -182,6 +194,178 @@ defmodule AshRpc.RunActionTest do
                create_account(%{"embedding" => [1.0, 2.0]}, ["id", "embedding"])
 
       assert %{"type" => "invalid_attribute", "fields" => ["embedding"]} = error
+    end
+  end
+
+  describe "required fields param on a list read" do
+    test "a list run without fields is missing_required_parameter for fields" do
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "missing_required_parameter",
+                   "message" => "Required parameter %{parameter} is missing or empty",
+                   "vars" => %{"parameter" => "fields"},
+                   "path" => [],
+                   "fields" => []
+                 }
+               ]
+             } = AshRpc.run_action(@profile, ctx(), %{"action" => "list_posts"})
+    end
+
+    test "a list run with an empty fields list is empty_fields_array without a hint" do
+      assert parse(%{"action" => "list_posts", "fields" => []}) ==
+               {:error, {:empty_fields_array, []}}
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "empty_fields_array",
+                   "vars" => %{},
+                   "path" => [],
+                   "fields" => [],
+                   "details" => details
+                 }
+               ]
+             } = AshRpc.run_action(@profile, ctx(), %{"action" => "list_posts", "fields" => []})
+
+      assert details == %{"suggestion" => "Provide at least one field name in the fields array"}
+    end
+  end
+
+  describe "malformed field entries" do
+    test "a non-string field is invalid_field_type, reported as unknown_field" do
+      params = %{"action" => "list_posts", "fields" => [123]}
+
+      assert parse(params) == {:error, {:invalid_field_type, 123, []}}
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "unknown_field",
+                   "vars" => %{"field" => "123"},
+                   "path" => [],
+                   "fields" => ["123"]
+                 }
+               ]
+             } = AshRpc.run_action(@profile, ctx(), params)
+    end
+
+    test "a relationship given a string spec is unsupported_field_combination" do
+      params = %{"action" => "list_posts", "fields" => [%{"author" => "invalid_spec"}]}
+
+      assert parse(params) ==
+               {:error,
+                {:unsupported_field_combination, :relationship, :author, "invalid_spec", []}}
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "unsupported_field_combination",
+                   "vars" => %{"field" => "author", "fieldType" => "relationship"},
+                   "path" => [],
+                   "fields" => ["author"],
+                   "details" => %{"fieldSpec" => "\"invalid_spec\""}
+                 }
+               ]
+             } = AshRpc.run_action(@profile, ctx(), params)
+    end
+  end
+
+  describe "page param format" do
+    test "a non-map page is invalid_pagination with the received value and no hint" do
+      params = %{"action" => "list_comments", "fields" => ["body"], "page" => "invalid"}
+
+      assert parse(params) == {:error, {:invalid_pagination, "invalid"}}
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "invalid_pagination",
+                   "vars" => %{"received" => "\"invalid\""},
+                   "path" => [],
+                   "fields" => [],
+                   "details" => details
+                 }
+               ]
+             } = AshRpc.run_action(@profile, ctx(), params)
+
+      assert details == %{
+               "expected" => "Map with pagination parameters (limit, offset, before, after, etc.)"
+             }
+    end
+
+    test "a negative page limit is invalid_page on the page path" do
+      assert AshRpc.run_action(@profile, ctx(), %{
+               "action" => "list_comments",
+               "fields" => ["body"],
+               "page" => %{"limit" => -5}
+             }) == %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "invalid_page",
+                   "message" => "[limit: -5] is not a valid page option",
+                   "shortMessage" => "Invalid pagination",
+                   "vars" => %{},
+                   "path" => ["page"],
+                   "fields" => []
+                 }
+               ]
+             }
+    end
+  end
+
+  describe "select/load split" do
+    test "the parsed request carries the split with calculation args in internal names" do
+      assert {:ok, request} =
+               parse(%{
+                 "action" => "list_posts",
+                 "fields" => [
+                   "id",
+                   "viewCount",
+                   %{"author" => ["name"]},
+                   %{"excerpt" => %{"args" => %{"length" => 3}}}
+                 ]
+               })
+
+      assert request.resource == AshRpc.Test.Post
+      assert request.action.name == :read
+      assert request.select == [:id, :view_count]
+      assert request.load == [{:author, [:name]}, {:excerpt, %{length: 3}}]
+    end
+  end
+
+  describe "mutations without fields" do
+    # A create or update runs and persists without a field selection; the
+    # response data is then an empty map.
+    for {label, fields} <- [{"no fields param", :omit}, {"an empty fields list", []}] do
+      @fields fields
+
+      test "a create with #{label} persists and returns empty data" do
+        params =
+          with_fields(%{"action" => "create_post", "input" => %{"title" => "quiet"}}, @fields)
+
+        assert AshRpc.run_action(@profile, ctx(), params) == %{"success" => true, "data" => %{}}
+        assert [%{title: "quiet"}] = Ash.read!(AshRpc.Test.Post)
+      end
+
+      test "an update with #{label} persists and returns empty data" do
+        post = Ash.create!(AshRpc.Test.Post, %{title: "before"})
+
+        params =
+          with_fields(
+            %{"action" => "update_post", "identity" => post.id, "input" => %{"title" => "after"}},
+            @fields
+          )
+
+        assert AshRpc.run_action(@profile, ctx(), params) == %{"success" => true, "data" => %{}}
+        assert Ash.get!(AshRpc.Test.Post, post.id).title == "after"
+      end
     end
   end
 end

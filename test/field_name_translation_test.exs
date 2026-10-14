@@ -73,6 +73,23 @@ defmodule AshRpc.FieldNameTranslationTest do
 
   defp run(params), do: AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, params)
 
+  defp parse(params),
+    do:
+      AshRpc.Pipeline.parse_request(
+        AshRpc.Runtime.new(AshRpc.Test.Profile),
+        %AshRpc.Context{},
+        params
+      )
+
+  defp set_viewed(post, input) do
+    run(%{
+      "action" => "set_post_viewed",
+      "identity" => post.id,
+      "input" => input,
+      "fields" => ["id", "title", "viewCount"]
+    })
+  end
+
   defp run(params, manifest),
     do: AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, params, manifest: manifest)
 
@@ -269,6 +286,183 @@ defmodule AshRpc.FieldNameTranslationTest do
                  n.data => [%{n.id => author.id, n.name => "Ada", "isActive" => true}]
                }
       end
+    end
+  end
+
+  describe "mapped attribute names on input" do
+    test "a create accepts the mapped attribute name and stores it under the internal name" do
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "create_author",
+                 "input" => %{"name" => "Ada", "isActive" => false},
+                 "fields" => ["id", "name", "isActive"]
+               })
+
+      assert [%AshRpc.Test.Author{name: "Ada", is_active?: false} = author] =
+               Ash.read!(AshRpc.Test.Author)
+
+      assert data == %{"id" => author.id, "name" => "Ada", "isActive" => false}
+    end
+
+    test "an update accepts the mapped attribute name and returns it under the mapped name" do
+      author = Ash.create!(AshRpc.Test.Author, %{name: "Ada", is_active?: true})
+
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "update_author",
+                 "identity" => author.id,
+                 "input" => %{"name" => "Grace", "isActive" => false},
+                 "fields" => ["id", "name", "isActive"]
+               })
+
+      assert data == %{"id" => author.id, "name" => "Grace", "isActive" => false}
+
+      assert %AshRpc.Test.Author{name: "Grace", is_active?: false} =
+               Ash.get!(AshRpc.Test.Author, author.id)
+    end
+  end
+
+  # `set_post_viewed` maps the `is_viewed?` argument to "isViewed"; its inline
+  # change reads `:is_viewed?` and sets `view_count` to 1 (true) or 0 (false).
+  describe "mapped argument names on input" do
+    setup do
+      %{post: Ash.create!(AshRpc.Test.Post, %{title: "Hello", view_count: 5})}
+    end
+
+    test "an inline change reads the mapped argument under its internal name", %{post: post} do
+      assert {:ok, %AshRpc.Request{input: input}} =
+               parse(%{
+                 "action" => "set_post_viewed",
+                 "identity" => post.id,
+                 "input" => %{"isViewed" => true},
+                 "fields" => ["id"]
+               })
+
+      assert input == %{is_viewed?: true}
+
+      assert set_viewed(post, %{"isViewed" => true}) == %{
+               "success" => true,
+               "data" => %{"id" => post.id, "title" => "Hello", "viewCount" => 1}
+             }
+
+      assert Ash.get!(AshRpc.Test.Post, post.id).view_count == 1
+    end
+
+    test "a false mapped argument reaches the action as false", %{post: post} do
+      assert set_viewed(post, %{"isViewed" => false}) == %{
+               "success" => true,
+               "data" => %{"id" => post.id, "title" => "Hello", "viewCount" => 0}
+             }
+
+      assert Ash.get!(AshRpc.Test.Post, post.id).view_count == 0
+    end
+
+    test "validate_action accepts the mapped argument without running the action",
+         %{post: post} do
+      for value <- [true, false] do
+        assert AshRpc.validate_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                 "action" => "set_post_viewed",
+                 "identity" => post.id,
+                 "input" => %{"isViewed" => value}
+               }) == %{"success" => true}
+      end
+
+      assert Ash.get!(AshRpc.Test.Post, post.id).view_count == 5
+    end
+
+    test "a missing required mapped argument is reported under its client name",
+         %{post: post} do
+      assert %{"success" => false, "errors" => [run_error]} = set_viewed(post, %{})
+
+      assert Map.take(run_error, ["type", "shortMessage", "fields", "vars"]) == %{
+               "type" => "required",
+               "shortMessage" => "Required field",
+               "fields" => ["isViewed"],
+               "vars" => %{"field" => "isViewed"}
+             }
+
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.validate_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                 "action" => "set_post_viewed",
+                 "identity" => post.id,
+                 "input" => %{}
+               })
+
+      assert error == %{
+               "type" => "required",
+               "message" => "argument is_viewed? is required",
+               "shortMessage" => "Required field",
+               "fields" => ["isViewed"],
+               "path" => [],
+               "vars" => %{"field" => "isViewed"}
+             }
+
+      assert Ash.get!(AshRpc.Test.Post, post.id).view_count == 5
+    end
+
+    test "an update error on run_action has the same message and path as on validate_action",
+         %{post: post} do
+      assert set_viewed(post, %{}) == %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "required",
+                   "message" => "argument is_viewed? is required",
+                   "shortMessage" => "Required field",
+                   "fields" => ["isViewed"],
+                   "path" => [],
+                   "vars" => %{"field" => "isViewed"}
+                 }
+               ]
+             }
+    end
+  end
+
+  # `set_viewed` also has a private `audit_note` argument (`public? false`).
+  # It has no client name, so it must never reach the action from the wire.
+  describe "private action arguments on input" do
+    setup do
+      %{post: Ash.create!(AshRpc.Test.Post, %{title: "Hello", view_count: 5})}
+    end
+
+    test "a rejected private argument is unknown_input under its client name", %{post: post} do
+      assert set_viewed(post, %{"isViewed" => true, "auditNote" => "x"}) == %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "unknown_input",
+                   "message" => "Unknown input %{field}",
+                   "shortMessage" => "Unknown input",
+                   "fields" => ["auditNote"],
+                   "path" => [],
+                   "vars" => %{"field" => "auditNote"},
+                   "details" => %{"hint" => AshRpc.Test.Profile.stale_client_hint()}
+                 }
+               ]
+             }
+
+      assert Ash.get!(AshRpc.Test.Post, post.id).view_count == 5
+    end
+
+    test "a private argument under its internal name is not mapped and is ignored", %{post: post} do
+      params = %{
+        "action" => "set_post_viewed",
+        "identity" => post.id,
+        "input" => %{"isViewed" => true, "audit_note" => "x"},
+        "fields" => ["id"]
+      }
+
+      # The key is not translated to the argument atom: it stays a client
+      # string, which Ash only matches against public arguments.
+      assert {:ok, %AshRpc.Request{input: input}} =
+               parse(params)
+
+      assert input == %{:is_viewed? => true, "audit_note" => "x"}
+
+      assert set_viewed(post, %{"isViewed" => true, "audit_note" => "x"}) == %{
+               "success" => true,
+               "data" => %{"id" => post.id, "title" => "Hello", "viewCount" => 1}
+             }
     end
   end
 end

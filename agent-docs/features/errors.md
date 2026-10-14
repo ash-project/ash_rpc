@@ -77,12 +77,27 @@ Built-in impls live in `lib/ash_rpc/error.ex`:
 | `Ash.Error.Invalid.TenantRequired` | `tenant_required` |
 | `Ash.Error.Invalid.InvalidPrimaryKey` | `invalid_primary_key` |
 | `Ash.Error.Query.ReadActionRequiresActor` | `forbidden` |
+| `Ash.Error.Invalid.NoSuchInput` | `unknown_input` |
 | `Ash.Error.Unknown.UnknownError` | `unknown_error` |
 
 Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
 
 - Changeset and query variants share one impl ("changeset and query Required
   share one impl", "changeset, query and action InvalidArgument share one impl").
+- `unknown_input` (an input the action doesn't accept, a private
+  `public? false` argument included) names the input as the client sent it in
+  `fields` and `vars.field`, with `path` `[]`; `AshRpc.Errors` adds the
+  stale-client hint ("NoSuchInput is unknown_input naming the input as sent,
+  with no path"; `test/field_name_translation_test.exs` "a rejected private
+  argument is unknown_input under its client name").
+- Bread crumbs (`"Returned from bulk update: …"`) are cleared before any impl
+  runs, so they never reach a message (`test/errors_test.exs` "bread crumbs
+  never reach the client message"; `test/field_name_translation_test.exs` "an
+  update error on run_action has the same message and path as on
+  validate_action").
+- An `InvalidQuery` without a message gets the static `"Invalid query"`:
+  `Exception.message/1` on it would inspect the struct, value included ("an
+  InvalidQuery without a message gets a static one, not the inspected struct").
 - An impl that raises falls back to a generic `type: "error"`, `"something went
   wrong"` map that keeps the exception's path ("a raising AshRpc.Error impl"
   describe).
@@ -125,8 +140,9 @@ request and `context` is the request's Ash context. Errors from
    `apply(m, f, [error, context | a])`), or `nil` (skipped). The default is
    `AshRpc.DefaultErrorHandler`, which returns the error unchanged.
 7. `fields` and `vars.field` are formatted for the client using the resource's
-   field-name overrides when the resource is known; `path` segments get plain
-   formatter casing only. Values are
+   field-name overrides when the resource is known, and the action's
+   `argument_names` overrides for names that are not resource fields; `path`
+   segments get plain formatter casing only. Values are
    made JSON-safe (unknown structs are reduced to their module name so their
    fields are not disclosed).
 
@@ -210,7 +226,9 @@ profile's `stale_client_hint/0` into `details.hint` on those. The default is
 `AshRpc.Profile.default_stale_client_hint/0`. The hint is omitted when the
 callback returns `nil`, and on malformed requests a conforming client never
 sends (`invalid_input_format`, `invalid_pagination`, `invalid_fields_type`, …).
-See `test/errors_test.exs` "stale client hint" describe. The union-input
+See `test/errors_test.exs` "stale client hint" describe. The one Ash error
+that carries it is `unknown_input`, added by `AshRpc.Errors` after the
+protocol impl. The union-input
 multiple-member-keys error carries no hint either
 (`test/error_builder_golden_test.exs` "invalid_union_input_multiple_member_keys").
 

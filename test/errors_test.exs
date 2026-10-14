@@ -202,9 +202,19 @@ defmodule AshRpc.ErrorsTest do
   @tag :capture_log
   test "show_raised_errors? exposes the exception message for that domain only" do
     rt = Runtime.new(RaisingDetailProfile)
-    error = NoImplError.exception([])
+    error = NoImplError.exception(path: [:post])
 
-    assert [%{message: "kaboom"}] = Errors.to_errors(rt, error, AshRpc.Test.Domain)
+    assert Errors.to_errors(rt, error, AshRpc.Test.Domain) == [
+             %{
+               message: "kaboom",
+               short_message: "NoImplError",
+               type: "no_impl_error",
+               vars: %{},
+               fields: [],
+               path: ["post"]
+             }
+           ]
+
     assert [%{type: "internal_error"}] = Errors.to_errors(rt, error, nil)
   end
 
@@ -213,8 +223,11 @@ defmodule AshRpc.ErrorsTest do
              Errors.to_errors(Runtime.new(AshRpc.Test.Profile), policy_error())
 
     [error] = Errors.to_errors(Runtime.new(BreakdownProfile), policy_error(), AshRpc.Test.Domain)
+    assert error.message =~ "Policy Breakdown"
     assert error.message =~ "Only admins can read"
     assert error.seen_message == error.message
+    assert error.short_message == "Forbidden"
+    assert error.type == "forbidden"
   end
 
   test "the protocol impl itself never leaks a breakdown" do
@@ -283,9 +296,152 @@ defmodule AshRpc.ErrorsTest do
       for error <- errors do
         assert %{"type" => "internal_error", "errorId" => error_id} = error
         assert is_binary(error_id)
+        assert error["message"] =~ error_id
         assert error["fields"] == []
         refute inspect(error) =~ "title is required"
       end
+    end
+  end
+
+  describe "to_errors" do
+    test "a single error is formatted for the client" do
+      # Ash's Required message has a leading space when no field type is given.
+      assert Errors.to_errors(
+               Runtime.new(AshRpc.Test.Profile),
+               %Ash.Error.Changes.Required{field: :email}
+             ) == [
+               %{
+                 message: " email is required",
+                 short_message: "Required field",
+                 type: "required",
+                 vars: %{field: "email"},
+                 fields: ["email"],
+                 path: []
+               }
+             ]
+    end
+
+    test "bread crumbs never reach the client message" do
+      error = %Ash.Error.Changes.Required{
+        field: :email,
+        type: :argument,
+        bread_crumbs: ["Returned from bulk update: AshRpc.Test.Post.update"]
+      }
+
+      assert [%{message: "argument email is required"}] =
+               Errors.to_errors(Runtime.new(AshRpc.Test.Profile), error)
+    end
+
+    test "a plain exception becomes unknown_error without its message" do
+      assert Errors.to_errors(
+               Runtime.new(AshRpc.Test.Profile),
+               %RuntimeError{message: "database password is hunter2"}
+             ) == [
+               %{
+                 message: "Something went wrong",
+                 short_message: "Unknown error",
+                 type: "unknown_error",
+                 vars: %{},
+                 fields: [],
+                 path: []
+               }
+             ]
+    end
+
+    test "a missing tenant is tenant_required, not internal_error" do
+      error = Ash.Error.Invalid.TenantRequired.exception(resource: AshRpc.Test.Post)
+
+      assert Errors.to_errors(Runtime.new(AshRpc.Test.Profile), error) == [
+               %{
+                 message:
+                   "Queries against the AshRpc.Test.Post resource require a tenant to be specified",
+                 short_message: "Tenant required",
+                 type: "tenant_required",
+                 vars: %{},
+                 fields: [],
+                 path: []
+               }
+             ]
+    end
+  end
+
+  describe "lists of error classes" do
+    test "every inner error of every class becomes one error, in order" do
+      errors = [
+        %Ash.Error.Invalid{
+          class: :invalid,
+          errors: [
+            %Ash.Error.Changes.Required{field: :title},
+            %Ash.Error.Changes.InvalidAttribute{field: :age}
+          ]
+        },
+        %Ash.Error.Invalid{class: :invalid, errors: [%Ash.Error.Changes.Required{field: :email}]},
+        %Ash.Error.Query.NotFound{}
+      ]
+
+      # Ash's Required message has a leading space when no field type is given.
+      assert build(AshRpc.Test.Profile, errors) == [
+               %{
+                 message: " title is required",
+                 short_message: "Required field",
+                 type: "required",
+                 vars: %{field: "title"},
+                 fields: ["title"],
+                 path: []
+               },
+               %{
+                 message: "Invalid value provided for age.\n",
+                 short_message: "Invalid attribute",
+                 type: "invalid_attribute",
+                 vars: %{field: "age"},
+                 fields: ["age"],
+                 path: []
+               },
+               %{
+                 message: " email is required",
+                 short_message: "Required field",
+                 type: "required",
+                 vars: %{field: "email"},
+                 fields: ["email"],
+                 path: []
+               },
+               %{
+                 message: "record not found",
+                 short_message: "Not found",
+                 type: "not_found",
+                 vars: %{},
+                 fields: [],
+                 path: []
+               }
+             ]
+    end
+
+    test "an empty list gives no errors" do
+      assert build(AshRpc.Test.Profile, []) == []
+    end
+  end
+
+  describe "fallback for errors without an impl" do
+    @tag :capture_log
+    test "is internal_error with an error_id and the exception's path" do
+      [response] =
+        Errors.to_errors(
+          Runtime.new(AshRpc.Test.Profile),
+          NoImplError.exception(path: [:post, :title])
+        )
+
+      assert %{error_id: error_id} = response
+      assert is_binary(error_id)
+
+      assert response == %{
+               message: "Something went wrong. Unique error id: #{error_id}",
+               short_message: "Internal error",
+               type: "internal_error",
+               vars: %{},
+               fields: [],
+               path: ["post", "title"],
+               error_id: error_id
+             }
     end
   end
 end

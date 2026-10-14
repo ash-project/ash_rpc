@@ -57,14 +57,32 @@ defimpl AshRpc.Error, for: Ash.Error.Changes.InvalidChanges do
 end
 
 defimpl AshRpc.Error, for: Ash.Error.Query.InvalidQuery do
+  # Exception.message/1 on an InvalidQuery without a message inspects the whole
+  # struct, offending value included, so fall back to a static message.
   def to_error(error) do
     %{
-      message: Map.get(error, :message) || Exception.message(error),
+      message: Map.get(error, :message) || "Invalid query",
       short_message: "Invalid query",
       vars: Map.new(error.vars || []),
       type: "invalid_query",
       fields: List.wrap(Map.get(error, :fields) || Map.get(error, :field)),
       path: error.path || []
+    }
+  end
+end
+
+# An input the action doesn't accept, including a private (`public? false`)
+# argument. `input` is the key as the client sent it. It is always a top-level
+# action input, so the path Ash sets (an input index) is dropped.
+defimpl AshRpc.Error, for: Ash.Error.Invalid.NoSuchInput do
+  def to_error(error) do
+    %{
+      message: "Unknown input %{field}",
+      short_message: "Unknown input",
+      vars: %{field: error.input},
+      type: "unknown_input",
+      fields: [error.input],
+      path: []
     }
   end
 end

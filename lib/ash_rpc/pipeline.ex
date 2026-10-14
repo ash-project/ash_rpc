@@ -732,8 +732,25 @@ defmodule AshRpc.Pipeline do
     end
   end
 
-  defp bulk_error(%Ash.BulkResult{errors: errors}) when errors != [], do: {:error, errors}
+  defp bulk_error(%Ash.BulkResult{errors: errors}) when errors != [],
+    do: {:error, Enum.map(errors, &drop_batch_index/1)}
+
   defp bulk_error(other), do: {:error, other}
+
+  # Ash prefixes bulk errors' paths with the record's index in the batch. The
+  # bulk action here always targets one record, so the index means nothing to
+  # the client and is dropped, from an error class's inner errors too.
+  defp drop_batch_index(error), do: error |> drop_path_index() |> drop_inner_batch_index()
+
+  defp drop_path_index(%{path: [index | rest]} = error) when is_integer(index),
+    do: %{error | path: rest}
+
+  defp drop_path_index(error), do: error
+
+  defp drop_inner_batch_index(%{errors: [_ | _] = inner} = error),
+    do: %{error | errors: Enum.map(inner, &drop_batch_index/1)}
+
+  defp drop_inner_batch_index(error), do: error
 
   defp execute_generic_action(%Request{} = request, opts) do
     action_result =

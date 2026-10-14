@@ -19,11 +19,12 @@ defmodule AshRpc.Errors do
 
   Processes errors through the following pipeline:
   1. Convert to Ash error class using Ash.Error.to_error_class
-  2. Unwrap nested error structures
+  2. Unwrap nested error structures and clear their bread crumbs
   3. Transform via Error protocol (or expose the raised message when the
      profile's `show_raised_errors?/1` is true for the domain)
   4. Replace policy messages with a breakdown when the profile's
-     `show_policy_breakdowns?/0` is true
+     `show_policy_breakdowns?/0` is true, and add the profile's
+     `stale_client_hint/0` to `unknown_input`
   5. Apply resource-level error handler (if configured)
   6. Apply the profile's `error_handler/1` for the domain (`nil` included)
 
@@ -33,14 +34,15 @@ defmodule AshRpc.Errors do
           list(map())
   def to_errors(runtime, errors, domain \\ nil, resource \\ nil, action \\ nil, context \\ %{})
 
-  def to_errors(runtime, errors, domain, resource, _action, context) do
+  def to_errors(runtime, errors, domain, resource, action, context) do
     errors
     |> Ash.Error.to_error_class()
     |> unwrap_errors()
+    |> Enum.map(&drop_bread_crumbs/1)
     |> Enum.map(&process_single_error(&1, runtime, domain, resource, context))
     |> List.flatten()
     |> Enum.reject(&is_nil/1)
-    |> Enum.map(&format_error_field_names(&1, resource, runtime))
+    |> Enum.map(&format_error_field_names(&1, resource, action, runtime))
   end
 
   @doc """
@@ -63,6 +65,13 @@ defmodule AshRpc.Errors do
     [error]
   end
 
+  # Splode renders bread crumbs ("Returned from bulk update: …") into
+  # Exception.message/1; they describe server internals, not the client's input.
+  defp drop_bread_crumbs(%{bread_crumbs: [_ | _]} = error) when is_exception(error),
+    do: %{error | bread_crumbs: []}
+
+  defp drop_bread_crumbs(error), do: error
+
   defp process_single_error(error, runtime, domain, resource, context) do
     transformed_error =
       if profile_show_raised_errors?(runtime, domain) and is_exception(error) do
@@ -71,7 +80,10 @@ defmodule AshRpc.Errors do
         protocol_error(error)
       end
 
-    transformed_error = maybe_policy_breakdown(transformed_error, error, runtime)
+    transformed_error =
+      transformed_error
+      |> maybe_policy_breakdown(error, runtime)
+      |> maybe_stale_client_hint(error, runtime)
 
     [resource_error_handler(resource), profile_error_handler(runtime, domain)]
     |> Enum.reject(&is_nil/1)
@@ -180,6 +192,25 @@ defmodule AshRpc.Errors do
 
   defp maybe_policy_breakdown(transformed, _source, _runtime), do: transformed
 
+  # An unknown input is what a client built against an older manifest sends,
+  # so it carries the same hint as the request errors ErrorBuilder flags.
+  defp maybe_stale_client_hint(
+         %{type: "unknown_input"} = transformed,
+         %Ash.Error.Invalid.NoSuchInput{},
+         runtime
+       ) do
+    case stale_client_hint(runtime) do
+      nil -> transformed
+      hint -> Map.update(transformed, :details, %{hint: hint}, &Map.put(&1, :hint, hint))
+    end
+  end
+
+  defp maybe_stale_client_hint(transformed, _source, _runtime), do: transformed
+
+  @doc false
+  def stale_client_hint(%{profile: nil}), do: AshRpc.Profile.default_stale_client_hint()
+  def stale_client_hint(%{profile: profile}), do: profile.stale_client_hint()
+
   defp profile_error_handler(%{profile: nil}, _domain), do: nil
 
   defp profile_error_handler(%{profile: profile}, domain) do
@@ -249,36 +280,36 @@ defmodule AshRpc.Errors do
   end
 
   # Formats field names in error structures for client consumption.
-  # Applies resource-level field_names mappings (if resource is known) and output formatter.
+  # Applies resource-level field_names mappings and, for names that are not
+  # resource fields, the action's argument_names mappings (if resource and
+  # action are known), then the output formatter.
   # Also serializes values to ensure they are JSON-safe via serialize_error/1.
-  defp format_error_field_names(error, resource, runtime) when is_map(error) do
+  defp format_error_field_names(error, resource, action, runtime) when is_map(error) do
     formatter = runtime.output_formatter
     resource_struct = resource && Map.get(runtime.resource_lookup, resource)
+    format_field = &format_error_field(&1, resource_struct, action, formatter)
 
     error
-    |> format_fields_array(resource_struct, formatter)
+    |> format_fields_array(format_field)
     |> format_path_array(formatter)
-    |> format_vars_field(resource_struct, formatter)
+    |> format_vars_field(format_field)
     |> serialize_error()
   end
 
-  defp format_error_field_names(error, _resource, _runtime), do: error
+  defp format_error_field_names(error, _resource, _action, _runtime), do: error
 
-  defp format_fields_array(%{fields: fields} = error, resource, formatter)
-       when is_list(fields) do
-    formatted_fields =
-      Enum.map(fields, fn field ->
-        AshRpc.FieldFormatter.format_field_for_client(
-          field,
-          resource,
-          formatter
-        )
-      end)
+  # An action argument is named the way the client sent it.
+  defp format_error_field(field, %Ash.Info.Manifest.Resource{} = resource, action, formatter)
+       when is_atom(field) and is_atom(action) and not is_nil(action),
+       do: AshRpc.Introspection.format_input_name(resource, action, field, formatter)
 
-    %{error | fields: formatted_fields}
-  end
+  defp format_error_field(field, resource, _action, formatter),
+    do: AshRpc.FieldFormatter.format_field_for_client(field, resource, formatter)
 
-  defp format_fields_array(error, _resource, _formatter), do: error
+  defp format_fields_array(%{fields: fields} = error, format_field) when is_list(fields),
+    do: %{error | fields: Enum.map(fields, format_field)}
+
+  defp format_fields_array(error, _format_field), do: error
 
   defp format_path_array(%{path: path} = error, formatter) when is_list(path) do
     # Path segments use simple formatting (no resource-level mappings)
@@ -299,25 +330,17 @@ defmodule AshRpc.Errors do
 
   defp format_path_array(error, _formatter), do: error
 
-  defp format_vars_field(%{vars: vars} = error, resource, formatter) when is_map(vars) do
+  defp format_vars_field(%{vars: vars} = error, format_field) when is_map(vars) do
     formatted_vars =
       Enum.into(vars, %{}, fn
-        {:field, field} ->
-          {:field,
-           AshRpc.FieldFormatter.format_field_for_client(
-             field,
-             resource,
-             formatter
-           )}
-
-        other ->
-          other
+        {:field, field} -> {:field, format_field.(field)}
+        other -> other
       end)
 
     %{error | vars: formatted_vars}
   end
 
-  defp format_vars_field(error, _resource, _formatter), do: error
+  defp format_vars_field(error, _format_field), do: error
 
   defp serialize_error(nil), do: nil
 

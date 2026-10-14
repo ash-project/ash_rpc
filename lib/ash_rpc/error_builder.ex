@@ -123,7 +123,7 @@ defmodule AshRpc.ErrorBuilder do
       runtime: runtime,
       scope: scope,
       formatter: runtime.output_formatter,
-      hint: stale_client_hint(runtime)
+      hint: Errors.stale_client_hint(runtime)
     }
 
     error |> build(ctx) |> drop_nil_hint()
@@ -837,9 +837,6 @@ defmodule AshRpc.ErrorBuilder do
       details: %{error: inspect(other)}
     )
   end
-
-  defp stale_client_hint(%{profile: nil}), do: AshRpc.Profile.default_stale_client_hint()
-  defp stale_client_hint(%{profile: profile}), do: profile.stale_client_hint()
 
   defp action_not_found_suggestion(%{profile: nil}),
     do: AshRpc.Profile.default_action_not_found_suggestion()
