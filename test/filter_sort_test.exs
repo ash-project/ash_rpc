@@ -282,5 +282,41 @@ defmodule AshRpc.FilterSortTest do
                  "filter" => %{"title" => %{"eq" => "Alpha"}}
                })
     end
+
+    test "a sort on a get_by entrypoint is unsupported" do
+      assert {:error, {:sort_not_supported, :top_level, :unsupported}} =
+               parse(%{
+                 "action" => "get_post_by_slug",
+                 "fields" => ["title"],
+                 "getBy" => %{"slug" => "alpha"},
+                 "sort" => "-title"
+               })
+    end
+  end
+
+  describe "mutations" do
+    test "a filter on a create is unsupported" do
+      assert {:error, {:filter_not_supported, :top_level, :unsupported}} =
+               parse(%{
+                 "action" => "create_post",
+                 "fields" => ["title"],
+                 "input" => %{"title" => "x"},
+                 "filter" => %{"title" => %{"eq" => "Alpha"}}
+               })
+    end
+  end
+
+  describe "top-level page" do
+    test "a page on a get? entrypoint is unsupported" do
+      params = %{"action" => "get_post", "fields" => ["title"], "page" => %{"limit" => 5}}
+
+      assert {:error, {:pagination_not_supported, :top_level, :unsupported}} = parse(params)
+      assert error_types(params) == ["pagination_not_supported"]
+    end
+
+    test "an empty page map counts as present" do
+      assert {:error, {:pagination_not_supported, :top_level, :unsupported}} =
+               parse(%{"action" => "get_post", "fields" => ["title"], "page" => %{}})
+    end
   end
 end
