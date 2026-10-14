@@ -22,7 +22,7 @@ Documentation Index in `AGENTS.md`.
 | [field selection](features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
 | [formatting](features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs` |
 | [action metadata](features/action-metadata.md) | `test/action_metadata_test.exs` |
-| [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs` |
+| [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
 
 Four files belong to no feature doc:
 
@@ -210,23 +210,23 @@ Update `@golden` only for an intentional wire change; add a case to
 | File | Purpose |
 |------|---------|
 | `domain.ex` | `AshRpc.Test.Domain`: the sixteen fixture resources (embedded types are not listed) |
-| `mapping_source.ex` | `AshRpc.Test.MappingSource`: `@exposed` list, overrides (`Author` `isActive`/`isProlific`, `word_count` argument `text` → `body`, `PostStats` `wordCount1`/`isFeatured`, plus the theme overrides listed with each fixture below), row opts → `%AshRpc.Entrypoint{}` via `struct!/2` |
+| `mapping_source.ex` | `AshRpc.Test.MappingSource`: `@exposed` list, overrides (`Author` `isActive`/`isProlific`, `word_count` argument `text` → `body`, `set_viewed` argument `is_viewed?` → `isViewed`, `PostStats` `wordCount1`/`isFeatured`, plus the theme overrides listed with each fixture below), row opts → `%AshRpc.Entrypoint{}` via `struct!/2` |
 | `manifest_builder.ex` | `AshRpc.Test.ManifestBuilder`: `@entrypoints` wire rows; `manifest/0`, `build/1`, `generate!/1` |
 | `profile.ex` | `AshRpc.Test.Profile`: `use AshRpc.Profile, manifest: AshRpc.Test.ManifestBuilder`, all callbacks default |
 | `error_handler_profiles.ex` | Profiles whose `error_handler/1` misbehaves, all backed by `AshRpc.Test.PartialErrorHandler`: `PartialHandlerProfile` (redacts `invalid_attribute`, no clause for anything else), `RaisingHandlerProfile` (raises), `ThrowingHandlerProfile` (throws) |
 | `endpoint.ex` | `AshRpc.Test.Socket`, `AshRpc.Test.Endpoint`, and `AshRpc.Test.RpcChannel` (`use AshRpc.Channel`, joins `"rpc:*"`) |
 | `error_cases.ex` | `AshRpc.Test.ErrorCases`: one reason per `ErrorBuilder` clause, for the golden test |
-| `post.ex` | `AshRpc.Test.Post`: the main resource. Typed-map `stats`, embedded `settings`, unconstrained `data`, `unique_slug` identity; relationships to `author`, unexposed `secret`, `comments` (plus offset-only/keyset-only variants), `tags`; calculations with and without args; aggregates; metadata actions; a `read_unviewed` read filtered to `view_count == 0` (the `read_action:` of `update_post_scoped`); generic actions returning `:map`, typed map, tuple, union and nothing |
+| `post.ex` | `AshRpc.Test.Post`: the main resource. Typed-map `stats`, embedded `settings`, unconstrained `data`, `unique_slug` identity; relationships to `author`, unexposed `secret`, `comments` (plus offset-only/keyset-only variants), `tags`; calculations with and without args (`title_shout` is `field? false`); aggregates; metadata actions; a `read_unviewed` read filtered to `view_count == 0` (the `read_action:` of `update_post_scoped`); `unfilterable_comments` / `unsortable_comments` (`filterable?`/`sortable?` false) and `secrets` (has_many to the unexposed `Secret`); `create_for_owner` with a required multi-word `owner_id` (`create_post_for_owner`); `set_viewed` with a mapped `is_viewed?` → `isViewed`, an inline change and a private `audit_note` argument (`set_post_viewed`); generic actions returning `:map`, typed map, tuple, union and nothing |
 | `account.ex` | `AshRpc.Test.Account`: non-public `secret` and `internal_notes` attributes, and an `embedding` vector with `dimensions: 3` (`create_account`, `list_accounts`) |
 | `author.ex` | `AshRpc.Test.Author`: `is_active?` / `is_prolific?` (name overrides), `post_count` aggregate, `name_active` identity, actor-scoped `me` / `update_me` / `destroy_me` |
 | `comment.ex` | `AshRpc.Test.Comment`: has_many target. Union `attachment` (embedded `file` / string `note`), `weighted_rating` calc, reads with offset+keyset, offset-only, keyset-only and a `rated` read filtered by a `min_rating` argument |
 | `comment_attachment.ex` | `AshRpc.Test.CommentAttachment`: embedded union member with a `label` calculation |
 | `tag.ex` | `AshRpc.Test.Tag`: many_to_many target with a paginated read |
-| `post_tag.ex` | `AshRpc.Test.PostTag`: join resource for `Post.tags` |
+| `post_tag.ex` | `AshRpc.Test.PostTag`: join resource for `Post.tags`, with a composite primary key and a `position` attribute (`create_post_tag`, `update_post_tag`, `destroy_post_tag`) |
 | `note.ex` | `AshRpc.Test.Note`: attribute multitenancy (`workspace_id`), has_many `replies` |
 | `note_reply.ex` | `AshRpc.Test.NoteReply`: multitenant child of `Note` with a paginated read |
 | `ledger.ex` | `AshRpc.Test.Ledger`: union `count` and arrays allowing nil items; `count` deliberately collides with the page-map key (`page_ledgers`) |
-| `secret.ex` | `AshRpc.Test.Secret`: in the domain but deliberately **not exposed**, for strict-exposure tests |
+| `secret.ex` | `AshRpc.Test.Secret`: in the domain but deliberately **not exposed**, for strict-exposure tests; `post_id` is the destination of `Post.secrets` |
 | `post_settings.ex` | `AshRpc.Test.PostSettings`: embedded resource with a `theme_label` calculation |
 | `post_stats.ex` | `AshRpc.Test.PostStats`: `Ash.Type.NewType` map with fields `word_count_1` and `is_featured?` (client names via `type_field_names/1`) |
 | `calculations.ex` | Module calculations. For `Post`: `Excerpt` (arg `length`), `ScoredStats` (arg `boost`, returns `PostStats`), `SelfPost` (returns the record). For `Widget`: `FeaturedPost` (`strict_loads?: false`, wraps the loaded `post` in a union). For `Project`: `ProjectSummary` (a fixed `ProjectStats`), `ProjectReport` (two `ProjectMeta` rows, `total: 2`), `SelfRecords`, `IsLate` and `DaysLeft` (module calcs over `due_date`, so ETS needs no date functions) |

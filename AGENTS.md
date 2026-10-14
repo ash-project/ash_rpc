@@ -171,7 +171,7 @@ from an existing file of the same kind. Formats without comment syntax need a
 | **Field selection, calculations, aggregates, nested query options, unions, load restrictions** | [features/field-selection.md](agent-docs/features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
 | **Value/input formatting, union input, unconstrained maps, name mapping** | [features/formatting.md](agent-docs/features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs` |
 | **Action metadata** | [features/action-metadata.md](agent-docs/features/action-metadata.md) | `test/action_metadata_test.exs` |
-| **Errors, handlers, wire error shape** | [features/errors.md](agent-docs/features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs` |
+| **Errors, handlers, wire error shape** | [features/errors.md](agent-docs/features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
 
 ## Key Architecture Concepts
 
@@ -235,6 +235,7 @@ stacktrace and returned as `unknown_error`.
 | Test sees unexpected data/state | `ManifestBuilder.manifest/0` is cached in `:persistent_term` | Use `build/1` for a variant manifest. Don't mutate the cached one |
 | `action_not_found` | Wire name not in `@entrypoints`, or `entrypoint/1` returned `nil` | Add it to `manifest_builder.ex` |
 | `unknown_field` through a relationship | Destination resource not exposed | Add it to `@exposed` in the test mapping source (not `Secret`, which stays unexposed on purpose) |
+| `unknown_input` | An input key the action doesn't accept: unknown, misspelled, or a private (`public? false`) argument | Send the client name from the manifest, or drop the key |
 | `UndefinedFunctionError` on `AshRpc.Plug` / `AshRpc.Channel` | plug/phoenix not in the consumer's deps | They're optional deps. Add them in the consumer |
 | `invalid_query_opts` | Query envelope on a non-relationship or to-one field, `args` mixed with query opts, or `page` mixed with bare `limit`/`offset` | Use the envelope only on has_many/many_to_many; pick `page` or `limit`/`offset` |
 | `filter_not_supported` / `sort_not_supported` | `details.reason` `disabled`: the entrypoint sets `enable_filter?`/`enable_sort?: false`. `unsupported`: the param is on a non-list action (a `get?`/`get_by` entrypoint or a non-read action) or the relationship isn't filterable/sortable | Remove the param, or flip the entrypoint flag |
