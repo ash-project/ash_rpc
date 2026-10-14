@@ -5,7 +5,7 @@
 defmodule AshRpc.GetActionsTest do
   use ExUnit.Case, async: true
 
-  alias AshRpc.Test.{Author, Comment, Post}
+  alias AshRpc.Test.{Author, Comment, Post, PostTag, Tag}
 
   @profile AshRpc.Test.Profile
 
@@ -24,6 +24,15 @@ defmodule AshRpc.GetActionsTest do
   defp post!(attrs), do: Ash.create!(Post, Map.put_new(attrs, :title, "Post"))
 
   defp reload!(%resource{id: id}), do: Ash.get!(resource, id)
+
+  defp post_tag!(attrs \\ %{}) do
+    post = post!(%{})
+    tag = Ash.create!(Tag, %{name: unique("tag")})
+    Ash.create!(PostTag, Map.merge(%{post_id: post.id, tag_id: tag.id}, attrs))
+  end
+
+  defp get_post_tag(%PostTag{post_id: post_id, tag_id: tag_id}),
+    do: Ash.get(PostTag, %{post_id: post_id, tag_id: tag_id})
 
   describe "get? entrypoint" do
     test "returns a single map with relationship, calculation and aggregate fields" do
@@ -491,6 +500,92 @@ defmodule AshRpc.GetActionsTest do
 
       assert message =~ "Non-scalar value provided for: id"
       assert reload!(post).title == "Original"
+    end
+  end
+
+  describe "composite primary key identity" do
+    test "update takes the key as a map with client field names" do
+      post_tag = post_tag!(%{position: 1})
+
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "update_post_tag",
+                 "identity" => %{"postId" => post_tag.post_id, "tagId" => post_tag.tag_id},
+                 "input" => %{"position" => 2},
+                 "fields" => ["postId", "tagId", "position"]
+               })
+
+      assert data == %{"postId" => post_tag.post_id, "tagId" => post_tag.tag_id, "position" => 2}
+      assert {:ok, %PostTag{position: 2}} = get_post_tag(post_tag)
+    end
+
+    test "destroy takes the key as a map with client field names" do
+      post_tag = post_tag!()
+      other = post_tag!()
+
+      assert %{"success" => true} =
+               run(%{
+                 "action" => "destroy_post_tag",
+                 "identity" => %{"postId" => post_tag.post_id, "tagId" => post_tag.tag_id}
+               })
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{}]}} =
+               get_post_tag(post_tag)
+
+      assert {:ok, %PostTag{}} = get_post_tag(other)
+    end
+
+    test "a missing key part is invalid_identity, record unchanged" do
+      post_tag = post_tag!(%{position: 1})
+
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{
+                 "action" => "update_post_tag",
+                 "identity" => %{"postId" => post_tag.post_id},
+                 "input" => %{"position" => 2},
+                 "fields" => ["position"]
+               })
+
+      assert %{
+               "type" => "invalid_identity",
+               "shortMessage" => "Invalid identity",
+               "path" => [:identity],
+               "vars" => %{"providedKeys" => "postId", "expectedKeys" => "postId, tagId"},
+               "details" => %{"providedKeys" => ["postId"], "expectedKeys" => ["postId", "tagId"]}
+             } = error
+
+      assert {:ok, %PostTag{position: 1}} = get_post_tag(post_tag)
+    end
+
+    test "a non-matching key is not_found" do
+      post_tag = post_tag!(%{position: 1})
+
+      assert %{"success" => false, "errors" => [%{"type" => "not_found"}]} =
+               run(%{
+                 "action" => "update_post_tag",
+                 "identity" => %{"postId" => post_tag.post_id, "tagId" => Ash.UUID.generate()},
+                 "input" => %{"position" => 2},
+                 "fields" => ["position"]
+               })
+
+      assert {:ok, %PostTag{position: 1}} = get_post_tag(post_tag)
+    end
+  end
+
+  describe "nil update" do
+    test "an update sets a non-nil attribute to nil" do
+      post = post!(%{title: "Kept", slug: unique("cleared")})
+
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "update_post",
+                 "identity" => post.id,
+                 "input" => %{"slug" => nil},
+                 "fields" => ["id", "title", "slug"]
+               })
+
+      assert data == %{"id" => post.id, "title" => "Kept", "slug" => nil}
+      assert %Post{title: "Kept", slug: nil} = reload!(post)
     end
   end
 end
