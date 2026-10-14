@@ -57,6 +57,8 @@ defmodule AshRpc.Test.MappingSource do
   @impl true
   def argument_names(AshRpc.Test.Post, :word_count), do: %{text: "body"}
 
+  def argument_names(AshRpc.Test.Post, :set_viewed), do: %{is_viewed?: "isViewed"}
+
   def argument_names(AshRpc.Test.Intake, :search),
     do: %{include_deleted?: "includeDeleted", filter_by_1?: "filterBy1"}
 

@@ -10,6 +10,10 @@ defmodule AshRpc.Test.PostTag do
     private? true
   end
 
+  attributes do
+    attribute :position, :integer, public?: true
+  end
+
   relationships do
     belongs_to :post, AshRpc.Test.Post,
       primary_key?: true,
@@ -25,6 +29,6 @@ defmodule AshRpc.Test.PostTag do
   end
 
   actions do
-    defaults [:read, :destroy, create: [:post_id, :tag_id]]
+    defaults [:read, :destroy, create: [:post_id, :tag_id, :position], update: [:position]]
   end
 end

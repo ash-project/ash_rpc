@@ -42,6 +42,19 @@ defmodule AshRpc.Test.Post do
       read_action :keyset_only
     end
 
+    has_many :unfilterable_comments, AshRpc.Test.Comment do
+      public? true
+      filterable? false
+    end
+
+    has_many :unsortable_comments, AshRpc.Test.Comment do
+      public? true
+      sortable? false
+    end
+
+    # Secret is not exposed: a query envelope on this relationship must fail.
+    has_many :secrets, AshRpc.Test.Secret, public?: true
+
     many_to_many :tags, AshRpc.Test.Tag do
       public? true
       through AshRpc.Test.PostTag
@@ -52,6 +65,12 @@ defmodule AshRpc.Test.Post do
 
   calculations do
     calculate :title_length, :integer, expr(string_length(title)), public?: true
+
+    # Public but `field? false`: never selectable as a field over the wire.
+    calculate :title_shout, :string, expr(title <> "!") do
+      public? true
+      field? false
+    end
 
     calculate :excerpt, :string, Calculations.Excerpt do
       public? true
@@ -110,6 +129,27 @@ defmodule AshRpc.Test.Post do
     update :update do
       primary? true
       accept [:title, :view_count, :slug, :data]
+    end
+
+    # A required multi-word argument, for client-named `required` errors.
+    create :create_for_owner do
+      accept [:title]
+      argument :owner_id, :uuid, allow_nil?: false
+      change set_attribute(:author_id, arg(:owner_id))
+    end
+
+    # `is_viewed?` is renamed `isViewed` by the mapping source; the inline
+    # change reads it under its internal name. `audit_note` is private.
+    update :set_viewed do
+      accept []
+      require_atomic? false
+      argument :is_viewed?, :boolean, allow_nil?: false
+      argument :audit_note, :string, public?: false
+
+      change fn changeset, _context ->
+        view_count = if Ash.Changeset.get_argument(changeset, :is_viewed?), do: 1, else: 0
+        Ash.Changeset.force_change_attribute(changeset, :view_count, view_count)
+      end
     end
 
     read :read_with_metadata do

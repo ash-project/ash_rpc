@@ -85,6 +85,8 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"list_comments", AshRpc.Test.Comment, :read},
     {"create_tag", AshRpc.Test.Tag, :create},
     {"create_post_tag", AshRpc.Test.PostTag, :create},
+    {"update_post_tag", AshRpc.Test.PostTag, :update},
+    {"destroy_post_tag", AshRpc.Test.PostTag, :destroy},
     # Multitenancy
     {"list_notes", AshRpc.Test.Note, :read},
     {"create_note", AshRpc.Test.Note, :create},
@@ -126,7 +128,10 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"create_intake", AshRpc.Test.Intake, :create},
     {"update_intake", AshRpc.Test.Intake, :update},
     {"search_intakes", AshRpc.Test.Intake, :search},
-    {"process_intake_data", AshRpc.Test.Intake, :process_data}
+    {"process_intake_data", AshRpc.Test.Intake, :process_data},
+    # Required multi-word arguments and mapped update arguments
+    {"create_post_for_owner", AshRpc.Test.Post, :create_for_owner},
+    {"set_post_viewed", AshRpc.Test.Post, :set_viewed}
   ]
 
   @doc "Cached default manifest (camelCase in/out)."

@@ -13,9 +13,11 @@ defmodule AshRpc.Test.Secret do
   attributes do
     uuid_primary_key :id, public?: true
     attribute :code, :string, public?: true
+    # Destination of `Post.secrets`.
+    attribute :post_id, :uuid, public?: true
   end
 
   actions do
-    defaults [:read, create: [:code]]
+    defaults [:read, create: [:code, :post_id]]
   end
 end

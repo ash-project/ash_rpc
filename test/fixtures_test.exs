@@ -262,4 +262,64 @@ defmodule AshRpc.FixturesTest do
     assert %Ash.Union{type: :data} = intake.content
     assert %Ash.Union{type: :active, value: %AshRpc.Test.IntakeStatus{}} = intake.status
   end
+
+  test "Post's gated relationships and its has_many to the unexposed Secret load" do
+    post = Ash.create!(AshRpc.Test.Post, %{title: "p"})
+    Ash.create!(AshRpc.Test.Comment, %{body: "c", post_id: post.id})
+    Ash.create!(AshRpc.Test.Secret, %{code: "s", post_id: post.id})
+
+    assert %{
+             unfilterable_comments: [%{body: "c"}],
+             unsortable_comments: [%{body: "c"}],
+             secrets: [%{code: "s"}]
+           } = Ash.load!(post, [:unfilterable_comments, :unsortable_comments, :secrets])
+  end
+
+  test "Post.create_for_owner requires a multi-word argument and sets the author from it" do
+    author = Ash.create!(AshRpc.Test.Author, %{name: "Ada"})
+
+    post =
+      Ash.create!(AshRpc.Test.Post, %{title: "p", owner_id: author.id}, action: :create_for_owner)
+
+    assert post.author_id == author.id
+
+    assert {:error, %Ash.Error.Invalid{}} =
+             Ash.create(AshRpc.Test.Post, %{title: "p"}, action: :create_for_owner)
+  end
+
+  test "Post.set_viewed sees its mapped argument under the internal name" do
+    post = Ash.create!(AshRpc.Test.Post, %{title: "p"})
+
+    assert %{view_count: 1} = Ash.update!(post, %{is_viewed?: true}, action: :set_viewed)
+    assert %{view_count: 0} = Ash.update!(post, %{is_viewed?: false}, action: :set_viewed)
+
+    runtime = AshRpc.Runtime.new(AshRpc.Test.Profile)
+    assert %AshRpc.Entrypoint{action: :set_viewed} = runtime.entrypoints["set_post_viewed"]
+
+    inputs =
+      runtime
+      |> AshRpc.Introspection.get_action!(AshRpc.Test.Post, :set_viewed)
+      |> Map.fetch!(:inputs)
+      |> Enum.map(& &1.name)
+
+    assert :is_viewed? in inputs
+    refute :audit_note in inputs
+  end
+
+  test "PostTag updates and destroys by its composite primary key" do
+    post = Ash.create!(AshRpc.Test.Post, %{title: "p"})
+    tag = Ash.create!(AshRpc.Test.Tag, %{name: "t"})
+    post_tag = Ash.create!(AshRpc.Test.PostTag, %{post_id: post.id, tag_id: tag.id})
+
+    assert %{position: 2} = Ash.update!(post_tag, %{position: 2})
+    assert :ok = Ash.destroy!(post_tag)
+    assert [] = Ash.read!(AshRpc.Test.PostTag)
+  end
+
+  test "Post.title_shout loads into calculations, not a struct field" do
+    post = Ash.create!(AshRpc.Test.Post, %{title: "hi"})
+
+    assert %{calculations: %{title_shout: "hi!"}} = Ash.load!(post, :title_shout)
+    assert %{field?: false} = Ash.Resource.Info.calculation(AshRpc.Test.Post, :title_shout)
+  end
 end
