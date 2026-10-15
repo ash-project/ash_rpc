@@ -24,6 +24,17 @@ defmodule AshRpc.Manifest.Custom do
   def field_names(%Manifest.Resource{custom: %{ash_rpc: %{field_names: m}}}), do: m
   def field_names(_), do: %{}
 
+  def client_field_names(%Manifest.Resource{custom: %{ash_rpc: %{client_field_names: m}}}), do: m
+  def client_field_names(_), do: %{}
+
+  def calculation_argument_names(
+        %Manifest.Resource{custom: %{ash_rpc: %{calculation_argument_names: m}}},
+        calc
+      ),
+      do: Map.get(m, calc, %{})
+
+  def calculation_argument_names(_, _), do: %{}
+
   def field_name_overrides(%Manifest.Resource{custom: %{ash_rpc: %{field_name_overrides: m}}}),
     do: m
 
@@ -77,6 +88,16 @@ defmodule AshRpc.Manifest.Custom do
   def relationship_read_action(_), do: nil
 
   # Types
+  def type_client_field_names(%Manifest.Type{custom: %{ash_rpc: %{client_field_names: m}}}),
+    do: m
+
+  def type_client_field_names(_), do: %{}
+
+  def type_client_member_names(%Manifest.Type{custom: %{ash_rpc: %{client_member_names: m}}}),
+    do: m
+
+  def type_client_member_names(_), do: %{}
+
   def type_field_name_overrides(%Manifest.Type{custom: %{ash_rpc: %{field_name_overrides: m}}}),
     do: m
 

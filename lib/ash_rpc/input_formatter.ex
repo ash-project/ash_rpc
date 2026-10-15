@@ -7,8 +7,12 @@ defmodule AshRpc.InputFormatter do
   Formats input data from client format to internal format.
 
   Converts client-provided field names and values to the internal representation
-  expected by Ash actions. Delegates to ValueFormatter for recursive type-aware
-  formatting of nested values using `%Ash.Info.Manifest.Type{}` structs.
+  expected by Ash actions. Top-level keys must be client input names
+  (`expected_keys/3`), and so must every nested key of a value
+  whose type carries decorated names. Misses are `{:unknown_input, key}` at
+  the top level and `{:unknown_input, key, path}` below it, all collected.
+  Delegates to ValueFormatter for recursive type-aware formatting of nested
+  values using `%Ash.Info.Manifest.Type{}` structs.
   """
 
   alias Ash.Info.Manifest.Type
@@ -37,24 +41,34 @@ defmodule AshRpc.InputFormatter do
 
   defp format_data(data, _resource, _action_name_or_action, _runtime), do: data
 
+  # Every top-level key must be one of the action's client input names, and
+  # every nested key of a named type a client name of that type. All misses
+  # become `unknown_input` reasons before anything is cast.
   defp format_map(map, resource, action_name_or_action, runtime) do
     action = get_action(runtime, resource, action_name_or_action)
-
-    # Build the expected keys map once for this action
     expected_keys = expected_keys(action, resource, runtime)
 
-    Enum.into(map, %{}, fn {key, value} ->
-      case Map.get(expected_keys, key) do
-        nil ->
-          {key, value}
+    {formatted, misses} =
+      Enum.reduce(map, {[], []}, fn {key, value}, {formatted, misses} ->
+        with {:ok, internal_key} <- resolve_key(key, expected_keys),
+             type = get_input_field_type(action, internal_key),
+             {:ok, value} <-
+               ValueFormatter.collect_input(key, fn -> format_value(value, type, runtime) end) do
+          {[{internal_key, value} | formatted], misses}
+        else
+          :error -> {formatted, [{:unknown_input, key} | misses]}
+          {:misses, nested} -> {formatted, Enum.reverse(nested, misses)}
+        end
+      end)
 
-        internal_key ->
-          field_type = get_input_field_type(action, internal_key)
-          formatted_value = format_value(value, field_type, runtime)
-          {internal_key, formatted_value}
-      end
-    end)
+    if misses != [], do: throw(Enum.reverse(misses))
+    Map.new(formatted)
   end
+
+  # Atom keys are internal names already (callers that build input
+  # themselves); string keys must match a client name exactly.
+  defp resolve_key(key, _expected_keys) when is_atom(key), do: {:ok, key}
+  defp resolve_key(key, expected_keys), do: Map.fetch(expected_keys, key)
 
   @doc """
   Returns the `%{client_name => internal_name}` map for an action's inputs.
@@ -78,8 +92,11 @@ defmodule AshRpc.InputFormatter do
   defp format_value(value, %Type{kind: :array, item_type: item_type} = type, runtime)
        when is_list(value) do
     case item_type && struct_cast_target(item_type) do
-      nil -> ValueFormatter.format(value, type, [], :input, runtime)
-      module -> Enum.map(value, &format_array_item(&1, item_type, module, runtime))
+      nil ->
+        ValueFormatter.format(value, type, [], :input, runtime)
+
+      module ->
+        ValueFormatter.input_items(value, &format_array_item(&1, item_type, module, runtime))
     end
   end
 

@@ -184,12 +184,11 @@ defmodule AshRpc.GenericReturnsTest do
              }
     end
 
-    test "snake_case selection keys are accepted and output stays camelCase" do
-      assert run("catalog_digest", ["total_count", %{"results" => ["first_name", "email"]}])
-             |> data!() == %{
-               "totalCount" => 1,
-               "results" => [%{"firstName" => "Ada", "email" => "ada@example.com"}]
-             }
+    test "snake_case selection keys are not client names" do
+      assert %{"success" => false, "errors" => [error]} =
+               run("catalog_digest", ["total_count", %{"results" => ["firstName", "email"]}])
+
+      assert %{"type" => "unknown_map_field", "fields" => ["total_count"]} = error
     end
   end
 

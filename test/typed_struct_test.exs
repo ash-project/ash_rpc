@@ -182,7 +182,7 @@ defmodule AshRpc.TypedStructTest do
     test "an unknown nested map field reports kind map and the struct path", %{rt: rt} do
       assert RequestedFieldsProcessor.process(rt, AshRpc.Test.Project, :read, [
                %{"stats" => [%{"metrics" => ["invalidField"]}]}
-             ]) == {:error, {:unknown_field, :invalid_field, "map", [:stats, :metrics]}}
+             ]) == {:error, {:unknown_field, "invalidField", "map", [:stats, :metrics]}}
     end
   end
 

@@ -60,24 +60,6 @@ defmodule AshRpc.FieldFormatterTest do
              "userName"
   end
 
-  test "format_sort_string/2 keeps every modifier and parses field names" do
-    assert FieldFormatter.format_sort_string(
-             "++viewCount,--title,+id,-isActive,title",
-             :camel_case
-           ) ==
-             "++view_count,--title,+id,-is_active,title"
-
-    assert FieldFormatter.format_sort_string(["-viewCount", "title"], :camel_case) ==
-             "-view_count,title"
-
-    assert FieldFormatter.format_sort_string(nil, :camel_case) == nil
-  end
-
-  test "parse_input_field/2 returns an existing atom or the parsed string" do
-    assert FieldFormatter.parse_input_field("viewCount", :camel_case) == :view_count
-    assert FieldFormatter.parse_input_field("noSuchFieldXyz", :camel_case) == "no_such_field_xyz"
-  end
-
   test "Case conversions" do
     assert AshRpc.Case.snake_to_camel_case("user_name") == "userName"
     assert AshRpc.Case.snake_to_pascal_case("user_name") == "UserName"
@@ -126,37 +108,6 @@ defmodule AshRpc.FieldFormatterTest do
     test "an exception raised by a custom formatter propagates" do
       assert_raise RuntimeError, "custom formatter error", fn ->
         FieldFormatter.format_field_name(:author_name, {__MODULE__, :raise_error})
-      end
-    end
-  end
-
-  describe "parse_input_field/2" do
-    test "parses each built-in casing to the existing atom" do
-      assert FieldFormatter.parse_input_field("emailAddress", :camel_case) == :email_address
-      assert FieldFormatter.parse_input_field("EmailAddress", :pascal_case) == :email_address
-      assert FieldFormatter.parse_input_field("email_address", :snake_case) == :email_address
-      assert FieldFormatter.parse_input_field("Email", :pascal_case) == :email
-    end
-
-    test "an empty name parses to the empty atom under each built-in formatter" do
-      for formatter <- [:camel_case, :pascal_case, :snake_case] do
-        assert FieldFormatter.parse_input_field("", formatter) == :""
-      end
-    end
-
-    test "a {module, function} parser's atom result is returned as-is" do
-      assert FieldFormatter.parse_input_field("input_author_name", {__MODULE__, :strip_input}) ==
-               :author_name
-
-      assert FieldFormatter.parse_input_field("input_email", {__MODULE__, :strip_input}) ==
-               :email
-    end
-
-    test "an unsupported formatter raises ArgumentError" do
-      invalid = String.to_atom("invalid_formatter")
-
-      assert_raise ArgumentError, "Unsupported formatter: :invalid_formatter", fn ->
-        FieldFormatter.parse_input_field("authorName", invalid)
       end
     end
   end
@@ -233,112 +184,11 @@ defmodule AshRpc.FieldFormatterTest do
     end
   end
 
-  describe "parse_input_fields/2" do
-    @parsed %{author_name: "Ada", email_address: "ada@example.com", created_at: "2023-01-01"}
-
-    test "parses every key from each built-in casing" do
-      assert FieldFormatter.parse_input_fields(
-               %{
-                 "authorName" => "Ada",
-                 "emailAddress" => "ada@example.com",
-                 "createdAt" => "2023-01-01"
-               },
-               :camel_case
-             ) == @parsed
-
-      assert FieldFormatter.parse_input_fields(
-               %{
-                 "AuthorName" => "Ada",
-                 "EmailAddress" => "ada@example.com",
-                 "CreatedAt" => "2023-01-01"
-               },
-               :pascal_case
-             ) == @parsed
-
-      assert FieldFormatter.parse_input_fields(
-               %{
-                 "author_name" => "Ada",
-                 "email_address" => "ada@example.com",
-                 "created_at" => "2023-01-01"
-               },
-               :snake_case
-             ) == @parsed
-    end
-
-    test "parses every key with a custom parser, and an empty map stays empty" do
-      assert FieldFormatter.parse_input_fields(
-               %{"input_author_name" => "Ada", "input_email" => "ada@example.com"},
-               {__MODULE__, :strip_input}
-             ) == %{author_name: "Ada", email: "ada@example.com"}
-
-      assert FieldFormatter.parse_input_fields(%{}, :camel_case) == %{}
-      assert FieldFormatter.parse_input_fields(%{}, {__MODULE__, :strip_input}) == %{}
-    end
-
-    test "nested map keys are parsed while nil, list and scalar values are kept" do
-      assert FieldFormatter.parse_input_fields(
-               %{
-                 "authorName" => %{"nested" => "value"},
-                 "emailAddress" => [1, 2, 3],
-                 "createdAt" => nil
-               },
-               :camel_case
-             ) == %{author_name: %{nested: "value"}, email_address: [1, 2, 3], created_at: nil}
-    end
-  end
-
   def prefix_custom(field), do: "custom_#{field}"
   def upcase(field), do: field |> to_string() |> String.upcase()
   def suffix(field, suffix), do: "#{field}_#{suffix}"
   def wrap(field, prefix, suffix), do: "#{prefix}_#{field}_#{suffix}"
   def raise_error(_field), do: raise("custom formatter error")
-
-  def strip_input(field) do
-    field |> to_string() |> String.replace_leading("input_", "") |> String.to_existing_atom()
-  end
-
-  describe "atom safety" do
-    test "resolves an existing field name to its atom" do
-      # :view_count exists as an atom because AshRpc.Test.Post has that attribute.
-      _ = :view_count
-      assert FieldFormatter.resolve_field_name("viewCount", :camel_case) == :view_count
-    end
-
-    test "passes atoms through unchanged" do
-      assert FieldFormatter.resolve_field_name(:already_atom, :camel_case) == :already_atom
-    end
-
-    test "never mints a new atom for an unknown field name" do
-      unique = "atom_bomb_field_name_#{System.unique_integer([:positive])}_xyz"
-      camel = "atomBombFieldName#{System.unique_integer([:positive])}Xyz"
-
-      refute atom_exists?(unique)
-
-      result = FieldFormatter.resolve_field_name(camel, :camel_case)
-
-      # Falls back to the formatted string, which field selection rejects as
-      # an unknown field rather than atomizing.
-      assert is_binary(result)
-      refute atom_exists?(result)
-    end
-
-    test "does not mint atoms for a batch of unique field names" do
-      names = for i <- 1..1_000, do: "atomBombBatch#{i}_#{System.unique_integer([:positive])}"
-
-      Enum.each(names, fn name ->
-        result = FieldFormatter.resolve_field_name(name, :camel_case)
-        assert is_binary(result)
-        refute atom_exists?(result)
-      end)
-    end
-
-    test "does not raise on field names longer than the 255-char atom limit" do
-      long = String.duplicate("a", 300)
-
-      result = FieldFormatter.resolve_field_name(long, :camel_case)
-      assert is_binary(result)
-    end
-  end
 
   describe "atom safety in typed map field selection" do
     # :stats_summary returns AshRpc.Test.PostStats, a NewType map whose client

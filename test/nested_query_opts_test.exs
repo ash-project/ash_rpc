@@ -444,8 +444,8 @@ defmodule AshRpc.NestedQueryOptsTest do
         "page" => %{"limit" => 10, "notAPageOptionXyz" => 1}
       }
 
-      # The key is parsed to a string because no such atom exists.
-      assert {:error, {:unknown_page_keys, ["not_a_page_option_xyz"]}} = parse(params)
+      # A key that isn't a client name is reported as sent.
+      assert {:error, {:unknown_page_keys, ["notAPageOptionXyz"]}} = parse(params)
 
       assert %{"success" => false, "errors" => [error]} =
                AshRpc.run_action(@profile, ctx(), params)
@@ -912,9 +912,9 @@ defmodule AshRpc.NestedQueryOptsTest do
         ]
       }
 
-      # The key stays a string because no such atom exists.
+      # A key that isn't a client name is reported as sent.
       assert {:error,
-              {:invalid_nested_page, :comments, {:unknown_keys, ["not_a_page_option_xyz"]}, []}} =
+              {:invalid_nested_page, :comments, {:unknown_keys, ["notAPageOptionXyz"]}, []}} =
                parse(params)
 
       assert %{"success" => false, "errors" => [error]} =
@@ -929,6 +929,15 @@ defmodule AshRpc.NestedQueryOptsTest do
 
       assert error["details"]["reason"] == "unknown_keys"
       assert error["details"]["hint"] == hint()
+    end
+
+    test "a non-client-cased nested page key is reported as sent, not re-cased" do
+      error =
+        gate_error("list_posts", %{
+          "comments" => %{"page" => %{"limit" => 1, "page_size" => 2}, "fields" => ["id"]}
+        })
+
+      assert error["vars"] == %{"field" => "comments", "keys" => "page_size"}
     end
 
     test "a keyset page key on an offset-only relationship is invalid_pagination" do
@@ -1163,6 +1172,63 @@ defmodule AshRpc.NestedQueryOptsTest do
                })
 
       assert data == %{"id" => post.id, "comments" => [%{"body" => "comment-3"}]}
+    end
+  end
+
+  describe "strict names in a nested envelope" do
+    test "an envelope filter and sort with internal names are rejected" do
+      seed_post(1)
+
+      params = fn opts ->
+        %{
+          "action" => "list_posts",
+          "fields" => ["id", %{"comments" => Map.put(opts, "fields", ["rating"])}]
+        }
+      end
+
+      assert %{"success" => false} =
+               AshRpc.run_action(@profile, ctx(), params.(%{"sort" => "-weighted_rating"}))
+
+      assert %{"success" => false} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 params.(%{"filter" => %{"rating" => %{"greater_than" => 1}}})
+               )
+    end
+
+    test "envelope keys follow the output formatter" do
+      manifest =
+        AshRpc.Test.ManifestBuilder.build(output_formatter: {AshRpc.Test.Formatters, :upcase})
+
+      assert %{"SUCCESS" => true} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "ACTION" => "list_posts",
+                   "FIELDS" => [
+                     "ID",
+                     %{"COMMENTS" => %{"FIELDS" => ["RATING"], "SORT" => "-RATING"}}
+                   ]
+                 },
+                 manifest: manifest
+               )
+
+      # Lowercase envelope keys are not the upcase client names
+      assert %{"SUCCESS" => false} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "ACTION" => "list_posts",
+                   "FIELDS" => [
+                     "ID",
+                     %{"COMMENTS" => %{"fields" => ["RATING"], "sort" => "-RATING"}}
+                   ]
+                 },
+                 manifest: manifest
+               )
     end
   end
 end

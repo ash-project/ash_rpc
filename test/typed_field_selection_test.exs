@@ -154,6 +154,27 @@ defmodule AshRpc.TypedFieldSelectionTest do
       assert data == %{"id" => id, "palette" => %{"primary" => "red", "secondary" => "blue"}}
     end
 
+    test "a custom map-storage value round-trips its keys verbatim" do
+      assert %{"success" => true, "data" => data} =
+               AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                 "action" => "create_project",
+                 "input" => %{
+                   "palette" => %{
+                     "primary" => "red",
+                     "secondary" => "blue",
+                     "accent_color" => "teal"
+                   }
+                 },
+                 "fields" => ["palette"]
+               })
+
+      assert data["palette"] == %{
+               "primary" => "red",
+               "secondary" => "blue",
+               "accent_color" => "teal"
+             }
+    end
+
     test "a bare custom-type field goes to select and the template", %{rt: rt} do
       assert {:ok, {[:id, :palette], [], [:id, :palette]}} =
                AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Project, :read, [

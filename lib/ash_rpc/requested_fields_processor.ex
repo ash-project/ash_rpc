@@ -20,7 +20,7 @@ defmodule AshRpc.RequestedFieldsProcessor do
   ## Runtime
 
   Field selection reads its lookups (`resources`, `actions`, `types`) and the
-  input formatter from an `AshRpc.Runtime`, passed explicitly by every caller.
+  request vocabulary from an `AshRpc.Runtime`, passed explicitly by every caller.
   """
 
   alias AshRpc.FieldProcessing.{Atomizer, FieldSelector}

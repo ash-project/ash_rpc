@@ -7,11 +7,13 @@ defmodule AshRpc.Manifest.Decorator do
   Writes `custom.ash_rpc` onto an `%Ash.Info.Manifest{}` using an
   `AshRpc.MappingSource`:
 
-    * manifest — mapping source, formatters, wire `entrypoints`, `lookups`
+    * manifest — mapping source, output formatter, vocabulary, wire
+      `entrypoints`, `lookups`
     * exposed resources (domain and embedded) — client names, argument
       overrides, bulk-authorization strategy; many-cardinality relationships
       to exposed destinations get pagination capabilities
-    * mapped types — field-name overrides
+    * every type tree, inline types included — forward and reverse client
+      names (`decorate_type/3`)
     * every entrypoint action — expected input keys, input field types,
       return classification
 
@@ -22,10 +24,18 @@ defmodule AshRpc.Manifest.Decorator do
   alias Ash.Info.Manifest
   alias AshRpc.{FieldFormatter, Introspection, Manifest.NameCollisionError}
 
+  @vocabulary %{
+    params: [:action, :fields, :get_by, :filter, :sort, :page, :tenant, :metadata_fields],
+    page: [:limit, :offset, :count, :after, :before],
+    query_opts: [:page, :filter, :sort, :limit, :offset, :args, :fields]
+  }
+
+  # `Ash.Filter` keeps its operator aliases in a private attribute; the
+  # filter_input tests assert each one is accepted.
+  @filter_operator_aliases [:equals, :not_equals, :gt, :lt, :gte, :lte]
+
   @spec decorate(Manifest.t(), module(), keyword()) :: Manifest.t()
   def decorate(%Manifest{} = manifest, mapping_source, opts \\ []) when is_atom(mapping_source) do
-    input_formatter = Keyword.get_lazy(opts, :input_formatter, &mapping_source.input_formatter/0)
-
     output_formatter =
       Keyword.get_lazy(opts, :output_formatter, &mapping_source.output_formatter/0)
 
@@ -48,9 +58,9 @@ defmodule AshRpc.Manifest.Decorator do
 
     payload = %{
       mapping_source: mapping_source,
-      input_formatter: input_formatter,
       output_formatter: output_formatter,
-      entrypoints: wire_entrypoints(entrypoints, mapping_source)
+      entrypoints: wire_entrypoints(entrypoints, mapping_source, output_formatter),
+      vocabulary: vocabulary(output_formatter)
     }
 
     %Manifest{
@@ -82,6 +92,8 @@ defmodule AshRpc.Manifest.Decorator do
 
       payload = %{
         field_names: field_names,
+        client_field_names: reverse_map(field_names),
+        calculation_argument_names: calculation_argument_names(resource, ctx.formatter),
         field_name_overrides: overrides,
         reverse_field_name_overrides: reverse_map(overrides),
         argument_name_overrides: argument_overrides,
@@ -93,11 +105,21 @@ defmodule AshRpc.Manifest.Decorator do
       %Manifest.Resource{
         resource
         | custom: Map.put(resource.custom, :ash_rpc, payload),
+          fields:
+            Map.new(resource.fields, fn {name, field} -> {name, decorate_field(field, ctx)} end),
           relationships: decorate_relationships(resource, ctx)
       }
     else
       resource
     end
+  end
+
+  defp decorate_field(%Manifest.Field{} = field, ctx) do
+    %Manifest.Field{
+      field
+      | type: field.type && decorate_type(field.type, ctx),
+        arguments: decorate_entries(field.arguments, ctx)
+    }
   end
 
   defp full_field_names(%Manifest.Resource{module: module} = resource, overrides, formatter) do
@@ -107,6 +129,16 @@ defmodule AshRpc.Manifest.Decorator do
       {field,
        Map.get(overrides, field) || client_name!(field, formatter, "resource #{inspect(module)}")}
     end)
+  end
+
+  defp calculation_argument_names(%Manifest.Resource{module: module, fields: fields}, formatter) do
+    for {name, %Manifest.Field{kind: :calculation, arguments: [_ | _] = args}} <- fields,
+        into: %{} do
+      where = "calculation #{inspect(name)} on #{inspect(module)}"
+      forward = Map.new(args, &{&1.name, client_name!(&1.name, formatter, where)})
+      check_collisions!(forward, where)
+      {name, reverse_map(forward)}
+    end
   end
 
   defp argument_overrides(module, ctx) do
@@ -178,25 +210,111 @@ defmodule AshRpc.Manifest.Decorator do
     %Manifest.Type{type | resource: decorate_resource(r, ctx)}
   end
 
-  defp decorate_type(%Manifest.Type{} = type, ctx) do
+  defp decorate_type(%Manifest.Type{} = type, ctx),
+    do: decorate_type(type, ctx.formatter, ctx.source)
+
+  @doc """
+  Decorates one `%Ash.Info.Manifest.Type{}` tree with client names, bottom-up:
+  nested field, element, member and item types first, then the type itself.
+  Types with named fields get `field_names`/`client_field_names`, plus the
+  `field_name_overrides` pair when the mapping source has overrides. Unions
+  get `client_member_names`. Resource and named-reference nodes are left
+  alone; their names live on the resource or the named type.
+
+  Decoration calls this for every type in the manifest. Extensions call it
+  for types that never pass through the manifest, so `AshRpc.ClientNames`
+  can resolve their input keys.
+  """
+  @spec decorate_type(Manifest.Type.t(), AshRpc.MappingSource.formatter(), module()) ::
+          Manifest.Type.t()
+  def decorate_type(%Manifest.Type{kind: kind} = type, _formatter, _source)
+      when kind in [:type_ref, :resource, :embedded_resource],
+      do: type
+
+  def decorate_type(%Manifest.Type{} = type, formatter, source) do
+    ctx = %{formatter: formatter, source: source}
+    type |> decorate_children(ctx) |> put_type_names(ctx)
+  end
+
+  defp decorate_children(%Manifest.Type{} = type, ctx) do
+    %Manifest.Type{
+      type
+      | item_type: type.item_type && decorate_type(type.item_type, ctx.formatter, ctx.source),
+        fields: decorate_entries(type.fields, ctx),
+        element_types: decorate_entries(type.element_types, ctx),
+        members: decorate_entries(type.members, ctx)
+    }
+  end
+
+  defp decorate_entries(entries, ctx) when is_list(entries) do
+    Enum.map(entries, fn
+      %{type: %Manifest.Type{} = t} = entry ->
+        %{entry | type: decorate_type(t, ctx.formatter, ctx.source)}
+
+      entry ->
+        entry
+    end)
+  end
+
+  defp decorate_entries(other, _ctx), do: other
+
+  defp put_type_names(%Manifest.Type{} = type, ctx) do
+    overrides = type_overrides(type, ctx.source)
+    where = "type #{inspect(type.name)} (#{inspect(type.module)})"
+
+    payload =
+      %{}
+      |> put_overrides(overrides)
+      |> put_field_names(Manifest.Type.get_fields(type), overrides || %{}, ctx.formatter, where)
+      |> put_member_names(type, ctx.formatter, where)
+
+    if payload == %{},
+      do: type,
+      else: %Manifest.Type{type | custom: Map.put(type.custom, :ash_rpc, payload)}
+  end
+
+  defp type_overrides(type, source) do
     module = Manifest.Type.effective_module(type)
 
-    case not is_nil(module) and Code.ensure_loaded?(module) and
-           ctx.source.type_field_names(module) do
-      mapping when is_map(mapping) ->
-        overrides = Map.new(mapping)
-
-        payload = %{
-          field_name_overrides: overrides,
-          reverse_field_name_overrides: reverse_map(overrides)
-        }
-
-        %Manifest.Type{type | custom: Map.put(type.custom, :ash_rpc, payload)}
-
-      _ ->
-        type
+    case not is_nil(module) and Code.ensure_loaded?(module) and source.type_field_names(module) do
+      mapping when is_map(mapping) -> Map.new(mapping)
+      _ -> nil
     end
   end
+
+  defp put_overrides(payload, nil), do: payload
+
+  defp put_overrides(payload, overrides) do
+    Map.merge(payload, %{
+      field_name_overrides: overrides,
+      reverse_field_name_overrides: reverse_map(overrides)
+    })
+  end
+
+  defp put_field_names(payload, [], _overrides, _formatter, _where), do: payload
+
+  defp put_field_names(payload, fields, overrides, formatter, where) do
+    forward =
+      Map.new(fields, fn %{name: name} ->
+        {name, Map.get(overrides, name) || client_name!(name, formatter, where)}
+      end)
+
+    check_collisions!(forward, where)
+    Map.merge(payload, %{field_names: forward, client_field_names: reverse_map(forward)})
+  end
+
+  defp put_member_names(
+         payload,
+         %Manifest.Type{kind: :union, members: [_ | _] = members},
+         formatter,
+         where
+       ) do
+    forward = Map.new(members, &{&1.name, client_name!(&1.name, formatter, where)})
+    check_collisions!(forward, where)
+    Map.put(payload, :client_member_names, reverse_map(forward))
+  end
+
+  defp put_member_names(payload, _type, _formatter, _where), do: payload
 
   # ── entrypoints / actions ────────────────────────────────────────
 
@@ -208,6 +326,7 @@ defmodule AshRpc.Manifest.Decorator do
   end
 
   defp decorate_action(%Manifest.Action{} = action, resource, resource_lookup, type_lookup, ctx) do
+    action = decorate_action_types(action, ctx)
     resource_struct = Map.get(resource_lookup, resource)
 
     expected =
@@ -242,6 +361,15 @@ defmodule AshRpc.Manifest.Decorator do
 
   defp decorate_action(action, _resource, _rl, _tl, _ctx), do: action
 
+  defp decorate_action_types(%Manifest.Action{} = action, ctx) do
+    %Manifest.Action{
+      action
+      | inputs: decorate_entries(action.inputs, ctx),
+        returns: action.returns && decorate_type(action.returns, ctx),
+        metadata: decorate_entries(action.metadata, ctx)
+    }
+  end
+
   defp collision_message(action, resource_struct, formatter, where) do
     action.inputs
     |> Enum.group_by(
@@ -255,7 +383,25 @@ defmodule AshRpc.Manifest.Decorator do
     |> then(&"Client name collision in #{where}: #{&1}")
   end
 
-  defp wire_entrypoints(entrypoints, source) do
+  defp vocabulary(formatter) do
+    filter_ops =
+      ([:and, :or, :not, :input] ++
+         Enum.map(Ash.Filter.builtin_operators(), & &1.name()) ++
+         @filter_operator_aliases ++
+         Enum.map(Ash.Filter.builtin_functions(), & &1.name()))
+      |> Enum.uniq()
+
+    @vocabulary
+    |> Map.put(:filter_ops, filter_ops)
+    |> Map.new(fn {scope, names} ->
+      where = "vocabulary #{inspect(scope)}"
+      forward = Map.new(names, &{&1, client_name!(&1, formatter, where)})
+      check_collisions!(forward, where)
+      {scope, reverse_map(forward)}
+    end)
+  end
+
+  defp wire_entrypoints(entrypoints, source, formatter) do
     Enum.reduce(entrypoints, %{}, fn entrypoint, acc ->
       case source.entrypoint(entrypoint) do
         nil ->
@@ -267,9 +413,21 @@ defmodule AshRpc.Manifest.Decorator do
                   "duplicate wire entrypoint name #{inspect(name)} from #{inspect(source)}"
           end
 
-          Map.put(acc, name, e)
+          Map.put(acc, name, put_client_metadata_names(e, formatter))
       end
     end)
+  end
+
+  defp put_client_metadata_names(%AshRpc.Entrypoint{} = e, formatter) do
+    where = "metadata of entrypoint #{inspect(e.name)}"
+
+    forward =
+      Map.new(e.exposed_metadata_fields, fn field ->
+        {field, Map.get(e.metadata_field_names, field) || client_name!(field, formatter, where)}
+      end)
+
+    check_collisions!(forward, where)
+    %AshRpc.Entrypoint{e | client_metadata_field_names: reverse_map(forward)}
   end
 
   # ── helpers ───────────────────────────────────────────────────────

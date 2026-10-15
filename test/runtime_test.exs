@@ -23,7 +23,7 @@ defmodule AshRpc.RuntimeTest do
     assert runtime.profile == AshRpc.Test.Profile
     assert runtime.manifest == manifest
     assert runtime.mapping_source == AshRpc.Test.MappingSource
-    assert runtime.input_formatter == :camel_case
+    refute Map.has_key?(Map.from_struct(runtime), :input_formatter)
     assert runtime.output_formatter == :camel_case
     assert runtime.resource_lookup == AshRpc.Manifest.resource_lookup(manifest)
     assert runtime.entrypoints["list_posts"].action == :read
@@ -44,5 +44,13 @@ defmodule AshRpc.RuntimeTest do
     runtime = Runtime.from_manifest(AshRpc.Test.ManifestBuilder.manifest())
     assert runtime.profile == nil
     assert runtime.output_formatter == :camel_case
+  end
+
+  test "the runtime carries the manifest vocabulary" do
+    manifest = AshRpc.Test.ManifestBuilder.manifest()
+    runtime = Runtime.from_manifest(manifest)
+
+    assert runtime.vocabulary == AshRpc.Manifest.vocabulary(manifest)
+    assert runtime.vocabulary.params["getBy"] == :get_by
   end
 end

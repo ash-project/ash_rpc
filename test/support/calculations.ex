@@ -11,7 +11,8 @@ defmodule AshRpc.Test.Calculations.Excerpt do
 
   @impl true
   def calculate(records, _opts, context) do
-    Enum.map(records, &String.slice(&1.title, 0, context.arguments.length))
+    omission = Map.get(context.arguments, :omission_text) || ""
+    Enum.map(records, &(String.slice(&1.title, 0, context.arguments.length) <> omission))
   end
 end
 

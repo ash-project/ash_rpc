@@ -472,4 +472,47 @@ defmodule AshRpc.FilterSortTest do
                parse(%{"action" => "get_post", "fields" => ["title"], "page" => %{}})
     end
   end
+
+  describe "strict client names" do
+    setup do
+      seed_posts()
+    end
+
+    test "an internal snake_case sort name is rejected like an unknown name" do
+      assert error_types(%{
+               "action" => "list_posts",
+               "fields" => ["title"],
+               "sort" => "-view_count"
+             }) ==
+               error_types(%{
+                 "action" => "list_posts",
+                 "fields" => ["title"],
+                 "sort" => "-bogusField"
+               })
+    end
+
+    test "an internal snake_case filter name is rejected like an unknown name" do
+      params =
+        &%{"action" => "list_posts", "fields" => ["title"], "filter" => %{&1 => %{"eq" => 1}}}
+
+      assert error_types(params.("view_count")) == error_types(params.("bogusField"))
+    end
+
+    test "an internal operator name is rejected" do
+      assert %{"success" => false} =
+               AshRpc.run_action(@profile, ctx(), %{
+                 "action" => "list_posts",
+                 "fields" => ["title"],
+                 "filter" => %{"viewCount" => %{"greater_than" => 1}}
+               })
+    end
+
+    test "a param key in a non-client casing is dropped like an unknown key" do
+      # "Sort" used to lenient-parse to :sort under camelCase
+      assert {:ok, request} =
+               parse(%{"action" => "list_posts", "fields" => ["title"], "Sort" => "-title"})
+
+      assert request.sort == nil
+    end
+  end
 end

@@ -93,9 +93,9 @@ defmodule AshRpc.RunActionTest do
                @profile,
                ctx(),
                %{
-                 "action" => "create_post",
-                 "input" => %{"title" => "x"},
-                 "fields" => ["viewCount"]
+                 "Action" => "create_post",
+                 "input" => %{"Title" => "x"},
+                 "Fields" => ["ViewCount"]
                },
                manifest: manifest
              )
@@ -317,6 +317,72 @@ defmodule AshRpc.RunActionTest do
                  }
                ]
              }
+    end
+
+    test "an unknown top-level page key under camelCase is invalid_pagination with the key as sent" do
+      params = %{
+        "action" => "list_posts",
+        "fields" => ["id"],
+        "page" => %{"limit" => 1, "page_size" => 2}
+      }
+
+      assert {:error, {:unknown_page_keys, ["page_size"]}} = parse(params)
+
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.run_action(@profile, ctx(), params)
+
+      assert %{"fields" => ["page_size"], "vars" => %{"keys" => "page_size"}} = error
+    end
+
+    test "a page key in a non-client casing is an unknown key reported as sent" do
+      # "Limit" used to lenient-parse to :limit and "pageSize" was reported as "page_size"
+      assert {:error, {:unknown_page_keys, ["Limit", "pageSize"]}} =
+               parse(%{
+                 "action" => "list_posts",
+                 "fields" => ["id"],
+                 "page" => %{"Limit" => 1, "pageSize" => 2}
+               })
+    end
+  end
+
+  describe "strict input keys" do
+    test "a snake_case input key under camelCase is unknown_input with the stale-client hint" do
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.run_action(@profile, ctx(), %{
+                 "action" => "create_post",
+                 "input" => %{"title" => "x", "view_count" => 1},
+                 "fields" => ["id"]
+               })
+
+      assert %{"type" => "unknown_input", "fields" => ["view_count"], "details" => %{"hint" => _}} =
+               error
+    end
+
+    test "each unknown key is its own error" do
+      assert %{"success" => false, "errors" => errors} =
+               AshRpc.run_action(@profile, ctx(), %{
+                 "action" => "create_post",
+                 "input" => %{"title" => "x", "bogusA" => 1, "bogusB" => 2},
+                 "fields" => ["id"]
+               })
+
+      assert errors |> Enum.map(& &1["fields"]) |> Enum.sort() == [["bogusA"], ["bogusB"]]
+    end
+
+    test "the same keys succeed under snake_case" do
+      manifest = AshRpc.Test.ManifestBuilder.build(output_formatter: :snake_case)
+
+      assert %{"success" => true, "data" => %{"view_count" => 1}} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "action" => "create_post",
+                   "input" => %{"title" => "x", "view_count" => 1},
+                   "fields" => ["view_count"]
+                 },
+                 manifest: manifest
+               )
     end
   end
 

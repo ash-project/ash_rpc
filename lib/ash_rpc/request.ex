@@ -26,6 +26,7 @@ defmodule AshRpc.Request do
           sort: String.t() | nil,
           pagination: map() | nil,
           show_metadata: list(atom()),
+          query_errors: [Exception.t()],
           runtime: AshRpc.Runtime.t(),
           entrypoint: AshRpc.Entrypoint.t()
         }
@@ -47,6 +48,7 @@ defmodule AshRpc.Request do
     :sort,
     :pagination,
     :runtime,
-    show_metadata: []
+    show_metadata: [],
+    query_errors: []
   ]
 end

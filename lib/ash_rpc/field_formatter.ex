@@ -4,7 +4,8 @@
 
 defmodule AshRpc.FieldFormatter do
   @moduledoc """
-  Handles field name formatting for input parameters and output fields.
+  Formats internal field names for clients. Client names are resolved by
+  `AshRpc.ClientNames`, never parsed.
 
   Supports built-in formatters and custom formatter functions.
   """
@@ -47,60 +48,6 @@ defmodule AshRpc.FieldFormatter do
   def format_field_for_client(other, _resource, _formatter), do: other
 
   @doc """
-  Parses input field names from client format to internal format.
-
-  This is used for converting incoming client field names to the internal
-  Elixir atom keys that Ash expects.
-
-  ## Examples
-
-      iex> AshRpc.FieldFormatter.parse_input_field("userName", :camel_case)
-      :user_name
-  """
-  def parse_input_field(field_name, formatter)
-      when is_binary(field_name) or is_atom(field_name) do
-    case parse_field_name(field_name, formatter) do
-      name when is_binary(name) ->
-        try do
-          String.to_existing_atom(name)
-        rescue
-          ArgumentError -> name
-        end
-
-      name ->
-        name
-    end
-  end
-
-  @doc """
-  Resolves a field name to its existing atom, applying the formatter for case conversion.
-
-  Atoms are passed through unchanged. Every valid string field name corresponds to
-  an atom that already exists (resource attributes, relationships, calculations, and
-  aggregates are all defined at compile time), so a string resolves to an existing
-  atom when one is available and otherwise returns the formatted string unchanged.
-  Downstream field selection compares the result against the known field atoms, so an
-  unresolved name simply fails as an unknown field.
-
-  This deliberately never calls `String.to_atom/1`: client-supplied field names
-  are attacker-controllable, and minting a fresh atom per name would allow atom
-  table exhaustion (a node-wide denial of service).
-
-  ## Examples
-
-      iex> AshRpc.FieldFormatter.resolve_field_name("userName", :camel_case)
-      :user_name
-
-      iex> AshRpc.FieldFormatter.resolve_field_name(:user_name, :camel_case)
-      :user_name
-  """
-  def resolve_field_name(field_name, _formatter) when is_atom(field_name), do: field_name
-
-  def resolve_field_name(field_name, formatter) when is_binary(field_name) do
-    parse_input_field(field_name, formatter)
-  end
-
-  @doc """
   Formats a map of fields, converting all keys using the specified formatter.
 
   ## Examples
@@ -113,49 +60,6 @@ defmodule AshRpc.FieldFormatter do
       formatted_key = format_field_name(key, formatter)
       {formatted_key, value}
     end)
-  end
-
-  @doc """
-  Parses a map of input fields, converting all keys from client format to internal format.
-
-  Recursively processes nested maps and arrays to ensure all field names are properly formatted.
-  This is essential for union types and embedded resources that contain nested field structures.
-
-  ## Examples
-
-      iex> AshRpc.FieldFormatter.parse_input_fields(%{"userName" => "John", "userEmail" => "john@example.com"}, :camel_case)
-      %{user_name: "John", user_email: "john@example.com"}
-
-      iex> AshRpc.FieldFormatter.parse_input_fields(%{"attachments" => [%{"mimeType" => "pdf", "attachmentType" => "file"}]}, :camel_case)
-      %{attachments: [%{mime_type: "pdf", attachment_type: "file"}]}
-  """
-  def parse_input_fields(fields, formatter) when is_map(fields) do
-    Enum.into(fields, %{}, fn {key, value} ->
-      internal_key = parse_input_field(key, formatter)
-      formatted_value = parse_input_value(value, formatter)
-      {internal_key, formatted_value}
-    end)
-  end
-
-  @doc """
-  Recursively parses input values, handling nested structures.
-
-  This function ensures that all nested maps and arrays containing maps
-  have their field names properly formatted according to the formatter.
-
-  Only handles JSON-decoded data (maps, lists, primitives) - no structs.
-  """
-  def parse_input_value(value, formatter) do
-    case value do
-      map when is_map(map) ->
-        parse_input_fields(map, formatter)
-
-      list when is_list(list) ->
-        Enum.map(list, fn item -> parse_input_value(item, formatter) end)
-
-      primitive ->
-        primitive
-    end
   end
 
   @doc """
@@ -262,77 +166,5 @@ defmodule AshRpc.FieldFormatter do
   defp is_snake_case?(string) do
     # snake_case: lowercase with underscores, no uppercase
     String.match?(string, ~r/^[a-z][a-z0-9_]*$/) && String.contains?(string, "_")
-  end
-
-  @doc """
-  Formats a sort string by converting field names from client format to internal format.
-
-  Handles Ash.Query.sort_input format:
-  - "name" or "+name" (ascending)
-  - "++name" (ascending with nils first)
-  - "-name" (descending)
-  - "--name" (descending with nils last)
-  - "-name,++title" (multiple fields with different modifiers)
-
-  Preserves sort modifiers while converting field names using the input formatter.
-
-  ## Examples
-
-      iex> AshRpc.FieldFormatter.format_sort_string("--startDate,++insertedAt", :camel_case)
-      "--start_date,++inserted_at"
-
-      iex> AshRpc.FieldFormatter.format_sort_string("-userName", :camel_case)
-      "-user_name"
-
-      iex> AshRpc.FieldFormatter.format_sort_string(nil, :camel_case)
-      nil
-  """
-  def format_sort_string(nil, _formatter), do: nil
-
-  def format_sort_string(sort_list, formatter) when is_list(sort_list) do
-    sort_list
-    |> Enum.map_join(",", &format_single_sort_field(&1, formatter))
-  end
-
-  def format_sort_string(sort_string, formatter) when is_binary(sort_string) do
-    sort_string
-    |> String.split(",")
-    |> Enum.map_join(",", &format_single_sort_field(&1, formatter))
-  end
-
-  defp format_single_sort_field(field_with_modifier, formatter) do
-    {modifier, field_name} =
-      case field_with_modifier do
-        "++" <> field_name -> {"++", field_name}
-        "--" <> field_name -> {"--", field_name}
-        "+" <> field_name -> {"+", field_name}
-        "-" <> field_name -> {"-", field_name}
-        field_name -> {"", field_name}
-      end
-
-    modifier <> to_string(parse_input_field(field_name, formatter))
-  end
-
-  # Private helper for parsing field names from client format to internal format
-  defp parse_field_name(field_name, formatter) do
-    case formatter do
-      :camel_case ->
-        field_name |> to_string() |> camel_to_snake_case()
-
-      :pascal_case ->
-        field_name |> to_string() |> pascal_to_snake_case()
-
-      :snake_case ->
-        field_name |> to_string()
-
-      {module, function} ->
-        apply(module, function, [field_name])
-
-      {module, function, extra_args} ->
-        apply(module, function, [field_name | extra_args])
-
-      _ ->
-        raise ArgumentError, "Unsupported formatter: #{inspect(formatter)}"
-    end
   end
 end

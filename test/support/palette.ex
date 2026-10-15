@@ -15,15 +15,28 @@ defmodule AshRpc.Test.Palette do
   def cast_input(nil, _constraints), do: {:ok, nil}
 
   def cast_input(%{} = value, _constraints) do
-    primary = Map.get(value, :primary, Map.get(value, "primary"))
-    secondary = Map.get(value, :secondary, Map.get(value, "secondary"))
+    primary = fetch(value, :primary)
+    secondary = fetch(value, :secondary)
+    accent_color = fetch(value, :accent_color)
 
-    if is_binary(primary) and is_binary(secondary),
-      do: {:ok, %{primary: primary, secondary: secondary}},
-      else: :error
+    cond do
+      not (is_binary(primary) and is_binary(secondary)) ->
+        :error
+
+      is_nil(accent_color) ->
+        {:ok, %{primary: primary, secondary: secondary}}
+
+      is_binary(accent_color) ->
+        {:ok, %{primary: primary, secondary: secondary, accent_color: accent_color}}
+
+      true ->
+        :error
+    end
   end
 
   def cast_input(_value, _constraints), do: :error
+
+  defp fetch(value, key), do: Map.get(value, key, Map.get(value, Atom.to_string(key)))
 
   @impl true
   def cast_stored(value, constraints), do: cast_input(value, constraints)

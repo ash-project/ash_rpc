@@ -13,8 +13,6 @@ defmodule AshRpc.FieldNameTranslationTest do
     @behaviour AshRpc.MappingSource
 
     @impl true
-    defdelegate input_formatter, to: AshRpc.Test.MappingSource
-    @impl true
     defdelegate output_formatter, to: AshRpc.Test.MappingSource
     @impl true
     defdelegate exposed_resource?(resource), to: AshRpc.Test.MappingSource
@@ -94,20 +92,23 @@ defmodule AshRpc.FieldNameTranslationTest do
     do: AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, params, manifest: manifest)
 
   # Formatter variants are built once per module; tests pick theirs by name.
+  @round_trip_formatters [
+    :camel_case,
+    :pascal_case,
+    :snake_case,
+    {AshRpc.Test.Formatters, :upcase}
+  ]
+
   setup_all do
     %{
       manifests: %{
-        pascal_case:
-          AshRpc.Test.ManifestBuilder.build(
-            input_formatter: :pascal_case,
-            output_formatter: :pascal_case
-          ),
-        snake_case:
-          AshRpc.Test.ManifestBuilder.build(
-            input_formatter: :snake_case,
-            output_formatter: :snake_case
-          )
-      }
+        pascal_case: AshRpc.Test.ManifestBuilder.build(output_formatter: :pascal_case),
+        snake_case: AshRpc.Test.ManifestBuilder.build(output_formatter: :snake_case)
+      },
+      round_trip:
+        for f <- @round_trip_formatters, into: %{} do
+          {f, AshRpc.Test.ManifestBuilder.build(output_formatter: f)}
+        end
     }
   end
 
@@ -152,38 +153,15 @@ defmodule AshRpc.FieldNameTranslationTest do
              }
     end
 
-    test "snake_case keys in nested input and nested selection are accepted and output is camelCase" do
-      assert %{"success" => true, "data" => data} =
+    test "snake_case keys in a nested selection are not client names" do
+      assert %{"success" => false, "errors" => [error]} =
                run(%{
                  "action" => "create_project",
-                 "input" => %{
-                   "metadata" => %{"category" => "development", "priority_score" => 9},
-                   "stats" => %{
-                     "view_count" => 15,
-                     "edit_count" => 3,
-                     "metrics" => %{"focus_seconds" => 1200, "efficiency" => 0.85}
-                   }
-                 },
-                 "fields" => [
-                   %{"metadata" => ["category", "priority_score"]},
-                   %{
-                     "stats" => [
-                       "view_count",
-                       "edit_count",
-                       %{"metrics" => ["focus_seconds", "efficiency"]}
-                     ]
-                   }
-                 ]
+                 "input" => %{"metadata" => %{"category" => "development", "priorityScore" => 9}},
+                 "fields" => [%{"metadata" => ["category", "priority_score"]}]
                })
 
-      assert data == %{
-               "metadata" => %{"category" => "development", "priorityScore" => 9},
-               "stats" => %{
-                 "viewCount" => 15,
-                 "editCount" => 3,
-                 "metrics" => %{"focusSeconds" => 1200, "efficiency" => 0.85}
-               }
-             }
+      assert %{"type" => "unknown_field", "fields" => ["metadata.priority_score"]} = error
     end
   end
 
@@ -192,6 +170,8 @@ defmodule AshRpc.FieldNameTranslationTest do
   describe "overrides under non-camelCase formatters" do
     for {formatter, names} <- [
           pascal_case: %{
+            action: "Action",
+            fields: "Fields",
             success: "Success",
             data: "Data",
             id: "Id",
@@ -203,6 +183,8 @@ defmodule AshRpc.FieldNameTranslationTest do
             total_count: "TotalCount"
           },
           snake_case: %{
+            action: "action",
+            fields: "fields",
             success: "success",
             data: "data",
             id: "id",
@@ -224,7 +206,7 @@ defmodule AshRpc.FieldNameTranslationTest do
         result =
           run(
             %{
-              "action" => "create_intake",
+              n.action => "create_intake",
               "input" => %{
                 n.user_name => "someone",
                 n.stats => %{
@@ -233,7 +215,7 @@ defmodule AshRpc.FieldNameTranslationTest do
                   n.last_updated_at => "2024-01-01T00:00:00Z"
                 }
               },
-              "fields" => [%{n.stats => ["totalCount1", "isComplete", n.last_updated_at]}]
+              n.fields => [%{n.stats => ["totalCount1", "isComplete", n.last_updated_at]}]
             },
             manifests[@formatter]
           )
@@ -257,9 +239,9 @@ defmodule AshRpc.FieldNameTranslationTest do
         result =
           run(
             %{
-              "action" => "catalog_task_stats",
+              n.action => "catalog_task_stats",
               "input" => %{n.task_id => Ash.UUID.generate()},
-              "fields" => [n.total_count, "completed", "isUrgent"]
+              n.fields => [n.total_count, "completed", "isUrgent"]
             },
             manifests[@formatter]
           )
@@ -277,7 +259,7 @@ defmodule AshRpc.FieldNameTranslationTest do
 
         result =
           run(
-            %{"action" => "list_authors", "fields" => [n.id, n.name, "isActive"]},
+            %{n.action => "list_authors", n.fields => [n.id, n.name, "isActive"]},
             manifests[@formatter]
           )
 
@@ -444,7 +426,7 @@ defmodule AshRpc.FieldNameTranslationTest do
       assert Ash.get!(AshRpc.Test.Post, post.id).view_count == 5
     end
 
-    test "a private argument under its internal name is not mapped and is ignored", %{post: post} do
+    test "a private argument under its internal name is unknown_input", %{post: post} do
       params = %{
         "action" => "set_post_viewed",
         "identity" => post.id,
@@ -452,17 +434,103 @@ defmodule AshRpc.FieldNameTranslationTest do
         "fields" => ["id"]
       }
 
-      # The key is not translated to the argument atom: it stays a client
-      # string, which Ash only matches against public arguments.
-      assert {:ok, %AshRpc.Request{input: input}} =
-               parse(params)
+      # Private arguments have no client name, so the key is rejected before
+      # Ash runs instead of being passed through and ignored.
+      assert parse(params) == {:error, [unknown_input: "audit_note"]}
 
-      assert input == %{:is_viewed? => true, "audit_note" => "x"}
+      assert %{
+               "success" => false,
+               "errors" => [%{"type" => "unknown_input", "fields" => ["audit_note"]}]
+             } =
+               set_viewed(post, %{"isViewed" => true, "audit_note" => "x"})
 
-      assert set_viewed(post, %{"isViewed" => true, "audit_note" => "x"}) == %{
-               "success" => true,
-               "data" => %{"id" => post.id, "title" => "Hello", "viewCount" => 1}
-             }
+      assert Ash.get!(AshRpc.Test.Post, post.id).view_count == 5
+    end
+  end
+
+  describe "wire round trip" do
+    for f <- @round_trip_formatters do
+      @f f
+      test "every request part uses client names under #{inspect(f)}", %{round_trip: manifests} do
+        f = @f
+        m = Map.fetch!(manifests, f)
+        n = &AshRpc.FieldFormatter.format_field_name(&1, f)
+        run = &AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, &1, manifest: m)
+
+        post =
+          Ash.create!(AshRpc.Test.Post, %{title: "Hello world", view_count: 3, slug: "hello"})
+
+        Ash.create!(AshRpc.Test.Comment, %{body: "a", rating: 1, post_id: post.id})
+        Ash.create!(AshRpc.Test.Comment, %{body: "b", rating: 5, post_id: post.id})
+
+        # create: input keys
+        created =
+          run.(%{
+            n.(:action) => "create_post",
+            "input" => %{n.(:title) => "Other", n.(:view_count) => 0},
+            n.(:fields) => [n.(:id)]
+          })
+
+        assert created[n.(:success)] == true
+
+        # list: fields with calc args and a nested envelope, sort, filter
+        list =
+          run.(%{
+            n.(:action) => "list_posts",
+            n.(:fields) => [
+              n.(:title),
+              %{n.(:excerpt) => %{n.(:args) => %{n.(:length) => 2, n.(:omission_text) => "~"}}},
+              %{
+                n.(:comments) => %{
+                  n.(:fields) => [n.(:rating)],
+                  n.(:sort) => "-" <> n.(:rating),
+                  n.(:filter) => %{n.(:rating) => %{n.(:greater_than) => 1}}
+                }
+              }
+            ],
+            n.(:sort) => "-" <> n.(:view_count),
+            n.(:filter) => %{n.(:view_count) => %{n.(:greater_than_or_equal) => 1}}
+          })
+
+        assert list[n.(:success)] == true
+
+        assert [row] = list[n.(:data)]
+        assert row[n.(:title)] == "Hello world"
+        assert row[n.(:excerpt)] == "He~"
+        assert row[n.(:comments)] == [%{n.(:rating) => 5}]
+
+        # page
+        paged =
+          run.(%{
+            n.(:action) => "list_posts",
+            n.(:fields) => [n.(:id)],
+            n.(:page) => %{n.(:limit) => 1}
+          })
+
+        assert [_] = paged[n.(:data)][n.(:results)]
+
+        # getBy
+        got =
+          run.(%{
+            n.(:action) => "get_post_by_slug",
+            n.(:fields) => [n.(:title)],
+            n.(:get_by) => %{n.(:slug) => "hello"}
+          })
+
+        assert got[n.(:data)] == %{n.(:title) => "Hello world"}
+
+        # metadataFields (meta_1 is overridden to "meta1" in every manifest)
+        meta =
+          run.(%{
+            n.(:action) => "read_posts_with_metadata",
+            n.(:fields) => [n.(:id)],
+            n.(:metadata_fields) => [n.(:total_score), "meta1"]
+          })
+
+        assert [%{} = record | _] = meta[n.(:data)]
+        assert record[n.(:total_score)] == 42
+        assert record["meta1"] == "m1"
+      end
     end
   end
 end

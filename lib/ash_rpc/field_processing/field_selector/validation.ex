@@ -10,39 +10,21 @@ defmodule AshRpc.FieldProcessing.FieldSelector.Validation do
   and properly structured.
   """
 
-  alias AshRpc.FieldFormatter
-
   @doc """
   Checks for duplicate field names in a field selection list.
 
-  Normalizes field names using the input formatter before checking for duplicates.
-  Throws `{:duplicate_field, field_name, path}` if duplicates are found.
+  String names are resolved with `resolve` (client name → internal atom)
+  before comparing. Throws `{:duplicate_field, field_name, path}` if
+  duplicates are found.
   """
-  def check_for_duplicates(fields, path, formatter) do
+  def check_for_duplicates(fields, path, resolve) when is_function(resolve, 1) do
     field_names =
-      Enum.flat_map(fields, fn field ->
-        case field do
-          field_name when is_atom(field_name) ->
-            [field_name]
-
-          field_name when is_binary(field_name) ->
-            [normalize_field_name(field_name, formatter)]
-
-          %{} = field_map ->
-            Enum.map(Map.keys(field_map), fn key ->
-              case key do
-                key when is_atom(key) -> key
-                key when is_binary(key) -> normalize_field_name(key, formatter)
-                other -> other
-              end
-            end)
-
-          {field_name, _field_spec} ->
-            [field_name]
-
-          invalid_field ->
-            throw({:invalid_field_type, invalid_field, path})
-        end
+      Enum.flat_map(fields, fn
+        field_name when is_atom(field_name) -> [field_name]
+        field_name when is_binary(field_name) -> [resolve.(field_name)]
+        %{} = field_map -> Enum.map(Map.keys(field_map), &resolve_key(&1, resolve))
+        {field_name, _field_spec} -> [field_name]
+        invalid_field -> throw({:invalid_field_type, invalid_field, path})
       end)
 
     duplicate_fields =
@@ -71,8 +53,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector.Validation do
     end
   end
 
-  # Normalizes a string field name to an atom using the formatter
-  defp normalize_field_name(field_name, formatter) when is_binary(field_name) do
-    FieldFormatter.resolve_field_name(field_name, formatter)
-  end
+  defp resolve_key(key, resolve) when is_binary(key), do: resolve.(key)
+  defp resolve_key(key, _resolve), do: key
 end

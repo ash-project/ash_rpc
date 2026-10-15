@@ -37,8 +37,8 @@ defmodule AshRpc.Manifest do
   end
 
   def mapping_source(m), do: ash_rpc!(m).mapping_source
-  def input_formatter(m), do: ash_rpc!(m).input_formatter
   def output_formatter(m), do: ash_rpc!(m).output_formatter
+  def vocabulary(m), do: ash_rpc!(m).vocabulary
 
   @spec entrypoint_lookup(Manifest.t()) :: %{String.t() => AshRpc.Entrypoint.t()}
   def entrypoint_lookup(m), do: ash_rpc!(m).entrypoints
@@ -84,7 +84,7 @@ defmodule AshRpc.Manifest do
 
   @doc """
   Re-runs `AshRpc.Manifest.Decorator` with the stored mapping source,
-  overriding `:input_formatter` / `:output_formatter`. For tests.
+  overriding `:output_formatter`. For tests.
   """
   @spec redecorate(Manifest.t(), keyword()) :: Manifest.t()
   def redecorate(%Manifest{} = manifest, opts) do
@@ -98,7 +98,7 @@ defmodule AshRpc.Manifest do
     AshRpc.Manifest.Decorator.decorate(
       manifest,
       source,
-      Keyword.take(opts, [:input_formatter, :output_formatter])
+      Keyword.take(opts, [:output_formatter])
     )
   end
 end

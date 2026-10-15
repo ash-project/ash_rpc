@@ -11,6 +11,9 @@ defmodule AshRpc.Entrypoint do
   action name). Entrypoints resolved outside the wire (for example an
   extension's server-side preset queries) set `preset_fields` and are passed to
   `AshRpc.run_action/4` with the `entrypoint:` option.
+
+  `client_metadata_field_names` is written by the decorator; mapping sources
+  leave it unset.
   """
 
   @type load_tree :: [atom() | {atom(), load_tree()}]
@@ -30,6 +33,7 @@ defmodule AshRpc.Entrypoint do
           load_restrictions: :none | {:allow, load_tree()} | {:deny, load_tree()},
           exposed_metadata_fields: [atom()],
           metadata_field_names: %{atom() => String.t()},
+          client_metadata_field_names: %{String.t() => atom()},
           preset_fields: list() | nil
         }
 
@@ -48,6 +52,7 @@ defmodule AshRpc.Entrypoint do
     load_restrictions: :none,
     exposed_metadata_fields: [],
     metadata_field_names: %{},
+    client_metadata_field_names: %{},
     preset_fields: nil
   ]
 end

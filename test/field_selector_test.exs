@@ -457,4 +457,25 @@ defmodule AshRpc.FieldSelectorTest do
       assert Atomizer.atomize_requested_fields(fields, nil, runtime()) == fields
     end
   end
+
+  describe "strict field names" do
+    test "an internal snake_case name under camelCase is unknown_field with the name as sent" do
+      assert %{"success" => false, "errors" => [error]} = run("list_posts", ["id", "view_count"])
+
+      assert %{"type" => "unknown_field", "fields" => ["view_count"]} = error
+    end
+
+    test "a nested relationship field in a non-client casing is unknown_field" do
+      assert %{"success" => false, "errors" => [%{"type" => "unknown_field"}]} =
+               run("list_posts", ["id", %{"author" => ["is_active?"]}])
+    end
+
+    test "duplicates are detected on resolved names" do
+      assert {:error, {:duplicate_field, :is_active?, _}} =
+               AshRpc.Pipeline.parse_request(runtime(), %AshRpc.Context{}, %{
+                 "action" => "list_authors",
+                 "fields" => ["isActive", :is_active?]
+               })
+    end
+  end
 end

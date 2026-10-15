@@ -322,4 +322,38 @@ defmodule AshRpc.FixturesTest do
     assert %{calculations: %{title_shout: "hi!"}} = Ash.load!(post, :title_shout)
     assert %{field?: false} = Ash.Resource.Info.calculation(AshRpc.Test.Post, :title_shout)
   end
+
+  describe "single-formatter fixtures" do
+    test "the upcase formatter upper-cases internal names" do
+      assert AshRpc.Test.Formatters.upcase(:view_count) == "VIEW_COUNT"
+      assert AshRpc.Test.Formatters.upcase("is_active?") == "IS_ACTIVE?"
+    end
+
+    test "Excerpt appends the optional omission_text argument" do
+      post = Ash.create!(AshRpc.Test.Post, %{title: "Hello world"})
+
+      assert %{excerpt: "He~"} =
+               Ash.load!(post, excerpt: %{length: 2, omission_text: "~"})
+
+      assert %{excerpt: "He"} = Ash.load!(post, excerpt: %{length: 2})
+    end
+
+    test "Palette keeps an optional multi-word accent_color key" do
+      assert {:ok, %{primary: "a", secondary: "b", accent_color: "c"}} =
+               Ash.Type.cast_input(
+                 AshRpc.Test.Palette,
+                 %{"primary" => "a", "secondary" => "b", "accent_color" => "c"},
+                 []
+               )
+
+      assert {:ok, palette} =
+               Ash.Type.cast_input(
+                 AshRpc.Test.Palette,
+                 %{"primary" => "a", "secondary" => "b"},
+                 []
+               )
+
+      refute Map.has_key?(palette, :accent_color)
+    end
+  end
 end

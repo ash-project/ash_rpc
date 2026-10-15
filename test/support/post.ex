@@ -75,6 +75,7 @@ defmodule AshRpc.Test.Post do
     calculate :excerpt, :string, Calculations.Excerpt do
       public? true
       argument :length, :integer, allow_nil?: false
+      argument :omission_text, :string
     end
 
     calculate :scored_stats, AshRpc.Test.PostStats, Calculations.ScoredStats do

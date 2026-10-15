@@ -71,5 +71,16 @@ defmodule AshRpc.UnionInputTest do
                "vars" => %{"expectedMembers" => "number, label", "foundKeys" => "number, label"}
              } = error
     end
+
+    test "a member key in a non-client casing is not a member" do
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.run_action(@profile, %AshRpc.Context{}, %{
+                 "action" => "create_widget",
+                 "input" => %{"content" => %{"priority_value" => 3}},
+                 "fields" => ["id"]
+               })
+
+      assert %{"type" => "invalid_union_input"} = error
+    end
   end
 end

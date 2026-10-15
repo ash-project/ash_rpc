@@ -109,7 +109,7 @@ defmodule AshRpc.KeywordTupleTest do
     end
 
     test "an unknown keyword key is unknown_field of kind field_constrained_type" do
-      assert {:error, {:unknown_field, :invalid_field, "field_constrained_type", [:options]}} =
+      assert {:error, {:unknown_field, "invalid_field", "field_constrained_type", [:options]}} =
                RequestedFieldsProcessor.process(Runtime.new(@profile), Place, :read, [
                  %{"options" => ["priority", "invalid_field"]}
                ])

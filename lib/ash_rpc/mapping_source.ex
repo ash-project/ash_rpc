@@ -20,7 +20,6 @@ defmodule AshRpc.MappingSource do
           | {module(), atom()}
           | {module(), atom(), list()}
 
-  @callback input_formatter() :: formatter()
   @callback output_formatter() :: formatter()
   @callback exposed_resource?(resource :: module()) :: boolean()
   @doc "Client-name overrides only; unlisted fields use the output formatter."

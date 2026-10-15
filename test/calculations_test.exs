@@ -452,4 +452,14 @@ defmodule AshRpc.CalculationsTest do
              }
     end
   end
+
+  test "calc args resolve by client name and reject other casings" do
+    Ash.create!(AshRpc.Test.Post, %{title: "Hello world"})
+
+    assert %{"success" => true, "data" => [%{"excerpt" => "He~"}]} =
+             list_posts([%{"excerpt" => %{"args" => %{"length" => 2, "omissionText" => "~"}}}])
+
+    assert %{"success" => false, "errors" => [%{"type" => "invalid_calculation_args"}]} =
+             list_posts([%{"excerpt" => %{"args" => %{"length" => 2, "omission_text" => "~"}}}])
+  end
 end

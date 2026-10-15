@@ -11,11 +11,11 @@ defmodule AshRpc.Manifest.RedecorateTest do
     %{manifest: AshRpc.Test.ManifestBuilder.manifest()}
   end
 
-  test "overrides formatters and keeps the stored mapping source", %{manifest: m} do
+  test "overrides the output formatter and keeps the stored mapping source", %{manifest: m} do
     r = Manifest.redecorate(m, output_formatter: :pascal_case, input_formatter: :snake_case)
 
     assert Manifest.output_formatter(r) == :pascal_case
-    assert Manifest.input_formatter(r) == :snake_case
+    refute Map.has_key?(Manifest.ash_rpc(r), :input_formatter)
     assert Manifest.mapping_source(r) == AshRpc.Test.MappingSource
 
     assert AshRpc.Manifest.Custom.field_names(Manifest.resource_lookup(r)[AshRpc.Test.Author])[

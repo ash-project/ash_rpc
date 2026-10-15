@@ -153,6 +153,17 @@ defmodule AshRpc.GetActionsTest do
                ]
              } = run(params)
     end
+
+    test "a getBy key in a non-client casing is an unexpected field reported as sent" do
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                 "action" => "get_post_by_slug",
+                 "fields" => ["id"],
+                 "getBy" => %{"slug" => "a", "view_count" => 1}
+               })
+
+      assert %{"type" => "unexpected_get_by_fields", "fields" => ["view_count"]} = error
+    end
   end
 
   describe "not_found_error?: false" do

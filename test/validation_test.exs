@@ -256,6 +256,13 @@ defmodule AshRpc.ValidationTest do
     end
   end
 
+  test "a misspelled input key is unknown_input before Ash runs" do
+    assert %{"success" => false, "errors" => [error]} =
+             validate(%{"action" => "create_post", "input" => %{"title" => "x", "titel" => "y"}})
+
+    assert %{"type" => "unknown_input", "fields" => ["titel"], "path" => []} = error
+  end
+
   describe "error structure" do
     test "different failures on one request are all reported" do
       assert %{"success" => false, "errors" => errors} =
@@ -307,9 +314,9 @@ defmodule AshRpc.ValidationTest do
                "errors" => [
                  %{
                    "type" => "unknown_field",
-                   "vars" => %{"field" => "unknownField", "resource" => "AshRpc.Test.Post"},
+                   "vars" => %{"field" => "unknown_field", "resource" => "AshRpc.Test.Post"},
                    "path" => [],
-                   "fields" => ["unknownField"]
+                   "fields" => ["unknown_field"]
                  }
                ]
              } = validate(%{"action" => "list_posts", "fields" => ["id", "unknown_field"]})

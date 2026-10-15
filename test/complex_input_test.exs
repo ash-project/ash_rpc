@@ -158,6 +158,139 @@ defmodule AshRpc.ComplexInputTest do
     end
   end
 
+  describe "strict nested input keys" do
+    defp unknown_nested(input, action \\ "create_intake") do
+      assert %{"success" => false, "errors" => errors} =
+               run(%{
+                 "action" => action,
+                 "input" =>
+                   if(action == "create_intake",
+                     do: Map.put_new(input, "userName", "ada"),
+                     else: input
+                   ),
+                 "fields" => ["id"]
+               })
+
+      Enum.map(errors, fn error ->
+        assert %{"type" => "unknown_input", "details" => %{"hint" => _}} = error
+        assert error["vars"] == %{"field" => hd(error["fields"])}
+        {error["path"], hd(error["fields"])}
+      end)
+    end
+
+    test "a typed-map key in a non-client casing is unknown_input at its path" do
+      assert unknown_nested(%{"settings" => %{"notification_enabled" => true}}) ==
+               [{["settings"], "notification_enabled"}]
+    end
+
+    test "a NewType map key under its internal name is unknown_input" do
+      assert unknown_nested(%{"stats" => %{"total_count_1" => 1}}) ==
+               [{["stats"], "total_count_1"}]
+    end
+
+    test "a NewType map nested in a NewType map reports the full path" do
+      assert unknown_nested(%{"deep" => %{"inner" => %{"max_retries_1" => 5}}}) ==
+               [{["deep", "inner"], "max_retries_1"}]
+    end
+
+    test "keyword and tuple keys are checked" do
+      assert unknown_nested(%{"preferences" => %{"font_size" => 14}}) ==
+               [{["preferences"], "font_size"}]
+
+      assert unknown_nested(%{"location" => %{"lat1" => 1.0, "lng_1" => 2.0}}) ==
+               [{["location"], "lng_1"}]
+    end
+
+    test "an embedded resource key is checked, with array indexes in the path" do
+      assert unknown_nested(%{"profile" => %{"bio_text_1" => "x"}}) ==
+               [{["profile"], "bio_text_1"}]
+
+      assert unknown_nested(%{
+               "history" => [%{"displayName" => "one"}, %{"is_public" => true}]
+             }) == [{["history", 1], "is_public"}]
+
+      assert unknown_nested(%{"section" => %{"profile" => %{"bioText" => "x"}}}) ==
+               [{["section", "profile"], "bioText"}]
+    end
+
+    test "keys inside a union member are checked under the member's key" do
+      assert unknown_nested(%{"content" => %{"data" => %{"item_count" => 1}}}) ==
+               [{["content", "data"], "item_count"}]
+
+      assert unknown_nested(%{
+               "status" => %{"active" => %{"statusType" => "active", "is_final" => true}}
+             }) == [{["status", "active"], "is_final"}]
+
+      assert unknown_nested(
+               %{"attachments" => [%{"file" => %{"filename" => "a", "mime_type" => "x"}}]},
+               "create_widget"
+             ) == [{["attachments", 0, "file"], "mime_type"}]
+    end
+
+    test "every miss in the input is reported, top-level and nested" do
+      assert unknown_nested(%{
+               "bogus" => 1,
+               "settings" => %{"theme_name" => "dark"},
+               "profile" => %{"display_name" => "Ada", "bio_text_1" => "x"}
+             })
+             |> Enum.sort() ==
+               [
+                 {[], "bogus"},
+                 {["profile"], "bio_text_1"},
+                 {["profile"], "display_name"},
+                 {["settings"], "theme_name"}
+               ]
+    end
+
+    test "validate_action reports nested misses the same way" do
+      assert %{"success" => false, "errors" => [error]} =
+               validate(%{
+                 "action" => "create_intake",
+                 "input" => %{"userName" => "ada", "settings" => %{"theme_name" => "dark"}}
+               })
+
+      assert %{"type" => "unknown_input", "fields" => ["theme_name"], "path" => ["settings"]} =
+               error
+    end
+
+    test "nothing is written when a nested key misses" do
+      before = Ash.read!(Intake) |> length()
+      unknown_nested(%{"settings" => %{"theme_name" => "dark"}})
+      assert Ash.read!(Intake) |> length() == before
+    end
+
+    test "unconstrained and custom map-storage values keep any key" do
+      assert %{"success" => true} =
+               run(%{
+                 "action" => "create_project",
+                 "input" => %{
+                   "palette" => %{"primary" => "red", "secondary" => "x", "accent_color" => "b"}
+                 },
+                 "fields" => ["id"]
+               })
+    end
+
+    test "internal names are client names under snake_case" do
+      manifest = AshRpc.Test.ManifestBuilder.build(output_formatter: :snake_case)
+
+      assert %{"success" => true} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "action" => "create_intake",
+                   "input" => %{
+                     "user_name" => "ada",
+                     "settings" => %{"notification_enabled" => true},
+                     "profile" => %{"display_name" => "Ada"}
+                   },
+                   "fields" => ["id"]
+                 },
+                 manifest: manifest
+               )
+    end
+  end
+
   describe "union input" do
     test "a :type_and_value union maps overrides inside a NewType member" do
       intake =

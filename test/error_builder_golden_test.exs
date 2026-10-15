@@ -550,6 +550,40 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
       ],
       "success" => false
     },
+    "unknown_input" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes."
+          },
+          "fields" => ["bogusKey"],
+          "message" => "Unknown input %{field}",
+          "path" => [],
+          "shortMessage" => "Unknown input",
+          "type" => "unknown_input",
+          "vars" => %{"field" => "bogusKey"}
+        }
+      ],
+      "success" => false
+    },
+    "unknown_input_nested" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes."
+          },
+          "fields" => ["bogusKey"],
+          "message" => "Unknown input %{field}",
+          "path" => ["settings", 0],
+          "shortMessage" => "Unknown input",
+          "type" => "unknown_input",
+          "vars" => %{"field" => "bogusKey"}
+        }
+      ],
+      "success" => false
+    },
     "unknown_field_resource" => %{
       "errors" => [
         %{
@@ -951,6 +985,19 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
   test "the snapshot covers every case" do
     assert ErrorCases.cases() |> Enum.map(&elem(&1, 0)) |> Enum.sort() ==
              @golden |> Map.keys() |> Enum.sort()
+  end
+
+  test "unknown_input is the wire error Ash's NoSuchInput maps to" do
+    ash_error =
+      Ash.Error.Invalid.NoSuchInput.exception(
+        resource: AshRpc.Test.Post,
+        action: :create,
+        input: "bogusKey",
+        inputs: []
+      )
+
+    assert AshRpc.error_response(AshRpc.Test.Profile, {:unknown_input, "bogusKey"}) ==
+             AshRpc.error_response(AshRpc.Test.Profile, ash_error)
   end
 
   test "the moduledoc's Error types section lists exactly the pipeline reason types" do

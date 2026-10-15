@@ -19,7 +19,7 @@ defmodule AshRpc.ValueFormatter do
   """
 
   alias Ash.Info.Manifest.Type
-  alias AshRpc.{FieldFormatter, Introspection}
+  alias AshRpc.{ClientNames, FieldFormatter, Introspection}
   alias AshRpc.Manifest.Custom
 
   @type direction :: :input | :output
@@ -33,8 +33,9 @@ defmodule AshRpc.ValueFormatter do
     a raw Ash type, or nil
   - `constraints` - Constraints for raw Ash types (ignored for manifest structs)
   - `direction` - `:input` (client→internal) or `:output` (internal→client)
-  - `runtime` - The `AshRpc.Runtime` carrying formatters and lookups. The
-    input formatter is used for `:input`, the output formatter for `:output`.
+  - `runtime` - The `AshRpc.Runtime` carrying the output formatter and lookups.
+    `:output` names with the output formatter; `:input` resolves names with
+    `AshRpc.ClientNames`.
   """
   @spec format(
           term(),
@@ -48,11 +49,8 @@ defmodule AshRpc.ValueFormatter do
           direction(),
           AshRpc.Runtime.t()
         ) :: term()
-  def format(value, type, constraints, :input, rt),
-    do: do_format(value, type, constraints, rt.input_formatter, :input, rt)
-
-  def format(value, type, constraints, :output, rt),
-    do: do_format(value, type, constraints, rt.output_formatter, :output, rt)
+  def format(value, type, constraints, direction, rt) when direction in [:input, :output],
+    do: do_format(value, type, constraints, rt.output_formatter, direction, rt)
 
   defp do_format(nil, _type, _constraints, _formatter, _direction, _rt), do: nil
   defp do_format(value, nil, _constraints, _formatter, _direction, _rt), do: value
@@ -129,6 +127,9 @@ defmodule AshRpc.ValueFormatter do
          rt
        ) do
     case Introspection.classify_type(type_info, rt) do
+      {:array, item_type} when is_list(value) and direction == :input ->
+        input_items(value, &do_format(&1, item_type, [], formatter, :input, rt))
+
       {:array, item_type} when is_list(value) ->
         Enum.map(value, &do_format(&1, item_type, [], formatter, direction, rt))
 
@@ -186,11 +187,9 @@ defmodule AshRpc.ValueFormatter do
   defp format_scalar(value, %Type{module: Ash.Type.Vector}, _formatter, _direction),
     do: format_vector(value)
 
-  defp format_scalar(value, %Type{module: module}, formatter, direction)
+  defp format_scalar(value, %Type{module: module}, _formatter, :output)
        when is_map(value) and not is_struct(value) do
-    if is_custom_type_with_map_storage?(module),
-      do: format_map_keys_only(value, formatter, direction),
-      else: value
+    if is_custom_type_with_map_storage?(module), do: stringify_keys(value), else: value
   end
 
   defp format_scalar(value, _type, _formatter, _direction), do: value
@@ -203,59 +202,16 @@ defmodule AshRpc.ValueFormatter do
     _ -> false
   end
 
-  defp format_map_keys_only(map, formatter, :output) when is_map(map) do
-    Enum.into(map, %{}, fn {key, value} ->
-      string_key = FieldFormatter.format_field_name(key, formatter)
+  # A custom map-storage type declares no field names, so its keys go out
+  # as their string form, unformatted, and come in as sent.
+  defp stringify_keys(%{} = map) when not is_struct(map),
+    do: Map.new(map, fn {key, value} -> {stringify_key(key), stringify_keys(value)} end)
 
-      formatted_value =
-        case value do
-          nested_map when is_map(nested_map) and not is_struct(nested_map) ->
-            format_map_keys_only(nested_map, formatter, :output)
+  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
+  defp stringify_keys(other), do: other
 
-          list when is_list(list) ->
-            Enum.map(list, fn item ->
-              if is_map(item) and not is_struct(item) do
-                format_map_keys_only(item, formatter, :output)
-              else
-                item
-              end
-            end)
-
-          other ->
-            other
-        end
-
-      {string_key, formatted_value}
-    end)
-  end
-
-  defp format_map_keys_only(map, formatter, :input) when is_map(map) do
-    Enum.into(map, %{}, fn {key, value} ->
-      internal_key = FieldFormatter.parse_input_field(key, formatter)
-
-      formatted_value =
-        case value do
-          nested_map when is_map(nested_map) and not is_struct(nested_map) ->
-            format_map_keys_only(nested_map, formatter, :input)
-
-          list when is_list(list) ->
-            Enum.map(list, fn item ->
-              if is_map(item) and not is_struct(item) do
-                format_map_keys_only(item, formatter, :input)
-              else
-                item
-              end
-            end)
-
-          other ->
-            other
-        end
-
-      {internal_key, formatted_value}
-    end)
-  end
-
-  defp format_map_keys_only(value, _formatter, _direction), do: value
+  defp stringify_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp stringify_key(key), do: key
 
   # `%Ash.Vector{}` keeps its floats in a packed binary, which is not
   # JSON-encodable, so the wire format has to be a plain list of numbers. Result extraction
@@ -277,79 +233,145 @@ defmodule AshRpc.ValueFormatter do
 
   defp format_resource(value, resource, formatter, direction, rt)
 
-  defp format_resource(value, resource, formatter, direction, rt)
+  defp format_resource(value, resource, formatter, :input, rt)
+       when is_map(value) and not is_struct(value) do
+    strict? = ClientNames.resource_named?(rt, resource)
+
+    input_entries(
+      value,
+      &input_key(ClientNames.resource_field(rt, resource, &1), &1, strict?),
+      fn field, field_value ->
+        field_or_rel =
+          Ash.Info.Manifest.get_field_or_relationship(rt.resource_lookup, resource, field)
+
+        do_format(field_value, field_or_rel, [], formatter, :input, rt)
+      end
+    )
+  end
+
+  defp format_resource(value, resource, formatter, :output, rt)
        when is_map(value) and not is_struct(value) do
     res_struct = Map.get(rt.resource_lookup, resource)
 
     Enum.into(value, %{}, fn {key, field_value} ->
-      internal_key = convert_resource_key(key, res_struct, formatter, direction)
-
-      # Look up field or relationship from the spec directly
+      # A string key is a read action's metadata override, not a field, so
+      # its value passes through.
       field_or_rel =
-        Ash.Info.Manifest.get_field_or_relationship(rt.resource_lookup, resource, internal_key)
+        if is_atom(key),
+          do: Ash.Info.Manifest.get_field_or_relationship(rt.resource_lookup, resource, key)
 
-      formatted_value =
-        do_format(field_value, field_or_rel, [], formatter, direction, rt)
-
-      output_key =
-        case direction do
-          :input -> internal_key
-          :output -> FieldFormatter.format_field_for_client(internal_key, res_struct, formatter)
-        end
-
-      {output_key, formatted_value}
+      formatted_value = do_format(field_value, field_or_rel, [], formatter, :output, rt)
+      {resource_output_key(key, res_struct, formatter), formatted_value}
     end)
   end
 
   defp format_resource(value, _resource, _formatter, _direction, _rt), do: value
 
-  defp convert_resource_key(key, res_struct, formatter, :input) when is_binary(key) do
-    case Custom.original_field_name(res_struct, key) do
-      original when is_atom(original) and not is_nil(original) -> original
-      _ -> FieldFormatter.parse_input_field(key, formatter)
-    end
+  # Extracted records carry atom keys; a string key is already a client name
+  # (a read action's metadata override) and goes out as-is.
+  defp resource_output_key(key, _res_struct, _formatter) when is_binary(key), do: key
+
+  defp resource_output_key(key, res_struct, formatter),
+    do: FieldFormatter.format_field_for_client(key, res_struct, formatter)
+
+  # ---------------------------------------------------------------------------
+  # Strict input keys
+  # ---------------------------------------------------------------------------
+  #
+  # Every map level resolves all of its keys and formats every value, then
+  # throws `{:unknown_nested_input, reasons}` for all misses at or below it,
+  # each `{:unknown_input, key, path}` with the path relative to the value.
+  # Each parent prepends its own key (or array index). A node without
+  # decorated names keeps its keys as sent and leaves them to Ash.
+
+  defp input_key({:ok, field}, _key, _strict?), do: {:ok, field}
+  defp input_key(:error, _key, true), do: :error
+  defp input_key(:error, key, false), do: {:ok, key}
+
+  defp input_entries(map, resolve, format_entry) do
+    {entries, misses} =
+      Enum.reduce(map, {[], []}, fn {key, value}, {entries, misses} ->
+        with {:ok, field} <- resolve.(key),
+             {:ok, formatted} <- collect_input(key, fn -> format_entry.(field, value) end) do
+          {[{field, formatted} | entries], misses}
+        else
+          :error -> {entries, [{:unknown_input, key, []} | misses]}
+          {:misses, nested} -> {entries, Enum.reverse(nested, misses)}
+        end
+      end)
+
+    throw_input_misses(misses)
+    Map.new(entries)
   end
 
-  defp convert_resource_key(key, _res_struct, _formatter, :input), do: key
-  defp convert_resource_key(key, _res_struct, _formatter, :output), do: key
+  @doc false
+  # Formats each list item with `format_item`, collecting nested input misses
+  # under each item's index.
+  def input_items(items, format_item) do
+    {items, misses} =
+      items
+      |> Enum.with_index()
+      |> Enum.reduce({[], []}, fn {item, index}, {items, misses} ->
+        case collect_input(index, fn -> format_item.(item) end) do
+          {:ok, formatted} -> {[formatted | items], misses}
+          {:misses, nested} -> {items, Enum.reverse(nested, misses)}
+        end
+      end)
+
+    throw_input_misses(misses)
+    Enum.reverse(items)
+  end
+
+  defp throw_input_misses([]), do: :ok
+  defp throw_input_misses(misses), do: throw({:unknown_nested_input, Enum.reverse(misses)})
+
+  @doc false
+  # Runs `fun` for the input value under `segment`. Its nested input misses
+  # come back as `{:misses, reasons}` with `segment` prepended to each path.
+  @spec collect_input(String.t() | atom() | non_neg_integer(), (-> term())) ::
+          {:ok, term()} | {:misses, list()}
+  def collect_input(segment, fun) do
+    {:ok, fun.()}
+  catch
+    :throw, {:unknown_nested_input, reasons} ->
+      {:misses,
+       Enum.map(reasons, fn {:unknown_input, key, path} ->
+         {:unknown_input, key, [segment | path]}
+       end)}
+  end
 
   # ---------------------------------------------------------------------------
   # TypedStruct Handler — struct types with field constraints
   # ---------------------------------------------------------------------------
 
-  defp format_typed_struct(value, type_info, formatter, direction, rt)
-       when is_map(value) do
-    {field_names, reverse_map} = typed_struct_field_maps(type_info, rt)
+  defp format_typed_struct(value, type_info, formatter, :input, rt) when is_map(value),
+    do: typed_input(value, type_info, formatter, rt)
+
+  defp format_typed_struct(value, type_info, formatter, :output, rt) when is_map(value) do
+    field_names = typed_struct_output_names(type_info, rt)
 
     Enum.into(value, %{}, fn {key, field_value} ->
-      internal_key = convert_typed_struct_key(key, reverse_map, formatter, direction)
-
-      sub_type = Type.find_field_type(type_info, internal_key)
-
-      formatted_value =
-        do_format(field_value, sub_type, [], formatter, direction, rt)
-
-      output_key =
-        case direction do
-          :input -> internal_key
-          :output -> get_typed_struct_output_key(internal_key, field_names, formatter)
-        end
-
-      {output_key, formatted_value}
+      sub_type = Type.find_field_type(type_info, key)
+      formatted_value = do_format(field_value, sub_type, [], formatter, :output, rt)
+      {get_typed_struct_output_key(key, field_names, formatter), formatted_value}
     end)
   end
 
   defp format_typed_struct(value, _type_info, _formatter, _direction, _rt),
     do: value
 
-  defp convert_typed_struct_key(key, reverse_map, formatter, :input) when is_binary(key) do
-    case Map.get(reverse_map, key) do
-      nil -> FieldFormatter.parse_input_field(key, formatter)
-      internal -> internal
-    end
-  end
+  # Typed structs, typed maps, keywords and tuples share strict key input.
+  defp typed_input(value, type_info, formatter, rt) do
+    strict? = ClientNames.type_named?(rt, type_info)
 
-  defp convert_typed_struct_key(key, _reverse_map, _formatter, _direction), do: key
+    input_entries(
+      value,
+      &input_key(ClientNames.type_field(rt, type_info, &1), &1, strict?),
+      fn field, field_value ->
+        do_format(field_value, Type.find_field_type(type_info, field), [], formatter, :input, rt)
+      end
+    )
+  end
 
   defp get_typed_struct_output_key(internal_key, field_names, formatter) do
     case Map.get(field_names, internal_key) do
@@ -358,20 +380,14 @@ defmodule AshRpc.ValueFormatter do
     end
   end
 
-  # Returns `{forward, reverse}` client field-name maps for a typed struct,
+  # Returns the forward client field-name overrides for a typed struct,
   # preferring the decoration on the struct in hand. Undecorated types (e.g. some
   # `action.returns` structs) resolve through the type lookup and then the
   # mapping source (`AshRpc.Introspection.type_field_name_overrides/2`).
-  defp typed_struct_field_maps(type_info, rt) do
+  defp typed_struct_output_names(type_info, rt) do
     case Custom.type_field_name_overrides_pair(type_info) do
-      nil ->
-        forward =
-          Introspection.type_field_name_overrides(rt, Type.effective_module(type_info)) || %{}
-
-        {forward, Map.new(forward, fn {k, v} -> {v, k} end)}
-
-      pair ->
-        pair
+      nil -> Introspection.type_field_name_overrides(rt, Type.effective_module(type_info)) || %{}
+      {forward, _reverse} -> forward
     end
   end
 
@@ -381,31 +397,20 @@ defmodule AshRpc.ValueFormatter do
 
   defp format_typed_map(value, type_info, formatter, direction, rt)
        when is_map(value) do
-    fields = Type.get_fields(type_info)
+    cond do
+      Type.get_fields(type_info) == [] ->
+        value
 
-    if fields == [] do
-      value
-    else
-      Enum.into(value, %{}, fn {key, field_value} ->
-        internal_key =
-          case direction do
-            :input -> FieldFormatter.parse_input_field(key, formatter)
-            :output -> key
-          end
+      direction == :input ->
+        typed_input(value, type_info, formatter, rt)
 
-        sub_type = Type.find_field_type(type_info, internal_key)
+      true ->
+        Enum.into(value, %{}, fn {key, field_value} ->
+          sub_type = Type.find_field_type(type_info, key)
 
-        formatted_value =
-          do_format(field_value, sub_type, [], formatter, direction, rt)
-
-        output_key =
-          case direction do
-            :input -> internal_key
-            :output -> FieldFormatter.format_field_name(internal_key, formatter)
-          end
-
-        {output_key, formatted_value}
-      end)
+          {FieldFormatter.format_field_name(key, formatter),
+           do_format(field_value, sub_type, [], formatter, :output, rt)}
+        end)
     end
   end
 
@@ -476,28 +481,33 @@ defmodule AshRpc.ValueFormatter do
   # ---------------------------------------------------------------------------
 
   defp format_union(value, type_info, formatter, direction, rt) do
-    members = type_info.members || []
     storage_type = Keyword.get(type_info.constraints || [], :storage)
 
     case direction do
       :input ->
-        format_union_input(value, members, formatter, rt)
+        format_union_input(value, type_info, formatter, rt)
 
       :output ->
-        format_union_output(value, members, storage_type, formatter, rt)
+        format_union_output(value, type_info.members || [], storage_type, formatter, rt)
     end
   end
 
-  defp format_union_input(value, members, formatter, rt) do
-    case identify_union_member_spec(value, members, formatter, rt) do
+  defp format_union_input(value, type_info, formatter, rt) do
+    members = type_info.members || []
+
+    case identify_union_member_spec(value, members, type_info, rt) do
       {:ok, member} ->
-        client_key = find_client_key_for_member(value, member.name, formatter)
-        member_value = Map.get(value, client_key)
+        client_key = find_client_key_for_member(value, member.name, type_info, rt)
 
-        formatted_value =
-          do_format(member_value, member.type, [], formatter, :input, rt)
+        formatted =
+          case collect_input(client_key, fn ->
+                 do_format(Map.get(value, client_key), member.type, [], formatter, :input, rt)
+               end) do
+            {:ok, formatted} -> formatted
+            {:misses, reasons} -> throw({:unknown_nested_input, reasons})
+          end
 
-        maybe_inject_tag(formatted_value, member)
+        maybe_inject_tag(formatted, member)
 
       {:error, error} ->
         throw(error)
@@ -526,44 +536,41 @@ defmodule AshRpc.ValueFormatter do
   # ---------------------------------------------------------------------------
 
   # Identify which union member matches the input (spec members version)
-  defp identify_union_member_spec(%{} = map, members, formatter, rt) do
-    case identify_tagged_union_member_spec(map, members, formatter) do
+  defp identify_union_member_spec(%{} = map, members, type_info, rt) do
+    case identify_tagged_union_member_spec(map, members, rt) do
       {:ok, member} -> {:ok, member}
-      :not_found -> identify_key_based_union_member_spec(map, members, formatter, rt)
+      :not_found -> identify_key_based_union_member_spec(map, members, type_info, rt)
     end
   end
 
-  defp identify_union_member_spec(_value, _members, _formatter, _rt) do
-    {:error, {:invalid_union_input, :not_a_map}}
-  end
+  defp identify_union_member_spec(_value, _members, _type_info, _rt),
+    do: {:error, {:invalid_union_input, :not_a_map}}
 
-  defp identify_tagged_union_member_spec(map, members, formatter) do
+  defp identify_tagged_union_member_spec(map, members, rt) do
     case Enum.find(members, fn member ->
            tag_field = Map.get(member, :tag)
-           tag_value = Map.get(member, :tag_value)
 
            tag_field != nil and
-             has_matching_tag?(map, tag_field, tag_value, formatter)
+             has_matching_tag?(map, tag_field, Map.get(member, :tag_value), member.type, rt)
          end) do
       nil -> :not_found
       member -> {:ok, member}
     end
   end
 
-  defp identify_key_based_union_member_spec(map, members, formatter, rt) do
-    output_formatter = rt.output_formatter
-
+  defp identify_key_based_union_member_spec(map, members, type_info, rt) do
     member_names =
-      Enum.map(members, fn m ->
-        FieldFormatter.format_field_name(to_string(m.name), output_formatter)
-      end)
+      Enum.map(
+        members,
+        &FieldFormatter.format_field_name(to_string(&1.name), rt.output_formatter)
+      )
 
     matching_members =
       Enum.filter(members, fn member ->
-        Enum.any?(Map.keys(map), fn client_key ->
-          internal_key = FieldFormatter.parse_input_field(client_key, formatter)
-          to_string(internal_key) == to_string(member.name)
-        end)
+        Enum.any?(
+          Map.keys(map),
+          &(ClientNames.union_member(rt, type_info, &1) == {:ok, member.name})
+        )
       end)
 
     case matching_members do
@@ -575,26 +582,31 @@ defmodule AshRpc.ValueFormatter do
 
       multiple_members ->
         found_keys =
-          Enum.map(multiple_members, fn m ->
-            FieldFormatter.format_field_name(to_string(m.name), output_formatter)
-          end)
+          Enum.map(
+            multiple_members,
+            &FieldFormatter.format_field_name(to_string(&1.name), rt.output_formatter)
+          )
 
         {:error, {:invalid_union_input, :multiple_member_keys, found_keys, member_names}}
     end
   end
 
-  defp has_matching_tag?(map, tag_field, tag_value, formatter) do
+  defp has_matching_tag?(map, tag_field, tag_value, member_type, rt) do
     Enum.any?(map, fn {key, value} ->
-      internal_key = FieldFormatter.parse_input_field(key, formatter)
-      internal_key == tag_field && value == tag_value
+      tag_key(rt, member_type, key) == {:ok, tag_field} and value == tag_value
     end)
   end
 
-  defp find_client_key_for_member(map, member_name, formatter) do
-    Enum.find(Map.keys(map), fn key ->
-      internal_key = FieldFormatter.parse_input_field(key, formatter)
-      internal_key == member_name or to_string(internal_key) == to_string(member_name)
-    end)
+  # An embedded-resource member names its tag attribute on the resource, not
+  # as a type field.
+  defp tag_key(rt, %Type{} = member_type, key) do
+    if Type.resource_kind?(member_type),
+      do: ClientNames.resource_field(rt, Type.effective_resource(member_type), key),
+      else: ClientNames.type_field(rt, member_type, key)
+  end
+
+  defp find_client_key_for_member(map, member_name, type_info, rt) do
+    Enum.find(Map.keys(map), &(ClientNames.union_member(rt, type_info, &1) == {:ok, member_name}))
   end
 
   # Find union member for output (matches on map keys by member name)

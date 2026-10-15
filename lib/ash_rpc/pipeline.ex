@@ -32,6 +32,8 @@ defmodule AshRpc.Pipeline do
   """
 
   alias AshRpc.{
+    ClientNames,
+    FilterInput,
     InputFormatter,
     Request,
     RequestedFieldsProcessor,
@@ -53,16 +55,13 @@ defmodule AshRpc.Pipeline do
           {:ok, Request.t()} | {:error, term()}
   def parse_request(runtime, %AshRpc.Context{} = ctx, params, opts \\ []) do
     validation_mode? = Keyword.get(opts, :validation_mode?, false)
-    input_formatter = runtime.input_formatter
 
     {input_data, other_params} = Map.pop(params, "input", %{})
     {identity, params_without_identity} = Map.pop(other_params, "identity")
 
-    normalized_other_params =
-      FieldFormatter.parse_input_fields(params_without_identity, input_formatter)
-
     normalized_params =
-      normalized_other_params
+      params_without_identity
+      |> resolve_param_keys(runtime)
       |> Map.put(:input, input_data)
       |> Map.put(:identity, identity)
 
@@ -100,17 +99,12 @@ defmodule AshRpc.Pipeline do
            ),
          {:ok, input} <- parse_action_input(normalized_params, action, resource, runtime),
          {:ok, get_by} <- parse_get_by(normalized_params, entrypoint, resource, runtime),
-         {:ok, pagination} <- parse_pagination(normalized_params, input_formatter) do
-      formatted_sort =
-        FieldFormatter.format_sort_string(normalized_params[:sort], input_formatter)
+         {:ok, pagination} <- parse_pagination(normalized_params, runtime) do
+      {filter, filter_errors} = FilterInput.parse(runtime, resource, normalized_params[:filter])
+      {sort, sort_errors} = FilterInput.parse_sort(runtime, resource, normalized_params[:sort])
 
       show_metadata =
-        resolve_show_metadata(
-          normalized_params[:metadata_fields],
-          entrypoint,
-          action,
-          input_formatter
-        )
+        resolve_show_metadata(normalized_params[:metadata_fields], entrypoint, action, runtime)
 
       request =
         %Request{
@@ -126,10 +120,11 @@ defmodule AshRpc.Pipeline do
           input: input,
           identity: normalized_params[:identity],
           get_by: get_by,
-          filter: normalized_params[:filter],
-          sort: formatted_sort,
+          filter: filter,
+          sort: sort,
           pagination: pagination,
           show_metadata: show_metadata,
+          query_errors: filter_errors ++ sort_errors,
           runtime: runtime
         }
 
@@ -311,7 +306,31 @@ defmodule AshRpc.Pipeline do
     if get? or get_by != [], do: %{action | get?: true}, else: action
   end
 
-  defp resolve_show_metadata(requested, entrypoint, action, input_formatter) do
+  # Top-level keys resolve through the :params vocabulary; a miss is dropped,
+  # as an unknown key always was. Values are left as sent.
+  defp resolve_param_keys(params, runtime) do
+    Enum.reduce(params, %{}, fn {key, value}, acc ->
+      case ClientNames.vocabulary(runtime, :params, key) do
+        {:ok, name} -> Map.put(acc, name, value)
+        :error -> acc
+      end
+    end)
+  end
+
+  # {resolved, misses-as-sent}
+  defp resolve_keys(map, resolve) do
+    {resolved, misses} =
+      Enum.reduce(map, {%{}, []}, fn {key, value}, {acc, misses} ->
+        case resolve.(key) do
+          {:ok, name} -> {Map.put(acc, name, value), misses}
+          :error -> {acc, [key | misses]}
+        end
+      end)
+
+    {resolved, Enum.reverse(misses)}
+  end
+
+  defp resolve_show_metadata(requested, entrypoint, action, runtime) do
     exposed = entrypoint.exposed_metadata_fields
 
     cond do
@@ -319,10 +338,10 @@ defmodule AshRpc.Pipeline do
         []
 
       is_list(requested) and requested != [] ->
-        reverse_names = Map.new(entrypoint.metadata_field_names, fn {k, v} -> {v, k} end)
+        names = client_metadata_names(entrypoint, runtime)
 
         requested
-        |> Enum.map(&resolve_metadata_field(&1, reverse_names, input_formatter))
+        |> Enum.flat_map(&metadata_field(&1, names))
         |> Enum.filter(&(&1 in exposed))
 
       action.type in [:create, :update, :destroy] ->
@@ -333,15 +352,28 @@ defmodule AshRpc.Pipeline do
     end
   end
 
-  # Prefer the exact client-name mapping (e.g. "meta1" -> :meta_1) over formatter parsing.
-  defp resolve_metadata_field(field, reverse_names, input_formatter) when is_binary(field) do
-    case Map.fetch(reverse_names, field) do
-      {:ok, original} -> original
-      :error -> FieldFormatter.parse_input_field(field, input_formatter)
-    end
+  # Wire entrypoints carry the decorated reverse map. An entrypoint passed with
+  # the `entrypoint:` option never went through the decorator, so its names are
+  # built here from the same overrides and output formatter.
+  defp client_metadata_names(%AshRpc.Entrypoint{client_metadata_field_names: names}, _runtime)
+       when map_size(names) > 0,
+       do: names
+
+  defp client_metadata_names(%AshRpc.Entrypoint{} = entrypoint, runtime) do
+    Map.new(entrypoint.exposed_metadata_fields, fn field ->
+      {Map.get(entrypoint.metadata_field_names, field) ||
+         FieldFormatter.format_field_name(field, runtime.output_formatter), field}
+    end)
   end
 
-  defp resolve_metadata_field(field, _reverse_names, _input_formatter), do: field
+  defp metadata_field(field, _names) when is_atom(field), do: [field]
+
+  defp metadata_field(field, names) do
+    case Map.fetch(names, field) do
+      {:ok, name} -> [name]
+      :error -> []
+    end
+  end
 
   defp parse_action_input(params, action, resource, runtime) do
     raw_input = Map.get(params, :input, %{})
@@ -381,26 +413,11 @@ defmodule AshRpc.Pipeline do
     end)
   end
 
+  # Input keys are internal atoms after InputFormatter.
   defp find_input_type(field_name, resource, action, runtime) do
-    field_atom =
-      cond do
-        is_atom(field_name) ->
-          field_name
-
-        is_binary(field_name) ->
-          try do
-            String.to_existing_atom(field_name)
-          rescue
-            ArgumentError -> nil
-          end
-
-        true ->
-          nil
-      end
-
-    if field_atom do
-      case lookup_field_type(resource, field_atom, runtime) do
-        nil -> find_action_argument_type(field_atom, action, runtime)
+    if is_atom(field_name) do
+      case lookup_field_type(resource, field_name, runtime) do
+        nil -> find_action_argument_type(field_name, action, runtime)
         type -> classify_tuple_or_keyword_type(type, runtime)
       end
     else
@@ -465,32 +482,14 @@ defmodule AshRpc.Pipeline do
   defp convert_map_to_keyword(value, type_info_or_constraints) when is_map(value) do
     allowed_fields = get_tuple_field_names(type_info_or_constraints) |> MapSet.new()
 
+    # Keys were resolved by ValueFormatter, so a string key is not a field.
     Enum.reduce(value, %{}, fn {key, val}, acc ->
-      atom_key =
-        cond do
-          is_atom(key) ->
-            key
-
-          is_binary(key) ->
-            try do
-              String.to_existing_atom(key)
-            rescue
-              _ ->
-                reraise ArgumentError,
-                        "Invalid keyword field: #{inspect(key)}. Allowed fields: #{inspect(MapSet.to_list(allowed_fields))}",
-                        __STACKTRACE__
-            end
-
-          true ->
-            key
-        end
-
-      unless MapSet.member?(allowed_fields, atom_key) do
+      unless is_atom(key) and MapSet.member?(allowed_fields, key) do
         raise ArgumentError,
-              "Invalid keyword field: #{inspect(atom_key)}. Allowed fields: #{inspect(MapSet.to_list(allowed_fields))}"
+              "Invalid keyword field: #{inspect(key)}. Allowed fields: #{inspect(MapSet.to_list(allowed_fields))}"
       end
 
-      Map.put(acc, atom_key, val)
+      Map.put(acc, key, val)
     end)
   end
 
@@ -516,21 +515,28 @@ defmodule AshRpc.Pipeline do
     else
       raw_get_by = params[:get_by] || %{}
 
-      formatter = runtime.input_formatter
       output_formatter = runtime.output_formatter
       res_struct = Map.get(runtime.resource_lookup, resource)
-      parsed_get_by = FieldFormatter.parse_input_fields(raw_get_by, formatter)
+
+      {parsed_get_by, unknown} =
+        resolve_keys(raw_get_by, &ClientNames.resource_field(runtime, resource, &1))
 
       allowed_fields = MapSet.new(rpc_get_by)
       provided_fields = parsed_get_by |> Map.keys() |> MapSet.new()
 
       missing_fields = MapSet.difference(allowed_fields, provided_fields) |> MapSet.to_list()
-      extra_fields = MapSet.difference(provided_fields, allowed_fields) |> MapSet.to_list()
+
+      extra_fields =
+        (MapSet.difference(provided_fields, allowed_fields) |> MapSet.to_list()) ++ unknown
 
       cond do
         not Enum.empty?(extra_fields) ->
+          # Unknown keys are reported as sent.
           formatted_extra =
-            Enum.map(extra_fields, &FieldFormatter.format_field_name(&1, output_formatter))
+            Enum.map(extra_fields, fn
+              name when is_binary(name) -> name
+              name -> FieldFormatter.format_field_for_client(name, res_struct, output_formatter)
+            end)
 
           formatted_allowed =
             Enum.map(
@@ -610,17 +616,17 @@ defmodule AshRpc.Pipeline do
     end
   end
 
-  defp parse_pagination(params, formatter) do
+  defp parse_pagination(params, runtime) do
     case params[:page] do
       nil ->
         {:ok, nil}
 
       page when is_map(page) ->
-        parsed_page = FieldFormatter.parse_input_fields(page, formatter)
+        {parsed, misses} = resolve_keys(page, &ClientNames.vocabulary(runtime, :page, &1))
 
-        case Map.keys(parsed_page) -- @page_keys do
-          [] -> {:ok, parsed_page}
-          unknown_keys -> {:error, {:unknown_page_keys, Enum.map(unknown_keys, &to_string/1)}}
+        case misses ++ (Map.keys(parsed) -- @page_keys) do
+          [] -> {:ok, parsed}
+          unknown_keys -> {:error, {:unknown_page_keys, unknown_keys}}
         end
 
       invalid ->
@@ -653,6 +659,7 @@ defmodule AshRpc.Pipeline do
         |> apply_filter(request.filter)
         |> apply_sort(request.sort)
         |> apply_pagination(request.pagination)
+        |> add_query_errors(request.query_errors)
 
       Ash.read(query)
     end
@@ -780,6 +787,10 @@ defmodule AshRpc.Pipeline do
         action_result
     end
   end
+
+  # Filter and sort names that aren't client names (AshRpc.FilterInput).
+  defp add_query_errors(query, []), do: query
+  defp add_query_errors(query, errors), do: Ash.Query.add_error(query, errors)
 
   defp apply_filter(query, nil), do: query
   defp apply_filter(query, filter), do: Ash.Query.filter_input(query, filter)
@@ -1090,7 +1101,10 @@ defmodule AshRpc.Pipeline do
         provided_keys =
           parsed_identity
           |> Map.keys()
-          |> Enum.map(&FieldFormatter.format_field_name(&1, output_formatter))
+          |> Enum.map(fn
+            key when is_binary(key) -> key
+            key -> FieldFormatter.format_field_name(key, output_formatter)
+          end)
 
         expected_keys =
           resource
@@ -1158,26 +1172,14 @@ defmodule AshRpc.Pipeline do
     end
   end
 
-  # Parses identity input by applying reverse field_names mapping or input formatter
+  # Identity keys resolve to resource fields by client name; a miss keeps the
+  # client's string and fails the identity match.
   defp parse_identity_input(resource, identity, runtime) when is_map(identity) do
-    formatter = runtime.input_formatter
-    res_struct = Map.get(runtime.resource_lookup, resource)
-
-    Enum.into(identity, %{}, fn {key, value} ->
-      # First try to reverse map the original client key directly
-      # This handles cases like "isActive" → :is_active? where the mapping is exact
-      original_key = AshRpc.Manifest.Custom.original_field_name(res_struct, key)
-
-      internal_key =
-        if is_nil(original_key) do
-          # No direct mapping - fall back to formatter-based parsing
-          FieldFormatter.parse_input_field(key, formatter)
-        else
-          # Found a direct mapping (e.g., "isActive" → :is_active?)
-          original_key
-        end
-
-      {internal_key, value}
+    Map.new(identity, fn {key, value} ->
+      case ClientNames.resource_field(runtime, resource, key) do
+        {:ok, field} -> {field, value}
+        :error -> {key, value}
+      end
     end)
   end
 

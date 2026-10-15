@@ -22,6 +22,9 @@ defmodule AshRpc.ErrorBuilder do
   - `missing_required_parameter` *(hint)*: the `action` or `fields` param is
     missing or empty.
   - `invalid_input_format`: `input` is not a map.
+  - `unknown_input` *(hint)*: an `input` key is not one of the action's
+    client input names, or a nested key is not a client name of its type
+    (`path` locates it). One error per key.
 
   Field selection:
 
@@ -532,8 +535,22 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
+  # An `input` key that is not one of the action's client input names; the
+  # same wire error Ash's NoSuchInput maps to (lib/ash_rpc/error.ex).
+  defp build({:unknown_input, key}, ctx), do: build({:unknown_input, key, []}, ctx)
+
+  # A nested input key that is not a client name of its type; `path` holds
+  # the parent keys as sent and array indexes.
+  defp build({:unknown_input, key, path}, ctx) do
+    drift(ctx, "unknown_input", "Unknown input %{field}", "Unknown input",
+      vars: %{field: key},
+      fields: [key],
+      path: Enum.map(path, &path_segment(&1, ctx.formatter))
+    )
+  end
+
   defp build({:unknown_page_keys, keys}, ctx) do
-    keys = Enum.map(keys, &FieldFormatter.format_field_name(&1, ctx.formatter))
+    keys = Enum.map(keys, &client_name(&1, ctx.formatter))
 
     malformed("invalid_pagination", "Unknown pagination keys: %{keys}", "Invalid pagination",
       vars: %{keys: Enum.join(keys, ", ")},
@@ -768,7 +785,7 @@ defmodule AshRpc.ErrorBuilder do
     {reason, extra_vars} =
       case reason do
         {:unknown_keys, keys} ->
-          keys = Enum.map(keys, &FieldFormatter.format_field_name(to_string(&1), ctx.formatter))
+          keys = Enum.map(keys, &client_name(&1, ctx.formatter))
           {"unknown_keys", %{keys: Enum.join(keys, ", ")}}
 
         reason ->
@@ -870,8 +887,16 @@ defmodule AshRpc.ErrorBuilder do
     Enum.map(path, &FieldFormatter.format_field_name(to_string(&1), formatter))
   end
 
+  # A string name is a client name that missed, so it is reported as sent;
+  # an atom is an internal name and is formatted.
+  defp client_name(name, _formatter) when is_binary(name), do: name
+  defp client_name(name, formatter), do: FieldFormatter.format_field_name(name, formatter)
+
+  defp path_segment(index, _formatter) when is_integer(index), do: index
+  defp path_segment(name, formatter), do: client_name(name, formatter)
+
   defp build_complete_field_path(path, field_name, formatter) when is_list(path) do
-    formatted_field = FieldFormatter.format_field_name(to_string(field_name), formatter)
+    formatted_field = client_name(field_name, formatter)
 
     case format_path(path, formatter) do
       [] -> formatted_field

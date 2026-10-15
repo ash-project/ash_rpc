@@ -12,25 +12,25 @@ defmodule AshRpc.Runtime do
           profile: module() | nil,
           manifest: Ash.Info.Manifest.t(),
           mapping_source: module(),
-          input_formatter: AshRpc.MappingSource.formatter(),
           output_formatter: AshRpc.MappingSource.formatter(),
           resource_lookup: map(),
           type_lookup: map(),
           action_lookup: map(),
-          entrypoints: %{String.t() => AshRpc.Entrypoint.t()}
+          entrypoints: %{String.t() => AshRpc.Entrypoint.t()},
+          vocabulary: %{atom() => %{String.t() => atom()}}
         }
 
-  @enforce_keys [:manifest, :mapping_source, :input_formatter, :output_formatter]
+  @enforce_keys [:manifest, :mapping_source, :output_formatter]
   defstruct [
     :profile,
     :manifest,
     :mapping_source,
-    :input_formatter,
     :output_formatter,
     resource_lookup: %{},
     type_lookup: %{},
     action_lookup: %{},
-    entrypoints: %{}
+    entrypoints: %{},
+    vocabulary: %{}
   ]
 
   @spec new(module(), keyword()) :: t()
@@ -54,12 +54,12 @@ defmodule AshRpc.Runtime do
       profile: profile,
       manifest: manifest,
       mapping_source: rpc.mapping_source,
-      input_formatter: rpc.input_formatter,
       output_formatter: rpc.output_formatter,
       resource_lookup: rpc.lookups.resource,
       type_lookup: rpc.lookups.type,
       action_lookup: rpc.lookups.action,
-      entrypoints: rpc.entrypoints
+      entrypoints: rpc.entrypoints,
+      vocabulary: rpc.vocabulary
     }
   end
 end

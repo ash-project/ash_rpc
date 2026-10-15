@@ -35,7 +35,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   """
 
   alias Ash.Info.Manifest.Type
-  alias AshRpc.{FieldFormatter, Introspection, LoadRestrictions}
+  alias AshRpc.{ClientNames, FilterInput, Introspection, LoadRestrictions}
   alias AshRpc.FieldProcessing.Atomizer
   alias AshRpc.FieldProcessing.FieldSelector.Validation
   alias AshRpc.Manifest.Custom
@@ -181,14 +181,18 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   #
   # Handles attributes, calculations, relationships, and aggregates.
   defp select_resource_fields(resource, requested_fields, path, ctx) do
-    Validation.check_for_duplicates(requested_fields, path, ctx.runtime.input_formatter)
+    Validation.check_for_duplicates(
+      requested_fields,
+      path,
+      &resolve_resource_field_name(resource, &1, ctx)
+    )
 
     Enum.reduce(requested_fields, {[], [], []}, fn field, acc ->
       # Only names on `resource` are translated here; nested values are
       # translated when selection recurses into each field's destination type.
       field
       |> Atomizer.atomize_field(resource, ctx.runtime)
-      |> parse_field_request()
+      |> parse_field_request(ctx)
       |> process_resource_request(resource, path, acc, ctx)
     end)
   end
@@ -215,7 +219,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   defp process_resource_request({:multi_nested, entries}, resource, path, acc, ctx) do
     Enum.reduce(entries, acc, fn {field_name, nested}, inner_acc ->
       field_name
-      |> parse_nested(nested)
+      |> parse_nested(nested, ctx)
       |> process_resource_request(resource, path, inner_acc, ctx)
     end)
   end
@@ -301,6 +305,16 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       Validation.validate_non_empty(nested_fields, internal_name, path, category)
     end
 
+    # Before recursing: an unexposed destination has no client names, so its
+    # nested fields would otherwise fail first.
+    if category == :relationship do
+      dest_resource = extract_relationship_destination(field_type, resource, internal_name)
+
+      unless Custom.exposed?(Map.get(ctx.runtime.resource_lookup, dest_resource)) do
+        throw({:unknown_field, internal_name, resource, path})
+      end
+    end
+
     new_path = path ++ [internal_name]
 
     {nested_select, nested_load, nested_template} =
@@ -326,12 +340,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
         {select ++ [internal_name], new_load, template ++ [{internal_name, nested_template}]}
 
       :relationship ->
-        dest_resource = extract_relationship_destination(field_type, resource, internal_name)
-
-        unless Custom.exposed?(Map.get(ctx.runtime.resource_lookup, dest_resource)) do
-          throw({:unknown_field, internal_name, resource, path})
-        end
-
         check_load_allowed!(path, internal_name, ctx)
         load_spec = {internal_name, nested_select ++ nested_load}
         {select, load ++ [load_spec], template ++ [{internal_name, nested_template}]}
@@ -383,6 +391,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
          ctx
        ) do
     internal_name = resolve_resource_field_name(resource, calc_name, ctx)
+    args = ClientNames.calc_args(ctx.runtime, resource, internal_name, args)
 
     calc_field =
       case Ash.Info.Manifest.get_field(
@@ -533,34 +542,17 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     {nested_select, nested_load, nested_template} =
       select_fields(dest_type, fields, new_path, ctx)
 
-    input_formatter = ctx.runtime.input_formatter
-
     parsed_page =
       case Map.get(opts, :page) do
         nil ->
           nil
 
         page ->
-          parse_nested_page(
-            page,
-            internal_name,
-            path,
-            input_formatter,
-            Custom.relationship_pagination(rel)
-          )
+          parse_nested_page(page, internal_name, path, ctx, Custom.relationship_pagination(rel))
       end
 
-    parsed_filter =
-      case Map.get(opts, :filter) do
-        nil -> nil
-        filter -> FieldFormatter.parse_input_fields(filter, input_formatter)
-      end
-
-    parsed_sort =
-      case Map.get(opts, :sort) do
-        nil -> nil
-        sort -> FieldFormatter.format_sort_string(sort, input_formatter)
-      end
+    {parsed_filter, filter_errors} = FilterInput.parse(ctx.runtime, dest, Map.get(opts, :filter))
+    {parsed_sort, sort_errors} = FilterInput.parse_sort(ctx.runtime, dest, Map.get(opts, :sort))
 
     query =
       dest
@@ -582,6 +574,12 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
         case Map.get(opts, :offset) do
           nil -> q
           offset -> Ash.Query.offset(q, offset)
+        end
+      end)
+      |> then(fn q ->
+        case filter_errors ++ sort_errors do
+          [] -> q
+          errors -> Ash.Query.add_error(q, errors)
         end
       end)
       |> Ash.Query.select(nested_select)
@@ -675,9 +673,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     end
   end
 
-  defp parse_nested_page(page, field_name, path, formatter, pagination) when is_map(page) do
-    parsed = FieldFormatter.parse_input_fields(page, formatter)
-
+  defp parse_nested_page(page, field_name, path, ctx, pagination) when is_map(page) do
     allowed =
       case pagination do
         :offset -> @offset_page_keys
@@ -685,16 +681,27 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
         _ -> Enum.uniq(@offset_page_keys ++ @keyset_page_keys)
       end
 
-    invalid = Map.keys(parsed) -- allowed
+    {parsed, invalid} =
+      Enum.reduce(page, {%{}, []}, fn {key, value}, {acc, invalid} ->
+        case ClientNames.vocabulary(ctx.runtime, :page, key) do
+          {:ok, name} ->
+            if name in allowed,
+              do: {Map.put(acc, name, value), invalid},
+              else: {acc, [key | invalid]}
+
+          :error ->
+            {acc, [key | invalid]}
+        end
+      end)
 
     if invalid != [] do
-      throw({:invalid_nested_page, field_name, {:unknown_keys, invalid}, path})
+      throw({:invalid_nested_page, field_name, {:unknown_keys, Enum.reverse(invalid)}, path})
     end
 
     parsed
   end
 
-  defp parse_nested_page(_page, field_name, path, _formatter, _pagination) do
+  defp parse_nested_page(_page, field_name, path, _ctx, _pagination) do
     throw({:invalid_nested_page, field_name, :not_a_map, path})
   end
 
@@ -811,11 +818,10 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     end
   end
 
-  # Arg keys reach Ash as-is (usually strings), so an unknown key would only
-  # fail when Ash builds the load.
+  # Resolved arg keys are atoms; a key still a string is not a client name.
   defp undefined_arg_keys?(args, calc) when is_map(args) do
-    names = MapSet.new(calc.arguments, &to_string(&1.name))
-    Enum.any?(Map.keys(args), &(to_string(&1) not in names))
+    names = MapSet.new(calc.arguments, & &1.name)
+    Enum.any?(Map.keys(args), &(not MapSet.member?(names, &1)))
   end
 
   defp undefined_arg_keys?(_args, _calc), do: false
@@ -848,13 +854,11 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       throw({:requires_field_selection, :field_constrained_type, path})
     end
 
-    {_forward, reverse_map} = typed_struct_field_maps(type_info, ctx)
-
     typed = %{
       type_info: type_info,
       fields: Type.get_fields(type_info),
       error_type: "field_constrained_type",
-      resolve: &resolve_typed_struct_field(&1, reverse_map, ctx)
+      resolve: &type_field_name(&1, type_info, ctx)
     }
 
     select_typed_entries(requested_fields, typed, path, ctx)
@@ -863,10 +867,10 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   # Shared by typed structs and typed maps; `typed.resolve` maps a requested
   # name to the internal field name, which must exist in `typed.fields`.
   defp select_typed_entries(requested_fields, typed, path, ctx) do
-    Validation.check_for_duplicates(requested_fields, path, ctx.runtime.input_formatter)
+    Validation.check_for_duplicates(requested_fields, path, typed.resolve)
 
     Enum.reduce(requested_fields, {[], [], []}, fn field, acc ->
-      select_typed_entry(parse_field_request(field), field, typed, path, acc, ctx)
+      select_typed_entry(parse_field_request(field, ctx), field, typed, path, acc, ctx)
     end)
   end
 
@@ -887,7 +891,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       {:multi_nested, entries} ->
         Enum.reduce(entries, acc, fn {field_name, nested}, inner_acc ->
           field_name
-          |> parse_nested(nested)
+          |> parse_nested(nested, ctx)
           |> select_typed_entry(%{field_name => nested}, typed, path, inner_acc, ctx)
         end)
 
@@ -909,37 +913,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   # relationships; typed struct/map/tuple/union fields never accept them.
   defp reject_query_opts!(field_name, kind, path),
     do: throw({:query_opts_on_non_relationship, field_name, kind, path})
-
-  # Returns `{forward, reverse}` client field-name maps for a typed struct,
-  # preferring the decoration on the type in hand and falling back to
-  # `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the
-  # mapping source).
-  defp typed_struct_field_maps(type_info, ctx) do
-    case Custom.type_field_name_overrides_pair(type_info) do
-      nil ->
-        forward =
-          Introspection.type_field_name_overrides(ctx.runtime, Type.effective_module(type_info)) ||
-            %{}
-
-        {forward, Map.new(forward, fn {k, v} -> {v, k} end)}
-
-      pair ->
-        pair
-    end
-  end
-
-  defp resolve_typed_struct_field(field_name, reverse_map, ctx) when is_binary(field_name) do
-    case Map.get(reverse_map, field_name) do
-      # Never mint an atom here: an unresolved name has no matching field atom, so
-      # it stays a string and fails validate_field_exists_in_fields!/4 as an unknown
-      # field. Minting would only let client input grow the atom table.
-      nil -> resolve_field_name(field_name, ctx)
-      internal -> internal
-    end
-  end
-
-  defp resolve_typed_struct_field(field_name, _reverse_map, _ctx) when is_atom(field_name),
-    do: field_name
 
   # ---------------------------------------------------------------------------
   # Typed Map Field Selection
@@ -964,7 +937,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       type_info: type_info,
       fields: Type.get_fields(type_info),
       error_type: error_type,
-      resolve: &resolve_field_name(&1, ctx)
+      resolve: &type_field_name(&1, type_info, ctx)
     }
 
     select_typed_entries(requested_fields, typed, path, ctx)
@@ -992,12 +965,16 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
       {[], [], template}
     else
-      Validation.check_for_duplicates(requested_fields, path, ctx.runtime.input_formatter)
+      Validation.check_for_duplicates(
+        requested_fields,
+        path,
+        &type_field_name(&1, type_info, ctx)
+      )
 
       Enum.reduce(requested_fields, {[], [], []}, fn field, {select, load, template} ->
-        case parse_field_request(field) do
+        case parse_field_request(field, ctx) do
           {:simple, field_name} ->
-            field_atom = resolve_field_name(field_name, ctx)
+            field_atom = type_field_name(field_name, type_info, ctx)
 
             validate_field_exists_in_fields!(field_atom, fields, path, "tuple")
 
@@ -1005,7 +982,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
             {select, load, template ++ [%{field_name: field_atom, index: index}]}
 
           {:nested, field_name, nested_fields} ->
-            field_atom = resolve_field_name(field_name, ctx)
+            field_atom = type_field_name(field_name, type_info, ctx)
 
             validate_field_exists_in_fields!(field_atom, fields, path, "tuple")
 
@@ -1020,7 +997,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
           {:multi_nested, entries} ->
             Enum.reduce(entries, {select, load, template}, fn {field_name, nested_fields},
                                                               {s, l, t} ->
-              field_atom = resolve_field_name(field_name, ctx)
+              field_atom = type_field_name(field_name, type_info, ctx)
 
               validate_field_exists_in_fields!(field_atom, fields, path, "tuple")
 
@@ -1070,14 +1047,20 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     normalized_fields = normalize_union_fields(requested_fields)
 
     Validation.validate_non_empty(normalized_fields, "union", path, :union)
-    Validation.check_for_duplicates(normalized_fields, path, ctx.runtime.input_formatter)
+
+    Validation.check_for_duplicates(
+      normalized_fields,
+      path,
+      &union_member_name(&1, type_info, ctx)
+    )
 
     {load_items, template_items} =
       Enum.reduce(normalized_fields, {[], []}, fn field, {load_acc, template_acc} ->
-        case parse_field_request(field) do
+        case parse_field_request(field, ctx) do
           {:simple, member_name} ->
             process_simple_union_member_spec(
               member_name,
+              type_info,
               members,
               path,
               error_type,
@@ -1089,6 +1072,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
           {:nested, member_name, nested_fields} ->
             process_nested_union_member_spec(
               member_name,
+              type_info,
               nested_fields,
               members,
               path,
@@ -1103,6 +1087,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
                                                               {l_acc, t_acc} ->
               process_nested_union_member_spec(
                 member_name,
+                type_info,
                 nested_fields,
                 members,
                 path,
@@ -1128,6 +1113,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
   defp process_simple_union_member_spec(
          member_name,
+         type_info,
          members,
          path,
          error_type,
@@ -1135,7 +1121,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
          template_acc,
          ctx
        ) do
-    internal_name = resolve_field_name(member_name, ctx)
+    internal_name = union_member_name(member_name, type_info, ctx)
     member = find_union_member_spec(members, internal_name)
 
     unless member do
@@ -1152,6 +1138,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
   defp process_nested_union_member_spec(
          member_name,
+         type_info,
          nested_fields,
          members,
          path,
@@ -1160,7 +1147,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
          template_acc,
          ctx
        ) do
-    internal_name = resolve_field_name(member_name, ctx)
+    internal_name = union_member_name(member_name, type_info, ctx)
     member = find_union_member_spec(members, internal_name)
 
     unless member do
@@ -1199,12 +1186,12 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   # Generic Field Selection (for :any return type)
   # ---------------------------------------------------------------------------
 
-  defp select_generic_fields(requested_fields, ctx) do
+  # An `:any` return declares no names to look up, so selections stay as sent.
+  defp select_generic_fields(requested_fields, _ctx) do
     template =
       Enum.map(requested_fields, fn
-        field_name when is_atom(field_name) -> field_name
-        field_name when is_binary(field_name) -> resolve_field_name(field_name, ctx)
-        %{} = field_map -> Enum.map(field_map, fn {k, v} -> {k, v} end)
+        field_name when is_atom(field_name) or is_binary(field_name) -> field_name
+        %{} = field_map -> Map.to_list(field_map)
       end)
 
     {[], [], List.flatten(template)}
@@ -1214,17 +1201,17 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   # Helper Functions
   # ---------------------------------------------------------------------------
 
-  defp parse_field_request(field) do
+  defp parse_field_request(field, ctx) do
     case field do
       field_name when is_atom(field_name) or is_binary(field_name) ->
         {:simple, field_name}
 
       {field_name, nested} ->
-        parse_nested(field_name, nested)
+        parse_nested(field_name, nested, ctx)
 
       %{} = field_map when map_size(field_map) == 1 ->
         [{field_name, nested}] = Map.to_list(field_map)
-        parse_nested(field_name, nested)
+        parse_nested(field_name, nested, ctx)
 
       %{} = field_map when map_size(field_map) > 1 ->
         {:multi_nested, Map.to_list(field_map)}
@@ -1234,39 +1221,43 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     end
   end
 
-  defp parse_nested(field_name, %{} = nested) do
-    case classify_nested_map(nested) do
+  defp parse_nested(field_name, %{} = nested, ctx) do
+    case nested |> envelope_keys(ctx) |> classify_nested_map() do
       {:with_query_opts, opts, fields} -> {:with_query_opts, field_name, opts, fields}
       {:with_args, args, fields} -> {:with_args, field_name, args, fields}
       :not_args_structure -> {:nested, field_name, nested}
     end
   end
 
-  defp parse_nested(field_name, nested), do: {:nested, field_name, nested}
+  defp parse_nested(field_name, nested, _ctx), do: {:nested, field_name, nested}
+
+  # Envelope keys (`args`, `fields`, `page`, …) resolve through the
+  # `:query_opts` vocabulary; other keys keep their client form and never
+  # match an envelope option.
+  defp envelope_keys(map, ctx) do
+    Map.new(map, fn {key, value} ->
+      case ClientNames.vocabulary(ctx.runtime, :query_opts, key) do
+        {:ok, name} -> {name, value}
+        :error -> {key, value}
+      end
+    end)
+  end
 
   @query_opt_keys [:page, :filter, :sort, :limit, :offset]
 
-  # Collects envelope query options from a nested map (string or atom keys).
-  # Returns {:ok, opts_map} when at least one option key is present, else
-  # :no_query_opts. Absent keys are simply missing from the map.
+  # Collects envelope query options from a nested map whose envelope keys
+  # are resolved (`envelope_keys/2`). Returns {:ok, opts_map} when at least
+  # one option key is present, else :no_query_opts.
   defp get_query_opts(map) when is_map(map) do
     opts =
       Enum.reduce(@query_opt_keys, %{}, fn key, acc ->
-        case fetch_string_or_atom(map, key) do
+        case Map.fetch(map, key) do
           {:ok, value} -> Map.put(acc, key, value)
           :error -> acc
         end
       end)
 
     if opts == %{}, do: :no_query_opts, else: {:ok, opts}
-  end
-
-  defp fetch_string_or_atom(map, key) do
-    cond do
-      Map.has_key?(map, key) -> {:ok, Map.get(map, key)}
-      Map.has_key?(map, Atom.to_string(key)) -> {:ok, Map.get(map, Atom.to_string(key))}
-      true -> :error
-    end
   end
 
   defp classify_nested_map(nested) do
@@ -1288,43 +1279,24 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     end
   end
 
-  # Extracts args and fields from a map, handling both atom and string keys.
+  # Extracts args and fields from a map with resolved envelope keys.
   # Returns {:ok, args, fields} or :not_args_structure.
   defp get_args_and_fields(map) when is_map(map) do
-    args = Map.get(map, :args) || Map.get(map, "args")
-    has_fields_key = Map.has_key?(map, :fields) || Map.has_key?(map, "fields")
+    args = Map.get(map, :args)
 
     cond do
-      args != nil ->
-        fields =
-          cond do
-            Map.has_key?(map, :fields) -> Map.get(map, :fields)
-            Map.has_key?(map, "fields") -> Map.get(map, "fields")
-            true -> nil
-          end
-
-        {:ok, args, fields}
-
-      has_fields_key ->
-        fields = Map.get(map, :fields) || Map.get(map, "fields")
-        {:ok, nil, fields}
-
-      true ->
-        :not_args_structure
+      args != nil -> {:ok, args, Map.get(map, :fields)}
+      Map.has_key?(map, :fields) -> {:ok, nil, Map.get(map, :fields)}
+      true -> :not_args_structure
     end
   end
 
+  # A miss stays the client's string and fails as unknown_field with it.
   defp resolve_resource_field_name(resource, field_name, ctx)
        when is_binary(field_name) do
-    res_struct = Map.get(ctx.runtime.resource_lookup, resource)
-
-    if Custom.exposed?(res_struct) do
-      case Custom.original_field_name(res_struct, field_name) do
-        original when is_atom(original) and not is_nil(original) -> original
-        _ -> resolve_field_name(field_name, ctx)
-      end
-    else
-      resolve_field_name(field_name, ctx)
+    case ClientNames.resource_field(ctx.runtime, resource, field_name) do
+      {:ok, name} -> name
+      :error -> field_name
     end
   end
 
@@ -1334,8 +1306,18 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       field_name
   end
 
-  defp resolve_field_name(field_name, ctx) do
-    FieldFormatter.resolve_field_name(field_name, ctx.runtime.input_formatter)
+  defp type_field_name(field_name, type_info, ctx) do
+    case ClientNames.type_field(ctx.runtime, type_info, field_name) do
+      {:ok, name} -> name
+      :error -> field_name
+    end
+  end
+
+  defp union_member_name(member_name, type_info, ctx) do
+    case ClientNames.union_member(ctx.runtime, type_info, member_name) do
+      {:ok, name} -> name
+      :error -> member_name
+    end
   end
 
   # Extracts relationship destination from Ash.Info.Manifest type info

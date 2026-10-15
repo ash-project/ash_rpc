@@ -34,9 +34,6 @@ defmodule AshRpc.Test.MappingSource do
   ]
 
   @impl true
-  def input_formatter, do: :camel_case
-
-  @impl true
   def output_formatter, do: :camel_case
 
   @impl true

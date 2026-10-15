@@ -80,6 +80,12 @@ defmodule AshRpc.ActionMetadataTest do
       assert record == %{"id" => post.id, "title" => "None requested"}
     end
 
+    test "a non-client metadata name is dropped" do
+      post = create_post("Strict")
+      record = read_one("read_posts_with_metadata", post, ["total_score", "meta1"])
+      assert record == %{"id" => post.id, "title" => "Strict", "meta1" => "m1"}
+    end
+
     test "requested fields that are not exposed are silently dropped" do
       post = create_post("Some exposed")
 
@@ -207,16 +213,12 @@ defmodule AshRpc.ActionMetadataTest do
   end
 
   describe "metadata field names" do
-    test "original names are accepted in requests but output stays mapped" do
+    test "internal names are not client names and are dropped" do
       post = create_post("Original names")
 
       record = read_one("read_posts_with_metadata", post, ["meta_1", "is_cached?"])
 
-      assert record["meta1"] == "m1"
-      assert record["isCached"] == true
-      refute Map.has_key?(record, "meta_1")
-      refute Map.has_key?(record, "is_cached?")
-      refute Map.has_key?(record, "isCached?")
+      assert record == %{"id" => post.id, "title" => "Original names"}
     end
   end
 
