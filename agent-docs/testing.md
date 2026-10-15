@@ -20,7 +20,7 @@ Documentation Index in `AGENTS.md`.
 | [decoration](features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
 | [pipeline](features/pipeline.md) | `test/run_action_test.exs`, `test/validation_test.exs`, `test/context_test.exs`, `test/plug_test.exs`, `test/channel_test.exs`, `test/multitenancy_test.exs`, `test/filter_sort_test.exs`, `test/get_actions_test.exs` |
 | [field selection](features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
-| [formatting](features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs` |
+| [formatting](features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs`, `test/client_names_test.exs`, `test/filter_input_test.exs` |
 | [action metadata](features/action-metadata.md) | `test/action_metadata_test.exs` |
 | [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
 
@@ -90,7 +90,7 @@ assert %{"Success" => true, "Data" => %{"ViewCount" => 0}} =
 ```
 
 Asserted by `test/run_action_test.exs` "manifest: option changes output casing".
-`redecorate/2` reads only `:input_formatter` and `:output_formatter`
+`redecorate/2` reads only `:output_formatter`
 (`test/manifest/redecorate_test.exs`).
 
 The `entrypoint:` option runs a request against an entrypoint struct you pass in
@@ -220,6 +220,7 @@ Update `@golden` only for an intentional wire change; add a case to
 | `error_handler_profiles.ex` | Profiles whose `error_handler/1` misbehaves, all backed by `AshRpc.Test.PartialErrorHandler`: `PartialHandlerProfile` (redacts `invalid_attribute`, no clause for anything else), `RaisingHandlerProfile` (raises), `ThrowingHandlerProfile` (throws) |
 | `endpoint.ex` | `AshRpc.Test.Socket`, `AshRpc.Test.Endpoint`, and `AshRpc.Test.RpcChannel` (`use AshRpc.Channel`, joins `"rpc:*"`) |
 | `error_cases.ex` | `AshRpc.Test.ErrorCases`: one reason per `ErrorBuilder` clause, for the golden test |
+| `formatters.ex` | `AshRpc.Test.Formatters.upcase/1`: a custom output formatter with no inverse (`ManifestBuilder.build(output_formatter: {AshRpc.Test.Formatters, :upcase})`) |
 | `post.ex` | `AshRpc.Test.Post`: the main resource. Typed-map `stats`, embedded `settings`, unconstrained `data`, `unique_slug` identity; relationships to `author`, unexposed `secret`, `comments` (plus offset-only/keyset-only variants), `tags`; calculations with and without args (`title_shout` is `field? false`); aggregates; metadata actions; a `read_unviewed` read filtered to `view_count == 0` (the `read_action:` of `update_post_scoped`); `unfilterable_comments` / `unsortable_comments` (`filterable?`/`sortable?` false) and `secrets` (has_many to the unexposed `Secret`); `create_for_owner` with a required multi-word `owner_id` (`create_post_for_owner`); `set_viewed` with a mapped `is_viewed?` → `isViewed`, an inline change and a private `audit_note` argument (`set_post_viewed`); generic actions returning `:map`, typed map, tuple, union and nothing |
 | `account.ex` | `AshRpc.Test.Account`: non-public `secret` and `internal_notes` attributes, and an `embedding` vector with `dimensions: 3` (`create_account`, `list_accounts`) |
 | `author.ex` | `AshRpc.Test.Author`: `is_active?` / `is_prolific?` (name overrides), `post_count` aggregate, `name_active` identity, actor-scoped `me` / `update_me` / `destroy_me` |
@@ -233,7 +234,7 @@ Update `@golden` only for an intentional wire change; add a case to
 | `secret.ex` | `AshRpc.Test.Secret`: in the domain but deliberately **not exposed**, for strict-exposure tests; `post_id` is the destination of `Post.secrets` |
 | `post_settings.ex` | `AshRpc.Test.PostSettings`: embedded resource with a `theme_label` calculation |
 | `post_stats.ex` | `AshRpc.Test.PostStats`: `Ash.Type.NewType` map with fields `word_count_1` and `is_featured?` (client names via `type_field_names/1`) |
-| `calculations.ex` | Module calculations. For `Post`: `Excerpt` (arg `length`), `ScoredStats` (arg `boost`, returns `PostStats`), `SelfPost` (returns the record). For `Widget`: `FeaturedPost` (`strict_loads?: false`, wraps the loaded `post` in a union). For `Project`: `ProjectSummary` (a fixed `ProjectStats`), `ProjectReport` (two `ProjectMeta` rows, `total: 2`), `SelfRecords`, `IsLate` and `DaysLeft` (module calcs over `due_date`, so ETS needs no date functions) |
+| `calculations.ex` | Module calculations. For `Post`: `Excerpt` (arg `length`, optional multi-word `omission_text` appended to the slice), `ScoredStats` (arg `boost`, returns `PostStats`), `SelfPost` (returns the record). For `Widget`: `FeaturedPost` (`strict_loads?: false`, wraps the loaded `post` in a union). For `Project`: `ProjectSummary` (a fixed `ProjectStats`), `ProjectReport` (two `ProjectMeta` rows, `total: 2`), `SelfRecords`, `IsLate` and `DaysLeft` (module calcs over `due_date`, so ETS needs no date functions) |
 | `changes.ex` | `Changes.Metadata` (the metadata values every `*_with_metadata` action sets), the read preparation and change that put them, and `MergeData` for `merge_post_data` |
 | `widget.ex` | `AshRpc.Test.Widget`: union theme. `content` (`:type_and_value`; embedded `text`/`checklist` members tagged by `content_type`, scalar `note`/`priority_value`), `status` (`:map_with_tag`, untyped `simple`/`detailed` maps tagged by `status_type`), `attachments` (array of tagged typed-map `file`/`image` members and a string `url`), `belongs_to :post`, `featured` calc (`WidgetItem`). Rows `create_widget`, `list_widgets`, `get_widget` |
 | `text_block.ex` | `AshRpc.Test.TextBlock`: embedded `content` member (`text`, `word_count`, `content_type`) with a `display_text` calc |
@@ -247,7 +248,7 @@ Update `@golden` only for an intentional wire change; add a case to
 | `project_stats.ex` | `AshRpc.Test.ProjectStats`: `Ash.TypedStruct` with a nested typed-map `metrics` field; `all_done?` → `allDone` |
 | `trail.ex` | `AshRpc.Test.Trail`: hand-rolled `use Ash.Type` stored as `{:array, :string}`; casts a dotted string or a list of labels, and `strict?: true` rejects a string with a message |
 | `missing_post_reactor.ex` | `AshRpc.Test.MissingPostReactor`: a Reactor whose one step fails with `NotFound`, so `Catalog.find_post_via_reactor` returns an error class wrapping a `RunStepError` |
-| `palette.ex` | `AshRpc.Test.Palette`: hand-rolled `use Ash.Type` with map storage (`primary`, `secondary`), which the runtime must treat as a primitive |
+| `palette.ex` | `AshRpc.Test.Palette`: hand-rolled `use Ash.Type` with map storage (`primary`, `secondary`, optional multi-word `accent_color`), which the runtime must treat as a primitive; its keys round-trip verbatim |
 | `catalog.ex` | `AshRpc.Test.Catalog`: generic actions only (ETS and a read exist for the data layer). Returns `{:array, :struct}` of `Post`, `{:array, :uuid}`, `TaskStats` and an array of it, `{:array, PostStats}`, unconstrained `{:array, :map}`, `:date`, `{:array, :date}`, a typed-map `digest`; struct arguments (`assign`, `assign_many`, `instance_of: Author`); `find_post_via_reactor`, run by `MissingPostReactor`. Rows `catalog_<action>` |
 | `task_stats.ex` | `AshRpc.Test.TaskStats`: `Ash.TypedStruct`; `completed?` → `completed`, `is_urgent?` → `isUrgent` |
 | `intake.ex` | `AshRpc.Test.Intake`: input theme, every value shape carrying name overrides (`is_active?` → `isActive`, `version_1` → `version1`; `search` arguments `includeDeleted`, `filterBy1`); typed map, NewType maps, keyword and tuple NewTypes, embedded and nested embedded values, a `:type_and_value` and a `:map_with_tag` union; generic `process_data` with a NewType argument. Rows `create_intake`, `update_intake`, `search_intakes`, `process_intake_data` |

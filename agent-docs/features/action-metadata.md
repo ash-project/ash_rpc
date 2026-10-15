@@ -56,9 +56,13 @@ returns from `entrypoint/1` (see [decoration](decoration.md)).
 (`resolve_show_metadata/4` in `pipeline.ex`):
 
 - If the entrypoint exposes nothing, the result is `[]`, whatever was requested.
-- If the param is a non-empty list, each client name is resolved through the
-  reverse of `metadata_field_names` first, then through the input formatter.
-  Names that aren't in `exposed_metadata_fields` are dropped without an error.
+- If the param is a non-empty list, each client name is looked up in the
+  entrypoint's `client_metadata_field_names` (the decorator's reverse map over
+  every exposed field, overrides included; built on the fly for an entrypoint
+  passed with `entrypoint:`). Names that miss, internal names such as
+  `"meta_1"` included, or that aren't in `exposed_metadata_fields`, are dropped
+  without an error (`test/action_metadata_test.exs` "internal names are not
+  client names and are dropped").
 - If the param is absent (or `[]`): read actions get `[]`, and create, update
   and destroy actions get every exposed field.
 

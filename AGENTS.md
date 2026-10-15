@@ -58,7 +58,6 @@ fixtures (`AshRpc.Test.*`) only compile in `:test` (`elixirc_paths`).
 # 1. Mapping source: compile-time client names (called only during decoration)
 defmodule MyExt.MappingSource do
   @behaviour AshRpc.MappingSource
-  def input_formatter, do: :camel_case
   def output_formatter, do: :camel_case
   def exposed_resource?(resource), do: ...
   def field_names(_resource), do: %{}          # overrides only
@@ -87,7 +86,7 @@ use AshRpc.Channel, profile: MyExt.RpcProfile     # "run" / "validate" events
 complete minimal version of this wiring.
 
 ### Wire Contract
-Request params (keys pass through the input formatter, apart from `input` and `identity`):
+Request params (keys are the output formatter's client names, from the `vocabulary`, apart from `input` and `identity`):
 `action`, `input`, `fields`, `identity`, `getBy`, `filter`, `sort`, `page`,
 `tenant`, `metadataFields`.
 
@@ -116,6 +115,8 @@ formatter.
 | **Result extraction** | `lib/ash_rpc/result_processor.ex`, `lib/ash_rpc/field_extractor.ex` |
 | **Value formatting** | `lib/ash_rpc/value_formatter.ex` (`input_formatter.ex` delegates to it; the pipeline formats output through it directly) |
 | **Field-name casing** | `lib/ash_rpc/field_formatter.ex`, `lib/ash_rpc/case.ex` |
+| **Client-name resolution** | `lib/ash_rpc/client_names.ex` |
+| **Filter/sort name rewriting** | `lib/ash_rpc/filter_input.ex` |
 | **Load-restriction normalization** | `lib/ash_rpc/load_restrictions.ex` (`normalize/1` in `parse_request`, `check!/2` from the field selector) |
 | **Error protocol + impls** | `lib/ash_rpc/error.ex` |
 | **Error pipeline** | `lib/ash_rpc/errors.ex` (Ash errors), `error_builder.ex` (pipeline reasons), `error_formatter.ex` |
@@ -169,7 +170,7 @@ from an existing file of the same kind. Formats without comment syntax need a
 | **MappingSource, decoration, entrypoints, client names, formatters** | [features/decoration.md](agent-docs/features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
 | **Pipeline stages, validation, transports, tenant, filter/sort/page, get actions** | [features/pipeline.md](agent-docs/features/pipeline.md) | `test/run_action_test.exs`, `test/validation_test.exs`, `test/context_test.exs`, `test/plug_test.exs`, `test/channel_test.exs`, `test/multitenancy_test.exs`, `test/filter_sort_test.exs`, `test/get_actions_test.exs` |
 | **Field selection, calculations, aggregates, nested query options, unions, load restrictions** | [features/field-selection.md](agent-docs/features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
-| **Value/input formatting, union input, unconstrained maps, name mapping** | [features/formatting.md](agent-docs/features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs` |
+| **Value/input formatting, union input, unconstrained maps, name mapping, client-name resolution** | [features/formatting.md](agent-docs/features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs`, `test/client_names_test.exs`, `test/filter_input_test.exs` |
 | **Action metadata** | [features/action-metadata.md](agent-docs/features/action-metadata.md) | `test/action_metadata_test.exs` |
 | **Errors, handlers, wire error shape** | [features/errors.md](agent-docs/features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
 
@@ -178,12 +179,17 @@ from an existing file of the same kind. Formats without comment syntax need a
 ### Compile Time vs Runtime
 - **Decoration (compile time, extension-owned):** `Decorator.decorate/3` calls the
   `MappingSource` once and precomputes everything under `manifest.custom.ash_rpc`.
-  That includes formatters, wire `entrypoints` keyed by name, client field/argument
-  names, expected input keys, return classification and `lookups`.
+  That includes the output formatter, wire `entrypoints` keyed by name, forward
+  and reverse client names (resources, calculation arguments, every type tree
+  including inline types, entrypoint metadata), the request `vocabulary`,
+  expected input keys, return classification and `lookups`.
 - **Runtime:** `AshRpc.Runtime.new(profile, opts)` reads that decoration once
   per request. The runtime never calls the mapping source. The one exception is
   `type_field_names/1`, the fallback for types missing from the type lookup
   or carrying no decorated overrides.
+- Client names are resolved only by exact lookup (`AshRpc.ClientNames`);
+  nothing parses a client string with a formatter. Extensions decorate types
+  that never enter the manifest with `Decorator.decorate_type/3`.
 - `Runtime.new/2` raises `ArgumentError` ("has no custom.ash_rpc decoration")
   when it gets an undecorated manifest.
 
@@ -231,11 +237,12 @@ stacktrace and returned as `unknown_error`.
 |-------|-------|----------|
 | "has no custom.ash_rpc decoration" `ArgumentError` | Raw `Ash.Info.Manifest` passed to the runtime | Decorate with `AshRpc.Manifest.Decorator.decorate/3` (or use the fixture `ManifestBuilder`) |
 | `AshRpc.Manifest.NameCollisionError` | Two fields/args map to the same client name | Fix `field_names` / `argument_names` overrides |
-| Formatter change in a test has no effect | Formatters are fixed at decoration time | `ManifestBuilder.build(output_formatter: …)` or `AshRpc.Manifest.redecorate/2`, then pass `manifest:` |
+| Formatter change in a test has no effect | The output formatter is fixed at decoration time | `ManifestBuilder.build(output_formatter: …)` or `AshRpc.Manifest.redecorate/2`, then pass `manifest:` |
 | Test sees unexpected data/state | `ManifestBuilder.manifest/0` is cached in `:persistent_term` | Use `build/1` for a variant manifest. Don't mutate the cached one |
 | `action_not_found` | Wire name not in `@entrypoints`, or `entrypoint/1` returned `nil` | Add it to `manifest_builder.ex` |
 | `unknown_field` through a relationship | Destination resource not exposed | Add it to `@exposed` in the test mapping source (not `Secret`, which stays unexposed on purpose) |
-| `unknown_input` | An input key the action doesn't accept: unknown, misspelled, or a private (`public? false`) argument | Send the client name from the manifest, or drop the key |
+| `unknown_input` | An input key that isn't one of the action's client names (a misspelling, another casing, or a private `public? false` argument), or a nested key that isn't a client name of its type (`path` locates it); raised by ash_rpc before Ash runs | Send the client name from the manifest, or drop the key |
+| `unknown_field` / sort or filter error for a correctly spelled name | The name is in a non-client casing (e.g. `view_count` under `:camel_case`) | Send the client name; names are matched exactly |
 | `UndefinedFunctionError` on `AshRpc.Plug` / `AshRpc.Channel` | plug/phoenix not in the consumer's deps | They're optional deps. Add them in the consumer |
 | `invalid_query_opts` | Query envelope on a non-relationship or to-one field, `args` mixed with query opts, or `page` mixed with bare `limit`/`offset` | Use the envelope only on has_many/many_to_many; pick `page` or `limit`/`offset` |
 | `filter_not_supported` / `sort_not_supported` | `details.reason` `disabled`: the entrypoint sets `enable_filter?`/`enable_sort?: false`. `unsupported`: the param is on a non-list action (a `get?`/`get_by` entrypoint or a non-read action) or the relationship isn't filterable/sortable | Remove the param, or flip the entrypoint flag |

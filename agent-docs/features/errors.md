@@ -90,6 +90,24 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   stale-client hint ("NoSuchInput is unknown_input naming the input as sent,
   with no path"; `test/field_name_translation_test.exs` "a rejected private
   argument is unknown_input under its client name").
+- ash_rpc raises the same `unknown_input` itself, before Ash runs, for an
+  `input` key that isn't one of the action's client input names (another
+  casing, a misspelling, or a private argument): `ErrorBuilder`'s
+  `{:unknown_input, key}` clause, one error per key, in both `run_action` and
+  `validate_action`. Its wire map equals the `NoSuchInput` impl's
+  (`test/error_builder_golden_test.exs` "unknown_input is the wire error Ash's
+  NoSuchInput maps to"). Ash's `NoSuchInput` still applies to keys Ash rejects
+  itself.
+- A nested `input` key that isn't a client name of its type (typed map,
+  keyword, tuple, TypedStruct, embedded resource, union member value) is
+  `{:unknown_input, key, path}`: the same wire map, with `path` the parent
+  keys as sent plus array indexes, e.g. `["history", 1]` or
+  `["attachments", 0, "file"]`. Every miss in the input is reported, top-level
+  and nested together (`test/complex_input_test.exs` "strict nested input
+  keys"; golden case `unknown_input_nested`). A node without decorated names
+  (an unexposed embedded resource, a type that never went through the
+  decorator) keeps its keys as sent, and unconstrained and custom map-storage
+  values are verbatim.
 - A `required` message is a template naming the field through `vars.field`,
   prefixed with Ash's field type: `"attribute %{field} is required"`,
   `"argument %{field} is required"`, `"relationship %{field} is required"`, or

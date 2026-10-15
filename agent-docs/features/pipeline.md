@@ -51,7 +51,7 @@ Runtime code never reads globals or app env (see `AGENTS.md` Rule 3).
 |-------|--------|
 | `profile` | The profile module (`nil` from `from_manifest/2`) |
 | `manifest` | `opts[:manifest]`, else `profile.manifest/0` |
-| `mapping_source`, `input_formatter`, `output_formatter` | `manifest.custom.ash_rpc` |
+| `mapping_source`, `output_formatter`, `vocabulary` | `manifest.custom.ash_rpc` |
 | `resource_lookup`, `type_lookup`, `action_lookup` | `manifest.custom.ash_rpc.lookups` |
 | `entrypoints` | `manifest.custom.ash_rpc.entrypoints`, keyed by wire name |
 
@@ -99,9 +99,10 @@ and formats them like a normal response.
 
 Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
 
-1. Pops `"input"` and `"identity"` (passed on untouched) and parses every other
-   param key with the input formatter (`getBy` → `:get_by`,
-   `metadataFields` → `:metadata_fields`).
+1. Pops `"input"` and `"identity"` (matched literally) and resolves every
+   other param key through the `:params` vocabulary (`getBy` → `:get_by`,
+   `metadataFields` → `:metadata_fields` under `:camel_case`). A key that isn't
+   a client name is dropped, like any unknown key.
 2. Applies the `tenant` param with `AshRpc.Context.put_tenant_param/2`.
 3. Resolves the entrypoint: the `entrypoint:` option if given, else
    `runtime.entrypoints[params["action"]]`. A missing or empty action is
@@ -122,9 +123,17 @@ Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
    (atomize, select, build the extraction template, enforce load restrictions
    and nested filter/sort flags). Skipped in validation mode when no fields are
    sent. See [field selection](field-selection.md).
-9. Formats `input` with `AshRpc.InputFormatter` ([formatting](formatting.md)),
-   parses `getBy` and `page`, formats the sort string to internal names, and
-   resolves `metadataFields` against `entrypoint.exposed_metadata_fields`.
+9. Formats `input` with `AshRpc.InputFormatter` ([formatting](formatting.md)):
+   a key that isn't one of the action's client input names is
+   `{:unknown_input, key}`, and a nested key that isn't a client name of its
+   type is `{:unknown_input, key, path}`; all of them are collected, one error
+   per key, before Ash runs (in `validate_action` too). Then resolves `getBy` keys (misses join
+   `unexpected_get_by_fields`, reported as sent), `page` keys (misses are
+   `unknown_page_keys`, as sent), rewrites `filter` and `sort` with
+   `AshRpc.FilterInput` (misses become `NoSuchField`/`NoSuchFilterPredicate`
+   on `Request.query_errors`, added to the read query), and resolves
+   `metadataFields` through the entrypoint's `client_metadata_field_names`
+   against `entrypoint.exposed_metadata_fields`.
 
 ### 2. `Pipeline.execute_ash_action(request)`
 
@@ -273,8 +282,8 @@ AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{tenant: "w1"}, %{
 
 ### Sort
 
-Sort strings are formatted to internal names by
-`AshRpc.FieldFormatter.format_sort_string/2` and applied with
+Sort strings are rewritten to internal names by
+`AshRpc.FilterInput.parse_sort/3` and applied with
 `Ash.Query.sort_input/2`. A string or a list (`test/filter_sort_test.exs`
 "sort strings", "sort lists"):
 
@@ -286,10 +295,20 @@ Sort strings are formatted to internal names by
 | `"--slug"` | Descending, nils last |
 | `"viewCount,-title"`, `["-viewCount", "title"]` | In order; client (camelCase) names |
 
+A name that isn't a client name (`"-view_count"` under `:camel_case`) is
+dropped and reported as Ash's unknown-field error, the same as a misspelled
+name (`test/filter_sort_test.exs` "strict client names").
+
 ### Filter
 
-Filter keys and operators are parsed with the input formatter and applied with
-`Ash.Query.filter_input/2`, e.g. `%{"slug" => %{"isNil" => true}}`, also inside
+Filter keys and operators are rewritten to internal names by
+`AshRpc.FilterInput.parse/3` (field names per resource, recursing through
+relationships; operator and function names and `and`/`or`/`not` through the
+`:filter_ops` vocabulary; calculation `input` keys through the calculation's
+argument names) and applied with `Ash.Query.filter_input/2`. Operator
+right-hand sides are left as sent. A field miss is dropped and reported as
+`NoSuchField`, an operator miss as `NoSuchFilterPredicate`; a calc-arg miss stays
+a string for Ash to reject. Example: e.g. `%{"slug" => %{"isNil" => true}}`, also inside
 `and` / `or` ("filter with isNil"; "filter and sort reach the request with
 internal names" shows `request.filter == %{slug: %{is_nil: true}}`).
 

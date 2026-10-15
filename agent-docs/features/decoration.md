@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 How an extension turns an `%Ash.Info.Manifest{}` into something the ash_rpc
 runtime can serve: the `AshRpc.MappingSource` behaviour, what the decorator
 writes under `custom.ash_rpc`, the `%AshRpc.Entrypoint{}` contract, client-name
-resolution and formatters.
+resolution and the output formatter.
 
 Key files: `lib/ash_rpc/mapping_source.ex`, `lib/ash_rpc/manifest/decorator.ex`,
 `lib/ash_rpc/manifest.ex`, `lib/ash_rpc/manifest/custom.ex`,
@@ -25,8 +25,8 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 - **Idempotent**: decorating an already-decorated manifest gives the same
   result (`test/manifest/decorator_test.exs` "decorate/3 is idempotent").
 - **Compile time, extension-owned**: the extension calls it while building its
-  manifest. `opts` may override `:input_formatter` / `:output_formatter`;
-  everything else comes from the mapping source.
+  manifest. `opts` may override `:output_formatter`; everything else comes
+  from the mapping source.
 - The runtime never calls the mapping source. The one exception is
   `type_field_names/1`, the fallback for type modules missing from the type
   lookup or carrying no decorated override pair
@@ -36,8 +36,7 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 
 | Callback | Returns | Used for |
 |----------|---------|----------|
-| `input_formatter/0` | `formatter()` | Client → internal key parsing at runtime |
-| `output_formatter/0` | `formatter()` | Internal → client names, computed at decoration and applied at runtime |
+| `output_formatter/0` | `formatter()` | Internal → client names, computed at decoration (forward and reverse maps) and applied to output at runtime. The only formatter: client input is matched against its names exactly |
 | `exposed_resource?/1` | `boolean()` | Which resources (domain and embedded) get decorated. Everything else stays undecorated (strict exposure) |
 | `field_names/1` | `%{atom() => String.t()}` | Client-name **overrides only**; unlisted fields use the output formatter |
 | `argument_names/2` | `%{atom() => String.t()}` | Per-action argument overrides `(resource, action)` |
@@ -46,8 +45,10 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 
 `formatter()` is `:camel_case | :snake_case | :pascal_case | {module, fun} |
 {module, fun, extra_args}` (`@type formatter` in `mapping_source.ex`). A custom
-`{Mod, fun}` formatter is supported end to end (`test/manifest/decorator_test.exs`
-"custom {Mod, fun} output formatter").
+`{Mod, fun}` formatter is supported end to end and needs no inverse
+(`test/manifest/decorator_test.exs` "custom {Mod, fun} output formatter";
+`test/field_name_translation_test.exs` "wire round trip" with
+`AshRpc.Test.Formatters.upcase/1`).
 
 The test fixture `test/support/mapping_source.ex` is a complete example. Its
 field and argument override clauses (it also maps `AshRpc.Test.PostStats` in
@@ -72,7 +73,8 @@ Read with `AshRpc.Manifest`:
 | Key | Reader |
 |-----|--------|
 | `mapping_source` | `mapping_source/1` |
-| `input_formatter`, `output_formatter` | `input_formatter/1`, `output_formatter/1` |
+| `output_formatter` | `output_formatter/1` |
+| `vocabulary` (`%{scope => %{client_name => atom}}`) | `vocabulary/1`; on the runtime as `runtime.vocabulary` |
 | `entrypoints` (`%{wire_name => %AshRpc.Entrypoint{}}`) | `entrypoint_lookup/1` |
 | `lookups.resource` (includes embedded resources), `lookups.type`, `lookups.action` | `resource_lookup/1`, `type_lookup/1`, `action_lookup/1` |
 
@@ -84,6 +86,16 @@ or actions. `ash_rpc!/1` raises `ArgumentError` on an undecorated manifest.
 Asserted by `test/manifest/decorator_test.exs` "manifest-level custom.ash_rpc"
 and "lookups are embedded and merge embedded resources".
 
+`vocabulary` holds the fixed request names, formatted with the output
+formatter, in four scopes (`test/manifest/decorator_test.exs` "vocabulary"):
+
+| Scope | Internal names |
+|-------|----------------|
+| `:params` | `action`, `fields`, `get_by`, `filter`, `sort`, `page`, `tenant`, `metadata_fields` (`input` and `identity` stay literal) |
+| `:page` | `limit`, `offset`, `count`, `after`, `before` |
+| `:query_opts` | nested envelope keys: `page`, `filter`, `sort`, `limit`, `offset`, `args`, `fields` |
+| `:filter_ops` | `and`, `or`, `not`, `input`, every `Ash.Filter` built-in operator name, the aliases `equals`/`not_equals`/`gt`/`lt`/`gte`/`lte`, and every built-in function name |
+
 ### Element level
 
 Read with `AshRpc.Manifest.Custom` (every accessor returns `nil` or an empty
@@ -91,9 +103,10 @@ default for undecorated structs):
 
 | Element | Data | Accessors |
 |---------|------|-----------|
-| Exposed resource (domain or embedded) | Full client `field_names` (fields and relationships), the overrides and their reverse, per-action argument overrides and their reverse, `authorize_bulk_strategy` | `exposed?/1`, `field_names/1`, `field_name_override/2`, `original_field_name/2`, `argument_name_override/3`, `original_argument_name/3`, `authorize_bulk_strategy/1` |
+| Exposed resource (domain or embedded) | Full client `field_names` (fields and relationships) and their reverse `client_field_names`, `calculation_argument_names` (`%{calc => %{client => arg}}`), the overrides and their reverse, per-action argument overrides and their reverse, `authorize_bulk_strategy` | `exposed?/1`, `field_names/1`, `client_field_names/1`, `calculation_argument_names/2`, `field_name_override/2`, `original_field_name/2`, `argument_name_override/3`, `original_argument_name/3`, `authorize_bulk_strategy/1` |
 | Many-cardinality relationship to an exposed destination | `pagination` (`:offset`, `:keyset`, `:mixed`, `:none`) and `read_action` (the relationship's, else the destination's primary read) | `relationship_pagination/1`, `relationship_read_action/1` |
-| Type with `type_field_names/1` overrides | Overrides and their reverse | `type_field_name_overrides/1`, `type_field_name_overrides_pair/1` |
+| Type with named fields (typed map, keyword, tuple, TypedStruct), in `manifest.types` or inline on a field, argument, input, return or metadata | `field_names` and their reverse `client_field_names`; plus the overrides and their reverse when `type_field_names/1` maps the module | `type_field_names/1`, `type_client_field_names/1`, `type_field_name_overrides/1`, `type_field_name_overrides_pair/1` |
+| Union type | `client_member_names` (`%{client => member}`) | `type_client_member_names/1` |
 | Every entrypoint action | `expected_input_keys` (client key → input name), `input_field_types`, `return_classification` | `action_expected_input_keys/1`, `action_input_field_types/1`, `action_return_classification/1` |
 
 Tests in `test/manifest/decorator_test.exs`: "exposed resources carry
@@ -129,6 +142,7 @@ The per-action contract returned by `entrypoint/1`. Defaults are from
 | `load_restrictions` | `:none` | `{:allow, tree}` or `{:deny, tree}`; normalized in `parse_request`, enforced in the field selector ([field selection](field-selection.md)) |
 | `exposed_metadata_fields` | `[]` | Action metadata the client may request ([action metadata](action-metadata.md)) |
 | `metadata_field_names` | `%{}` | Internal → client names for metadata fields ([action metadata](action-metadata.md)) |
+| `client_metadata_field_names` | `%{}` | Written by the decorator on wire entrypoints: client → internal names for every exposed metadata field. Mapping sources leave it unset |
 | `preset_fields` | `nil` | Not read by the pipeline. Carried for entrypoints an extension resolves outside the wire and passes with the `entrypoint:` option |
 
 An entrypoint passed with `entrypoint:` to `AshRpc.run_action/4` bypasses the
@@ -180,6 +194,17 @@ the manifest build"). The `list_posts_allow_author` row is
   resource's `field_names/1` override, arguments the `argument_names/2`
   override; otherwise the output formatter (`test/manifest/redecorate_test.exs` "expected input keys
   follow the new output formatter").
+- Every type tree is walked bottom-up (`Decorator.decorate_type/3`, public):
+  `manifest.types`, exposed resource fields and calculation arguments, and
+  each entrypoint action's inputs, returns and metadata. Resource and
+  named-reference nodes are skipped; their names live on the resource or the
+  named type. Extensions call `decorate_type/3` for types that never enter
+  the manifest; an undecorated type resolves no names, and its input keys
+  pass as sent instead of being checked (`test/manifest/decorator_test.exs`
+  "type names").
+- At runtime client names are resolved by exact lookup in these reverse maps
+  (`AshRpc.ClientNames`); no formatter is applied to a client string and no
+  atom is created from one (`test/client_names_test.exs`).
 - Two fields or two action inputs mapping to the same client name raise
   `AshRpc.Manifest.NameCollisionError` at decoration
   (`test/manifest/decorator_test.exs` "two fields formatting to the same client
@@ -189,10 +214,12 @@ the manifest build"). The `list_posts_allow_author` row is
   (`test/manifest/decorator_test.exs` "a formatter returning a non-string raises
   naming formatter and field").
 
-## Formatters Are Fixed at Decoration
+## The Output Formatter Is Fixed at Decoration
 
-`AshRpc.Runtime.new/2` reads the formatters from `custom.ash_rpc`; nothing reads
-them from application config at request time. To vary them in a test:
+`AshRpc.Runtime.new/2` reads the output formatter and vocabulary from
+`custom.ash_rpc`; nothing reads them from application config at request time.
+Collisions in any reverse map or vocabulary scope raise
+`NameCollisionError` naming the scope. To vary the formatter in a test:
 
 `AshRpc.Manifest.redecorate/2` re-runs the decorator with the stored mapping
 source; if that mapping source isn't loaded it raises `ArgumentError`

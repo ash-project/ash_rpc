@@ -24,9 +24,11 @@ AshRpc.ValueFormatter.format(value, type, constraints, :input | :output, runtime
   resolved through `Ash.Info.Manifest.Generator.TypeResolver.resolve/2`), or
   `nil` (value returned unchanged).
 - `constraints` only matter for raw Ash types; manifest structs carry their own.
-- `runtime` is an `%AshRpc.Runtime{}`. `:input` uses `runtime.input_formatter`,
-  `:output` uses `runtime.output_formatter`. Overrides and lookups come from the
-  runtime too, never from app config
+- `runtime` is an `%AshRpc.Runtime{}`. `:output` names with
+  `runtime.output_formatter`; `:input` resolves names by exact lookup with
+  `AshRpc.ClientNames` and never calls a formatter. A nested key that isn't a
+  client name stays the client's string, for Ash to cast or reject. Overrides
+  and lookups come from the runtime, never from app config
   (`test/value_formatter_test.exs` "runtime formatter is used, not config").
 
 **Design.** Every composite value is a value plus its resolved manifest type,
@@ -40,11 +42,11 @@ use, so selection, extraction and formatting recurse the same way.
 | `classify_type/2` result | Covers | Keys come from |
 |---|---|---|
 | `{:array, item_type}` | `kind: :array` | Each element formatted with `item_type`; a non-list value passes through |
-| `{:resource, module}` | Resources, embedded resources, and `:struct`/`:map` types whose effective module is an Ash resource | Input: `AshRpc.Manifest.Custom.original_field_name/2`, else `FieldFormatter.parse_input_field/2`. Output: `FieldFormatter.format_field_for_client/3`. Each value recurses with the manifest field or relationship type |
+| `{:resource, module}` | Resources, embedded resources, and `:struct`/`:map` types whose effective module is an Ash resource | Input: `AshRpc.ClientNames.resource_field/3`. Output: `FieldFormatter.format_field_for_client/3`; a string key (a read action's metadata override) goes out as-is. Each value recurses with the manifest field or relationship type |
 | `{:union, type}` | `kind: :union` | Member-specific; see [Union input](#union-input) |
-| `{:typed_struct, type}` | `:struct`/`:map`/`:tuple`/`:keyword` with type field-name overrides | The type's `custom.ash_rpc` override pair, falling back to `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the mapping source's `type_field_names/1`) |
-| `{:fields, type}` | `:struct`/`:map`/`:tuple`/`:keyword` without overrides | Formatter only. A type with no `fields` (an unconstrained map) passes through untouched |
-| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats) and non-builtin custom types with `:map` storage (all keys formatted recursively) |
+| `{:typed_struct, type}` | `:struct`/`:map`/`:tuple`/`:keyword` with type field-name overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: the type's `custom.ash_rpc` override pair, falling back to `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the mapping source's `type_field_names/1`) |
+| `{:fields, type}` | `:struct`/`:map`/`:tuple`/`:keyword` without overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: the formatter. A type with no `fields` (an unconstrained map) passes through untouched |
+| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats) and non-builtin custom types with `:map` storage, which declare no field names: their keys go out as strings, unformatted, and come in as sent (`test/typed_field_selection_test.exs` "a custom map-storage value round-trips its keys verbatim") |
 
 Also handled before classification:
 
@@ -97,10 +99,12 @@ returns `%{"scoredStats" => %{"wordCount1" => 5}}`
 ### Where it runs in the pipeline
 
 - **`parse_request`** (input): `AshRpc.InputFormatter.format/4` formats
-  `params["input"]`. The other top-level params (`filter`, `page`, `getBy`, …)
-  only get their keys parsed with `FieldFormatter.parse_input_fields/2`; `sort`
-  goes through `FieldFormatter.format_sort_string/2`. `input` and `identity` are
-  popped before that key parsing.
+  `params["input"]`; a key that isn't a client name, top-level or nested, is
+  `unknown_input` before Ash runs. The other top-level param
+  keys resolve through the `:params` vocabulary (a miss is dropped), `filter`
+  and `sort` through `AshRpc.FilterInput`, `page` keys through the `:page`
+  vocabulary and `getBy`/`identity` keys through `ClientNames.resource_field/3`.
+  `input` and `identity` are popped first and matched literally.
 - **`format_output`** (output): `AshRpc.Pipeline` calls `ValueFormatter.format/5`
   directly (there is no output-formatter module). Non-generic actions are
   formatted against the resource; generic actions use the classification of
@@ -125,7 +129,18 @@ AshRpc.InputFormatter.format(data, resource, action_name_or_action, runtime)
 - Each matched value is formatted with `ValueFormatter.format/5` (`:input`)
   against the input's type (`custom.ash_rpc.input_field_types`, else
   `action.inputs`).
-- Keys not in the map are passed through unchanged, still as client strings.
+- A key not in the map is `{:unknown_input, key}`. Nested keys are checked by
+  `ValueFormatter` against the decorated names of their type (typed maps,
+  keywords, tuples, TypedStructs, embedded resources, union member values): a
+  miss is `{:unknown_input, key, path}`, with `path` the parent keys as sent
+  plus array indexes. Each map level resolves all of its keys and formats every
+  value before throwing `{:unknown_nested_input, reasons}`, and each parent
+  prepends its key (`ValueFormatter.collect_input/2`), so every miss is
+  reported at once (`test/complex_input_test.exs` "strict nested input keys").
+  A node with no decorated names (`ClientNames.resource_named?/2`,
+  `type_named?/2` false) keeps its keys as sent and leaves them to Ash
+  (`test/value_formatter_test.exs` "a type that was never decorated keeps its
+  keys as sent").
 - Non-embedded struct inputs whose type is backed by an Ash resource are cast to
   that resource struct after key formatting. Ash casts everything else itself.
   A map that fails that cast is passed on as formatted, so Ash reports it:
@@ -161,9 +176,13 @@ Arrays of unions wrap each element the same way.
 1. **Tag first.** If a member declares `tag` / `tag_value` and the map contains
    that tag key with that value, the member is chosen. The "exactly one member
    key" check does not run on this path. On input the tag is injected back into
-   the formatted member value. (No fixture covers tagged unions yet.)
-2. **Member key.** Otherwise each map key is parsed with the input formatter and
-   compared to the member names. Exactly one must match.
+   the formatted member value. The tag key is matched with
+   `ClientNames.type_field/3`, or `resource_field/3` for an embedded-resource
+   member (`test/union_output_test.exs` "tagged member input").
+2. **Member key.** Otherwise each map key is looked up with
+   `ClientNames.union_member/3` (the union's `client_member_names`). Exactly one
+   must match; a non-client casing is not a member
+   (`test/union_input_test.exs` "a member key in a non-client casing is not a member").
 
 The three errors, all `type: "invalid_union_input"` (`AshRpc.ErrorBuilder`),
 asserted end to end by `test/union_input_test.exs`:
@@ -231,16 +250,15 @@ Lookup calls:
 | Direction | Call |
 |---|---|
 | Internal → client, resource or type field | `AshRpc.FieldFormatter.format_field_for_client(field, resource_or_type, formatter)`: the override wins and is used as-is; `nil` or a module atom falls back to the formatter |
-| Client → internal, resource field | `AshRpc.Manifest.Custom.original_field_name/2` |
+| Client → internal, resource field | `AshRpc.ClientNames.resource_field/3` (exact lookup in `client_field_names`, overrides included) |
 | Action argument | `AshRpc.Manifest.Custom.argument_name_override/3` / `original_argument_name/3` |
 | Type fields | `AshRpc.Manifest.Custom.type_field_name_overrides_pair/1`, else `AshRpc.Introspection.type_field_name_overrides/2` |
-| Client → internal, no override | `AshRpc.FieldFormatter.parse_input_field(name, formatter)`: an existing atom, or the parsed string when no such atom exists (it never creates atoms from client input) |
-| Sort strings | `AshRpc.FieldFormatter.format_sort_string(sort, formatter)`: keeps `+`, `++`, `-`, `--` and comma lists, parses each field name |
+| Client → internal, type field / union member / calc arg / vocabulary | `AshRpc.ClientNames.type_field/3`, `union_member/3`, `calc_arg/4`, `vocabulary/3`: pure map lookups returning `{:ok, atom}` or `:error`; atoms pass through, and no atom is ever created from a client string. `calc_args/4` resolves a whole argument map; action input keys go through `AshRpc.InputFormatter.expected_keys/3` |
+| Whether a node is strict on input | `AshRpc.ClientNames.resource_named?/2`, `type_named?/2`: true when the resource or type (or its type lookup entry) carries decorated client names |
+| Filter statements and sort strings | `AshRpc.FilterInput.parse/3` and `parse_sort/3`: keep `+`, `++`, `-`, `--` and comma lists; a name that isn't a client name is dropped and reported as `Ash.Error.Query.NoSuchField` / `NoSuchFilterPredicate` with the name as sent |
 
-`format_sort_string/2` and `parse_input_field/2` are asserted in
-`test/field_formatter_test.exs` ("format_sort_string/2 keeps every modifier and
-parses field names", "parse_input_field/2 returns an existing atom or the parsed
-string").
+The readers are asserted in `test/client_names_test.exs` (every formatter,
+a custom one included) and `test/filter_input_test.exs`.
 
 Built-in formatters are `:camel_case`, `:pascal_case` and `:snake_case`; a
 `{Mod, fun}` or `{Mod, fun, extra_args}` formatter is applied to the field name.

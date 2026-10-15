@@ -41,10 +41,22 @@ Flow:
    level, client names that match a field-name override become internal atoms
    (`"isActive"` → `:is_active?` on `AshRpc.Test.Author`). Nested selections are
    left as sent and translated when selection recurses into the destination
-   type. Names without an override stay strings and are resolved through the
-   input formatter. `atomize_requested_fields/3` is public for callers that
+   type. Names without an override stay strings and are resolved by the
+   selector. `atomize_requested_fields/3` is public for callers that
    pre-process selections; the pipeline doesn't call it.
 2. **FieldSelector** (`lib/ash_rpc/field_processing/field_selector.ex`).
+   Every string name resolves by exact lookup against the current scope with
+   `AshRpc.ClientNames`: resource fields (`resource_field/3`), a calculation's
+   `args` keys (`calc_arg/4`; a miss is `invalid_calculation_args`), typed map,
+   keyword, tuple and TypedStruct fields (`type_field/3`) and union members
+   (`union_member/3`). Envelope keys (`args`, `fields`, `page`, `filter`,
+   `sort`, `limit`, `offset`) resolve through the `:query_opts` vocabulary, so
+   they follow the output formatter; nested `page` keys go through `:page` and
+   nested `filter`/`sort` through `AshRpc.FilterInput`. A miss stays the
+   client's string and fails as `unknown_field` (or the type's variant) with
+   the name as sent: under `:camel_case`, `"view_count"` is unknown
+   (`test/field_selector_test.exs` "strict field names"). Selections on a
+   generic `:any` return have no names to look up and stay as sent.
    Type-driven recursion on `AshRpc.Introspection.classify_type/2`, the same
    dispatch `ValueFormatter` and `ResultProcessor` use (see
    [formatting](formatting.md)). The selection is applied to the action's return
@@ -117,7 +129,7 @@ Asserted in `test/calculations_test.exs`:
 | `field_does_not_support_nesting` | A nested list on a scalar calculation or attribute | calculations_test "field_does_not_support_nesting: nested fields on a scalar calculation" |
 | `unknown_field` | No such field on the resource or in a nested selection (`path` names the parent) | calculations_test "an unknown calculation name", "an unknown field inside a calculation's selection"; aggregates_test "an unknown aggregate is unknown_field, bare or with nested fields" |
 | `unknown_map_field` | Unknown key in a typed map without field-name overrides | calculations_test "unknown_map_field: an unknown key in a typed-map return" |
-| `duplicate_field` | The same name twice at one level (names are normalized through the input formatter first) | calculations_test "duplicate_field: the same calculation requested twice with different args" |
+| `duplicate_field` | The same name twice at one level (string names are resolved to internal names first, so `"isActive"` and `:is_active?` collide) | calculations_test "duplicate_field: the same calculation requested twice with different args" |
 
 An unknown key inside a typed struct (a type with field-name overrides, such
 as `PostStats`) is `unknown_field` with `vars.kind` `"field constrained"`.
@@ -232,7 +244,7 @@ Typed values need an explicit selection:
   `"fields" => ["wordCount1"]` on the `stats_summary` action returns
   `%{"wordCount1" => 3}`.
 - Typed map without overrides (the `totals` action) and tuple (`location`) use
-  field names resolved through the input formatter.
+  the type's decorated client names (`ClientNames.type_field/3`).
 - Templates key nested typed fields by internal name (the `payload` union's
   `stats` member → `[stats: [:word_count_1]]`; tuple `location` → `[lat: []]`).
 - An empty selection on a typed return is `requires_field_selection` from
