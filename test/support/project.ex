@@ -17,8 +17,12 @@ defmodule AshRpc.Test.Project do
     attribute :metadata, ProjectMeta, public?: true
     attribute :history, {:array, ProjectMeta}, public?: true
     attribute :palette, AshRpc.Test.Palette, public?: true
+    attribute :trail, AshRpc.Test.Trail, public?: true
+    attribute :strict_trail, AshRpc.Test.Trail, public?: true, constraints: [strict?: true]
     attribute :due_date, :date, public?: true
     attribute :started_at, :utc_datetime, public?: true
+    attribute :estimate, :duration, public?: true
+    attribute :breaks, {:array, :duration}, public?: true
     attribute :priority, :atom, public?: true, constraints: [one_of: [:low, :medium, :high]]
     attribute :stats, AshRpc.Test.ProjectStats, public?: true
   end
@@ -54,7 +58,19 @@ defmodule AshRpc.Test.Project do
     first :first_note_author_info, :notes, :author_info, public?: true
   end
 
-  @accept [:metadata, :history, :palette, :due_date, :started_at, :priority, :stats]
+  @accept [
+    :metadata,
+    :history,
+    :palette,
+    :trail,
+    :strict_trail,
+    :due_date,
+    :started_at,
+    :estimate,
+    :breaks,
+    :priority,
+    :stats
+  ]
 
   actions do
     defaults [:read, create: @accept, update: @accept]

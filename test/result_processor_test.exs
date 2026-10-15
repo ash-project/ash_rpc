@@ -18,6 +18,13 @@ defmodule AshRpc.ResultProcessorTest do
     assert ResultProcessor.normalize_value_for_json(Duration.new!(hour: 1), rt) == "PT1H"
   end
 
+  test "a Duration nested in a plain map is normalized to an ISO 8601 string", %{runtime: rt} do
+    data = %{step: %{name: "Build", duration: %Duration{day: 1, hour: 4}}}
+
+    assert ResultProcessor.normalize_value_for_json(data, rt) ==
+             %{step: %{name: "Build", duration: "P1DT4H"}}
+  end
+
   describe "empty arrays and keyword lists" do
     test "an empty array nested inside a map stays an array", %{runtime: rt} do
       data = %{

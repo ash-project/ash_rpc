@@ -370,4 +370,70 @@ defmodule AshRpc.ComplexInputTest do
                })
     end
   end
+
+  describe "custom type input" do
+    defp create_project(input, fields) do
+      run(%{"action" => "create_project", "input" => input, "fields" => fields})
+    end
+
+    test "a string is cast by the type and returned as a list" do
+      assert %{"success" => true, "data" => data} =
+               create_project(%{"trail" => "projects.web.frontend"}, ["trail"])
+
+      assert data == %{"trail" => ["projects", "web", "frontend"]}
+    end
+
+    test "a list is accepted as is, alongside a strict attribute" do
+      assert %{"success" => true, "data" => data} =
+               create_project(
+                 %{"trail" => ["projects", "web", "api"], "strictTrail" => ["a", "b"]},
+                 ["trail", "strictTrail"]
+               )
+
+      assert data == %{"trail" => ["projects", "web", "api"], "strictTrail" => ["a", "b"]}
+    end
+
+    test "an omitted value is nil, and an update replaces or clears it" do
+      assert %{"success" => true, "data" => %{"id" => id, "trail" => nil}} =
+               create_project(%{}, ["id", "trail"])
+
+      update = fn input ->
+        run(%{
+          "action" => "update_project",
+          "identity" => id,
+          "input" => input,
+          "fields" => ["trail", "strictTrail"]
+        })
+      end
+
+      assert %{"success" => true, "data" => data} =
+               update.(%{"trail" => "updated.path.to.item", "strictTrail" => ["x", "y"]})
+
+      assert data == %{"trail" => ["updated", "path", "to", "item"], "strictTrail" => ["x", "y"]}
+
+      assert %{"success" => true, "data" => data} =
+               update.(%{"trail" => nil, "strictTrail" => nil})
+
+      assert data == %{"trail" => nil, "strictTrail" => nil}
+      assert %{trail: nil, strict_trail: nil} = Ash.get!(AshRpc.Test.Project, id)
+    end
+
+    test "a strict attribute rejects a string with the type's message" do
+      assert %{"success" => false, "errors" => errors} =
+               create_project(%{"strictTrail" => "projects.mobile"}, ["id"])
+
+      assert errors == [
+               %{
+                 "type" => "invalid_attribute",
+                 "message" => "must be a list of labels, got a string",
+                 "shortMessage" => "Invalid attribute",
+                 "fields" => ["strictTrail"],
+                 "path" => [],
+                 "vars" => %{"field" => "strictTrail"}
+               }
+             ]
+
+      assert Ash.read!(AshRpc.Test.Project) == []
+    end
+  end
 end
