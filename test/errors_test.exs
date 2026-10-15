@@ -298,20 +298,19 @@ defmodule AshRpc.ErrorsTest do
         assert is_binary(error_id)
         assert error["message"] =~ error_id
         assert error["fields"] == []
-        refute inspect(error) =~ "title is required"
+        refute inspect(error) =~ "is required"
       end
     end
   end
 
   describe "to_errors" do
     test "a single error is formatted for the client" do
-      # Ash's Required message has a leading space when no field type is given.
       assert Errors.to_errors(
                Runtime.new(AshRpc.Test.Profile),
                %Ash.Error.Changes.Required{field: :email}
              ) == [
                %{
-                 message: " email is required",
+                 message: "%{field} is required",
                  short_message: "Required field",
                  type: "required",
                  vars: %{field: "email"},
@@ -322,14 +321,14 @@ defmodule AshRpc.ErrorsTest do
     end
 
     test "bread crumbs never reach the client message" do
-      error = %Ash.Error.Changes.Required{
-        field: :email,
-        type: :argument,
+      error = %Ash.Error.Invalid.InvalidPrimaryKey{
+        value: "abc",
         bread_crumbs: ["Returned from bulk update: AshRpc.Test.Post.update"]
       }
 
-      assert [%{message: "argument email is required"}] =
-               Errors.to_errors(Runtime.new(AshRpc.Test.Profile), error)
+      assert [%{message: message}] = Errors.to_errors(Runtime.new(AshRpc.Test.Profile), error)
+      assert message == Exception.message(%{error | bread_crumbs: []})
+      refute message =~ "bulk update"
     end
 
     test "a plain exception becomes unknown_error without its message" do
@@ -379,10 +378,9 @@ defmodule AshRpc.ErrorsTest do
         %Ash.Error.Query.NotFound{}
       ]
 
-      # Ash's Required message has a leading space when no field type is given.
       assert build(AshRpc.Test.Profile, errors) == [
                %{
-                 message: " title is required",
+                 message: "%{field} is required",
                  short_message: "Required field",
                  type: "required",
                  vars: %{field: "title"},
@@ -398,7 +396,7 @@ defmodule AshRpc.ErrorsTest do
                  path: []
                },
                %{
-                 message: " email is required",
+                 message: "%{field} is required",
                  short_message: "Required field",
                  type: "required",
                  vars: %{field: "email"},

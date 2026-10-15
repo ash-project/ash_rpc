@@ -35,7 +35,7 @@ defmodule AshRpc.ValidationTest do
              "errors" => [
                %{
                  "type" => "required",
-                 "message" => "argument text is required",
+                 "message" => "argument %{field} is required",
                  "shortMessage" => "Required field",
                  "fields" => ["body"],
                  "path" => [],
@@ -171,14 +171,14 @@ defmodule AshRpc.ValidationTest do
                  "input" => %{"ownerId" => @owner_id}
                })
 
-      assert errors == [required_error("title", "attribute title is required")]
+      assert errors == [required_error("title", "attribute %{field} is required")]
     end
 
     test "a missing multi-word argument reports its client name in vars and fields" do
       assert %{"success" => false, "errors" => errors} =
                validate(%{"action" => "create_post_for_owner", "input" => %{"title" => "Post"}})
 
-      assert errors == [required_error("ownerId", "argument owner_id is required")]
+      assert errors == [required_error("ownerId", "argument %{field} is required")]
     end
 
     test "every missing required input gets its own error" do
@@ -186,8 +186,8 @@ defmodule AshRpc.ValidationTest do
                validate(%{"action" => "create_post_for_owner", "input" => %{}})
 
       assert sorted(errors) == [
-               required_error("ownerId", "argument owner_id is required"),
-               required_error("title", "attribute title is required")
+               required_error("ownerId", "argument %{field} is required"),
+               required_error("title", "attribute %{field} is required")
              ]
     end
   end
@@ -252,7 +252,7 @@ defmodule AshRpc.ValidationTest do
       assert %{"success" => false, "errors" => errors} =
                validate(%{"action" => "search_intakes", "input" => %{"includeDeleted" => true}})
 
-      assert errors == [required_error("query", "argument query is required")]
+      assert errors == [required_error("query", "argument %{field} is required")]
     end
   end
 
@@ -262,7 +262,7 @@ defmodule AshRpc.ValidationTest do
                validate(%{"action" => "create_post_for_owner", "input" => %{"title" => 123}})
 
       assert sorted(errors) == [
-               required_error("ownerId", "argument owner_id is required"),
+               required_error("ownerId", "argument %{field} is required"),
                invalid_error("invalid_attribute", "title")
              ]
     end

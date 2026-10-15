@@ -390,7 +390,7 @@ defmodule AshRpc.FieldNameTranslationTest do
 
       assert error == %{
                "type" => "required",
-               "message" => "argument is_viewed? is required",
+               "message" => "argument %{field} is required",
                "shortMessage" => "Required field",
                "fields" => ["isViewed"],
                "path" => [],
@@ -407,7 +407,7 @@ defmodule AshRpc.FieldNameTranslationTest do
                "errors" => [
                  %{
                    "type" => "required",
-                   "message" => "argument is_viewed? is required",
+                   "message" => "argument %{field} is required",
                    "shortMessage" => "Required field",
                    "fields" => ["isViewed"],
                    "path" => [],

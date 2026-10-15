@@ -7,10 +7,20 @@ defmodule AshRpc.ErrorProtocolTest do
 
   alias AshRpc.{Errors, Runtime}
 
+  test "a Required message names the field type Ash gives" do
+    for {type, message} <- [
+          attribute: "attribute %{field} is required",
+          argument: "argument %{field} is required",
+          relationship: "relationship %{field} is required"
+        ] do
+      assert %{message: ^message} =
+               AshRpc.Error.to_error(%Ash.Error.Changes.Required{field: :author, type: type})
+    end
+  end
+
   test "changeset and query Required share one impl" do
     expected = %{
-      # Ash's Required message has a leading space when no field type is given.
-      message: " title is required",
+      message: "%{field} is required",
       short_message: "Required field",
       type: "required",
       vars: %{field: :title},
@@ -247,6 +257,25 @@ defmodule AshRpc.ErrorProtocolTest do
                    path: []
                  }
                ]
+    end
+
+    test "a RunStepError inside an error class is built from the inner error" do
+      assert AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+               "action" => "catalog_find_post_via_reactor",
+               "input" => %{"postId" => Ash.UUID.generate()}
+             }) == %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "message" => "record not found",
+                   "shortMessage" => "Not found",
+                   "type" => "not_found",
+                   "vars" => %{},
+                   "fields" => [],
+                   "path" => []
+                 }
+               ]
+             }
     end
 
     test "a RunStepError wrapping a plain exception is an unknown_error" do

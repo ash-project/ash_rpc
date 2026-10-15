@@ -101,9 +101,11 @@ defimpl AshRpc.Error, for: Ash.Error.Query.NotFound do
 end
 
 defimpl AshRpc.Error, for: [Ash.Error.Changes.Required, Ash.Error.Query.Required] do
+  # A template: Ash's own message names the field in server casing, while
+  # vars.field carries the client name.
   def to_error(error) do
     %{
-      message: Exception.message(error),
+      message: required_message(error.type),
       short_message: "Required field",
       vars: Map.new(error.vars || []) |> Map.put(:field, error.field),
       type: "required",
@@ -111,6 +113,11 @@ defimpl AshRpc.Error, for: [Ash.Error.Changes.Required, Ash.Error.Query.Required
       path: error.path || []
     }
   end
+
+  defp required_message(type) when is_atom(type) and not is_nil(type),
+    do: "#{type} %{field} is required"
+
+  defp required_message(_type), do: "%{field} is required"
 end
 
 defimpl AshRpc.Error, for: Ash.Error.Forbidden.Policy do

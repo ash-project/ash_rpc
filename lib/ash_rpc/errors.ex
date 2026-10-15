@@ -49,6 +49,12 @@ defmodule AshRpc.Errors do
   Unwraps nested error structures from Ash error classes.
   """
   @spec unwrap_errors(term()) :: list(term())
+  # A Reactor-run generic action fails with an error class wrapping the step's
+  # RunStepError; the step's own error is what the client should see.
+  def unwrap_errors(%Reactor.Error.Invalid.RunStepError{error: inner_error}) do
+    inner_error |> Ash.Error.to_error_class() |> unwrap_errors()
+  end
+
   def unwrap_errors(%{errors: errors}) when is_list(errors) do
     Enum.flat_map(errors, &unwrap_errors/1)
   end

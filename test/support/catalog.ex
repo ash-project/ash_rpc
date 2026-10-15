@@ -26,6 +26,11 @@ defmodule AshRpc.Test.Catalog do
       run fn _input, _context -> {:ok, Ash.read!(Post)} end
     end
 
+    action :find_post_via_reactor, :string do
+      argument :post_id, :uuid, allow_nil?: false
+      run AshRpc.Test.MissingPostReactor
+    end
+
     action :post_ids, {:array, :uuid} do
       run fn _input, _context -> {:ok, Enum.map(Ash.read!(Post), & &1.id)} end
     end

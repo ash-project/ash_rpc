@@ -115,6 +115,7 @@ defmodule AshRpc.Test.ManifestBuilder do
     # Generic-action returns and struct arguments
     {"catalog_search_posts", AshRpc.Test.Catalog, :search_posts},
     {"catalog_post_ids", AshRpc.Test.Catalog, :post_ids},
+    {"catalog_find_post_via_reactor", AshRpc.Test.Catalog, :find_post_via_reactor},
     {"catalog_task_stats", AshRpc.Test.Catalog, :task_stats},
     {"catalog_task_stats_list", AshRpc.Test.Catalog, :task_stats_list},
     {"catalog_stats_list", AshRpc.Test.Catalog, :stats_list},
