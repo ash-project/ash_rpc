@@ -460,7 +460,7 @@ defmodule AshRpc.ErrorBuilder do
       "Required getBy fields are missing: %{fields}",
       "Missing required getBy fields",
       vars: %{fields: Enum.join(missing_fields, ", ")},
-      path: [:get_by],
+      path: format_path([:get_by], ctx.formatter),
       fields: missing_fields,
       details: %{suggestion: "Provide values for all required getBy fields"}
     )
@@ -477,7 +477,7 @@ defmodule AshRpc.ErrorBuilder do
         extra_fields: Enum.join(extra_fields, ", "),
         allowed_fields: Enum.join(allowed_fields, ", ")
       },
-      path: [:get_by],
+      path: format_path([:get_by], ctx.formatter),
       fields: extra_fields,
       details: %{
         allowed_fields: allowed_fields,
@@ -537,7 +537,7 @@ defmodule AshRpc.ErrorBuilder do
 
     malformed("invalid_pagination", "Unknown pagination keys: %{keys}", "Invalid pagination",
       vars: %{keys: Enum.join(keys, ", ")},
-      path: ["page"],
+      path: format_path([:page], ctx.formatter),
       fields: keys,
       details: %{
         expected:
@@ -571,7 +571,7 @@ defmodule AshRpc.ErrorBuilder do
       "Identity fields do not match any configured identity. Provided: [%{provided_keys}], expected: [%{expected_keys}]",
       "Invalid identity",
       vars: %{provided_keys: Enum.join(provided_keys, ", "), expected_keys: expected_keys_str},
-      path: [:identity],
+      path: format_path([:identity], ctx.formatter),
       details: %{
         provided_keys: provided_keys,
         expected_keys: expected_keys,
@@ -581,16 +581,16 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
-  defp build({:invalid_identity, %{message: message}}, _ctx) do
+  defp build({:invalid_identity, %{message: message}}, ctx) do
     malformed("invalid_identity", message, "Invalid identity",
-      path: [:identity],
+      path: format_path([:identity], ctx.formatter),
       details: %{suggestion: "Check the configured identities for this action"}
     )
   end
 
-  defp build({:invalid_get_by, %{message: message}}, _ctx) do
+  defp build({:invalid_get_by, %{message: message}}, ctx) do
     malformed("invalid_get_by", message, "Invalid getBy value",
-      path: [:get_by],
+      path: format_path([:get_by], ctx.formatter),
       details: %{suggestion: "Provide a scalar value for each getBy field"}
     )
   end
@@ -613,7 +613,7 @@ defmodule AshRpc.ErrorBuilder do
 
     drift(ctx, "missing_identity", message, "Missing identity",
       vars: %{expected_keys: expected_keys_str},
-      path: [:identity],
+      path: format_path([:identity], ctx.formatter),
       details: %{expected_keys: expected_keys, suggestion: suggestion}
     )
   end
@@ -680,7 +680,7 @@ defmodule AshRpc.ErrorBuilder do
       field_opts(path, field, ctx) ++
         [
           details: %{
-            reason: :unsupported,
+            reason: "unsupported",
             suggestion:
               "The relationship's read action has no pagination configured. Use bare limit/offset, or add pagination to the destination read action"
           }
@@ -695,7 +695,7 @@ defmodule AshRpc.ErrorBuilder do
       "This action does not support the filter parameter",
       "Filter not supported",
       details: %{
-        reason: reason,
+        reason: to_string(reason),
         suggestion:
           "Remove the filter parameter. It is unavailable because the action is not a list read (get?/non-read) or filtering is disabled via enable_filter?: false"
       }
@@ -711,7 +711,7 @@ defmodule AshRpc.ErrorBuilder do
       field_opts(path, field, ctx) ++
         [
           details: %{
-            reason: reason,
+            reason: to_string(reason),
             suggestion:
               "Remove the filter key. Filtering is unavailable because the entrypoint disables it (enable_filter?: false) or the relationship is not filterable?"
           }
@@ -726,7 +726,7 @@ defmodule AshRpc.ErrorBuilder do
       "This action does not support the sort parameter",
       "Sort not supported",
       details: %{
-        reason: reason,
+        reason: to_string(reason),
         suggestion:
           "Remove the sort parameter. It is unavailable because the action is not a list read (get?/non-read) or sorting is disabled via enable_sort?: false"
       }
@@ -742,7 +742,7 @@ defmodule AshRpc.ErrorBuilder do
       field_opts(path, field, ctx) ++
         [
           details: %{
-            reason: reason,
+            reason: to_string(reason),
             suggestion:
               "Remove the sort key. Sorting is unavailable because the entrypoint disables it (enable_sort?: false) or the relationship is not sortable?"
           }
@@ -757,7 +757,7 @@ defmodule AshRpc.ErrorBuilder do
       "This action does not support the page parameter",
       "Pagination not supported",
       details: %{
-        reason: reason,
+        reason: to_string(reason),
         suggestion:
           "Remove the page parameter. It is unavailable because the action is not a list read (get?/non-read) or has no pagination configured"
       }
@@ -765,15 +765,25 @@ defmodule AshRpc.ErrorBuilder do
   end
 
   defp build({:invalid_nested_page, field, reason, path}, ctx) when is_list(path) do
+    {reason, extra_vars} =
+      case reason do
+        {:unknown_keys, keys} ->
+          keys = Enum.map(keys, &FieldFormatter.format_field_name(to_string(&1), ctx.formatter))
+          {"unknown_keys", %{keys: Enum.join(keys, ", ")}}
+
+        reason ->
+          {to_string(reason), %{}}
+      end
+
     drift(
       ctx,
       "invalid_pagination",
       "Invalid page configuration for relationship %{field}",
       "Invalid pagination",
-      field_opts(path, field, ctx) ++
+      field_opts(path, field, ctx, extra_vars) ++
         [
           details: %{
-            reason: inspect(reason),
+            reason: reason,
             suggestion:
               "Provide page keys valid for the relationship's pagination type (offset: limit/offset/count, keyset: limit/after/before/count)"
           }

@@ -58,6 +58,25 @@ defmodule AshRpc.NestedQueryOptsTest do
 
   defp wire_shape(error), do: Map.take(error, ~w(type fields path vars))
 
+  defp list_comments(params) do
+    assert %{"success" => true, "data" => data} =
+             AshRpc.run_action(@profile, ctx(), Map.put_new(params, "action", "list_comments"))
+
+    data
+  end
+
+  defp bodies(page), do: Enum.map(page["results"], & &1["body"])
+
+  # Lists comments through the keyset-only read (whose entrypoint allows only the
+  # `post` load), after `cursor` when it is set.
+  defp keyset_comments(params, cursor) do
+    page = if cursor, do: %{"limit" => 2, "after" => cursor}, else: %{"limit" => 2}
+
+    list_comments(
+      Map.merge(params, %{"action" => "list_comments_keyset_allow_post", "page" => page})
+    )
+  end
+
   defp hint, do: @profile.stale_client_hint()
 
   # The fixture manifest with Author.posts decorated as reading through an
@@ -154,6 +173,95 @@ defmodule AshRpc.NestedQueryOptsTest do
       assert page["count"] == 3
       assert page["hasMore"] == true
       assert length(page["results"]) == 2
+    end
+
+    test "a nested offset page carries embedded, calculation and to-one selections" do
+      post = Ash.create!(Post, %{title: "Nested"})
+      Ash.create!(Comment, %{body: "a", rating: 1, post_id: post.id, attachment: %{url: "u1"}})
+      Ash.create!(Comment, %{body: "b", rating: 2, post_id: post.id, attachment: "n2"})
+      Ash.create!(Comment, %{body: "c", rating: 3, post_id: post.id})
+
+      result =
+        list_post_with(%{
+          "comments" => %{
+            "page" => %{"limit" => 2, "offset" => 0, "count" => true},
+            "sort" => "body",
+            "fields" => [
+              "body",
+              "weightedRating",
+              %{"attachment" => [%{"file" => ["url", "label"]}, "note"]},
+              %{"post" => ["title"]}
+            ]
+          }
+        })
+
+      assert result["comments"]["results"] == [
+               %{
+                 "body" => "a",
+                 "weightedRating" => 2,
+                 "attachment" => %{"file" => %{"url" => "u1", "label" => "file:u1"}},
+                 "post" => %{"title" => "Nested"}
+               },
+               %{
+                 "body" => "b",
+                 "weightedRating" => 4,
+                 "attachment" => %{"note" => "n2"},
+                 "post" => %{"title" => "Nested"}
+               }
+             ]
+
+      assert %{"count" => 3, "hasMore" => true, "limit" => 2, "offset" => 0} =
+               result["comments"]
+    end
+
+    test "a nested last page holds the remainder and has no more" do
+      seed_post(5)
+
+      post =
+        list_post_with(%{
+          "comments" => %{
+            "page" => %{"limit" => 2, "offset" => 4, "count" => true},
+            "sort" => "body",
+            "fields" => ["body"]
+          }
+        })
+
+      assert post["comments"] == %{
+               "type" => :offset,
+               "results" => [%{"body" => "comment-5"}],
+               "limit" => 2,
+               "offset" => 4,
+               "count" => 5,
+               "hasMore" => false
+             }
+    end
+
+    test "a nested page with a filter counts and pages only the matching records" do
+      seed_post(6)
+
+      envelope = fn offset ->
+        %{
+          "comments" => %{
+            "page" => %{"limit" => 2, "offset" => offset, "count" => true},
+            "filter" => %{"rating" => %{"greaterThan" => 2}},
+            "sort" => "body",
+            "fields" => ["body", "rating"]
+          }
+        }
+      end
+
+      first = list_post_with(envelope.(0))["comments"]
+      second = list_post_with(envelope.(2))["comments"]
+
+      # Ratings are 2, 3, 4, 5, 1, 2: three comments match.
+      assert first["results"] == [
+               %{"body" => "comment-2", "rating" => 3},
+               %{"body" => "comment-3", "rating" => 4}
+             ]
+
+      assert {first["count"], first["hasMore"]} == {3, true}
+      assert second["results"] == [%{"body" => "comment-4", "rating" => 5}]
+      assert {second["count"], second["hasMore"]} == {3, false}
     end
   end
 
@@ -349,6 +457,215 @@ defmodule AshRpc.NestedQueryOptsTest do
     end
   end
 
+  describe "top-level pagination with selections" do
+    test "an offset page carries embedded, calculation and relationship selections" do
+      post = Ash.create!(Post, %{title: "Paged"})
+      Ash.create!(Comment, %{body: "a", rating: 1, post_id: post.id, attachment: %{url: "u1"}})
+      Ash.create!(Comment, %{body: "b", rating: 2, post_id: post.id, attachment: "n2"})
+      Ash.create!(Comment, %{body: "c", rating: 3, post_id: post.id, attachment: %{url: "u3"}})
+      Ash.create!(Comment, %{body: "d", rating: 4})
+
+      page =
+        list_comments(%{
+          "fields" => [
+            "body",
+            "weightedRating",
+            %{"attachment" => [%{"file" => ["url", "label"]}, "note"]},
+            %{"post" => ["title"]}
+          ],
+          "sort" => "body",
+          "page" => %{"limit" => 2, "offset" => 1, "count" => true}
+        })
+
+      assert page == %{
+               "type" => :offset,
+               "limit" => 2,
+               "offset" => 1,
+               "count" => 4,
+               "hasMore" => true,
+               "results" => [
+                 %{
+                   "body" => "b",
+                   "weightedRating" => 4,
+                   "attachment" => %{"note" => "n2"},
+                   "post" => %{"title" => "Paged"}
+                 },
+                 %{
+                   "body" => "c",
+                   "weightedRating" => 6,
+                   "attachment" => %{"file" => %{"url" => "u3", "label" => "file:u3"}},
+                   "post" => %{"title" => "Paged"}
+                 }
+               ]
+             }
+    end
+  end
+
+  describe "top-level pagination with filter and sort" do
+    test "filtered offset pages count only matches and do not overlap" do
+      seed_post(6)
+
+      page = fn offset ->
+        list_comments(%{
+          "fields" => ["body", "rating"],
+          "filter" => %{"rating" => %{"in" => [2, 5]}},
+          "sort" => "body",
+          "page" => %{"limit" => 2, "offset" => offset, "count" => true}
+        })
+      end
+
+      # Ratings are 2, 3, 4, 5, 1, 2.
+      first = page.(0)
+      second = page.(2)
+
+      assert first["results"] == [
+               %{"body" => "comment-1", "rating" => 2},
+               %{"body" => "comment-4", "rating" => 5}
+             ]
+
+      assert {first["count"], first["hasMore"]} == {3, true}
+      assert second["results"] == [%{"body" => "comment-6", "rating" => 2}]
+      assert {second["count"], second["hasMore"]} == {3, false}
+    end
+
+    test "a sort holds across consecutive offset pages" do
+      seed_post(5)
+
+      page = fn offset ->
+        list_comments(%{
+          "fields" => ["rating"],
+          "sort" => "-rating",
+          "page" => %{"limit" => 2, "offset" => offset}
+        })
+      end
+
+      assert Enum.flat_map([0, 2, 4], &page.(&1)["results"]) ==
+               Enum.map([5, 4, 3, 2, 1], &%{"rating" => &1})
+    end
+
+    test "a sort holds across keyset pages followed by their cursors" do
+      seed_post(5)
+
+      page = &keyset_comments(%{"fields" => ["body"], "sort" => "-body"}, &1)
+
+      first = page.(nil)
+      second = page.(first["nextPage"])
+      last = page.(second["nextPage"])
+
+      assert {bodies(first), first["hasMore"]} == {["comment-5", "comment-4"], true}
+      assert {bodies(second), second["hasMore"]} == {["comment-3", "comment-2"], true}
+      assert {bodies(last), last["hasMore"]} == {["comment-1"], false}
+    end
+
+    test "a filtered keyset page has no more once the matches run out" do
+      seed_post(5)
+
+      page =
+        keyset_comments(
+          %{
+            "fields" => ["body"],
+            "filter" => %{"rating" => %{"greaterThanOrEqual" => 4}},
+            "sort" => "body"
+          },
+          nil
+        )
+
+      assert {page["type"], bodies(page), page["hasMore"]} ==
+               {:keyset, ["comment-3", "comment-4"], false}
+    end
+  end
+
+  describe "top-level page boundaries" do
+    test "a limit beyond the data returns every record with no more" do
+      seed_post(3)
+
+      page =
+        list_comments(%{
+          "fields" => ["body"],
+          "sort" => "body",
+          "page" => %{"limit" => 100, "offset" => 0, "count" => true}
+        })
+
+      assert page == %{
+               "type" => :offset,
+               "limit" => 100,
+               "offset" => 0,
+               "count" => 3,
+               "hasMore" => false,
+               "results" => [
+                 %{"body" => "comment-1"},
+                 %{"body" => "comment-2"},
+                 %{"body" => "comment-3"}
+               ]
+             }
+    end
+
+    test "exact page boundaries: full pages, a last full page without more, then empty" do
+      seed_post(4)
+
+      page = fn offset ->
+        list_comments(%{
+          "fields" => ["body"],
+          "sort" => "body",
+          "page" => %{"limit" => 2, "offset" => offset}
+        })
+      end
+
+      assert {bodies(page.(0)), page.(0)["hasMore"]} == {["comment-1", "comment-2"], true}
+      assert {bodies(page.(2)), page.(2)["hasMore"]} == {["comment-3", "comment-4"], false}
+      assert {bodies(page.(4)), page.(4)["hasMore"]} == {[], false}
+    end
+
+    test "the last page holds the partial remainder" do
+      seed_post(5)
+
+      page =
+        list_comments(%{
+          "fields" => ["body"],
+          "sort" => "body",
+          "page" => %{"limit" => 2, "offset" => 4, "count" => true}
+        })
+
+      assert page == %{
+               "type" => :offset,
+               "limit" => 2,
+               "offset" => 4,
+               "count" => 5,
+               "hasMore" => false,
+               "results" => [%{"body" => "comment-5"}]
+             }
+    end
+
+    test "a keyset page whose limit fits the remainder exactly has no more" do
+      seed_post(4)
+
+      page = &keyset_comments(%{"fields" => ["body"], "sort" => "body"}, &1)
+
+      first = page.(nil)
+      last = page.(first["nextPage"])
+
+      assert {bodies(first), first["hasMore"]} == {["comment-1", "comment-2"], true}
+      assert {bodies(last), last["hasMore"]} == {["comment-3", "comment-4"], false}
+    end
+
+    test "a zero page limit is invalid_page on the page path" do
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.run_action(@profile, ctx(), %{
+                 "action" => "list_comments",
+                 "fields" => ["body"],
+                 "page" => %{"limit" => 0, "offset" => 0}
+               })
+
+      assert Map.take(error, ["type", "shortMessage", "vars", "path", "fields"]) == %{
+               "type" => "invalid_page",
+               "shortMessage" => "Invalid pagination",
+               "vars" => %{},
+               "path" => ["page"],
+               "fields" => []
+             }
+    end
+  end
+
   describe "ResultProcessor page maps" do
     test "build_page_map gives an empty Ash.Page.Keyset nil cursors" do
       post = Post |> struct(%{id: "p1"}) |> Map.put(:comments, keyset_page([]))
@@ -460,7 +777,7 @@ defmodule AshRpc.NestedQueryOptsTest do
                "vars" => %{"field" => "posts"}
              }
 
-      assert error["details"]["reason"] == :unsupported
+      assert error["details"]["reason"] == "unsupported"
       assert error["details"]["hint"] == hint()
 
       # Bare limit stays available on the same relationship.
@@ -492,7 +809,7 @@ defmodule AshRpc.NestedQueryOptsTest do
                "vars" => %{"field" => "unfilterableComments"}
              }
 
-      assert error["details"]["reason"] == :unsupported
+      assert error["details"]["reason"] == "unsupported"
       assert error["details"]["hint"] == hint()
     end
 
@@ -511,7 +828,7 @@ defmodule AshRpc.NestedQueryOptsTest do
                "vars" => %{"field" => "comments"}
              }
 
-      assert error["details"]["reason"] == :disabled
+      assert error["details"]["reason"] == "disabled"
     end
 
     test "sort on a relationship that is not sortable is sort_not_supported unsupported" do
@@ -527,7 +844,7 @@ defmodule AshRpc.NestedQueryOptsTest do
                "vars" => %{"field" => "unsortableComments"}
              }
 
-      assert error["details"]["reason"] == :unsupported
+      assert error["details"]["reason"] == "unsupported"
       assert error["details"]["hint"] == hint()
     end
 
@@ -546,7 +863,7 @@ defmodule AshRpc.NestedQueryOptsTest do
                "vars" => %{"field" => "comments"}
              }
 
-      assert error["details"]["reason"] == :disabled
+      assert error["details"]["reason"] == "disabled"
     end
 
     test "page combined with bare limit or offset is invalid_query_opts without a hint" do
@@ -607,10 +924,10 @@ defmodule AshRpc.NestedQueryOptsTest do
                "type" => "invalid_pagination",
                "fields" => ["comments"],
                "path" => [],
-               "vars" => %{"field" => "comments"}
+               "vars" => %{"field" => "comments", "keys" => "notAPageOptionXyz"}
              }
 
-      assert error["details"]["reason"] == ~s({:unknown_keys, ["not_a_page_option_xyz"]})
+      assert error["details"]["reason"] == "unknown_keys"
       assert error["details"]["hint"] == hint()
     end
 
@@ -627,10 +944,10 @@ defmodule AshRpc.NestedQueryOptsTest do
                "type" => "invalid_pagination",
                "fields" => ["commentsOffset"],
                "path" => [],
-               "vars" => %{"field" => "commentsOffset"}
+               "vars" => %{"field" => "commentsOffset", "keys" => "after"}
              }
 
-      assert error["details"]["reason"] == "{:unknown_keys, [:after]}"
+      assert error["details"]["reason"] == "unknown_keys"
     end
 
     test "an offset page key on a keyset-only relationship is invalid_pagination" do
@@ -643,10 +960,24 @@ defmodule AshRpc.NestedQueryOptsTest do
                "type" => "invalid_pagination",
                "fields" => ["commentsKeyset"],
                "path" => [],
-               "vars" => %{"field" => "commentsKeyset"}
+               "vars" => %{"field" => "commentsKeyset", "keys" => "offset"}
              }
 
-      assert error["details"]["reason"] == "{:unknown_keys, [:offset]}"
+      assert error["details"]["reason"] == "unknown_keys"
+    end
+
+    test "a nested page that is not a map is invalid_pagination" do
+      error =
+        gate_error("list_posts", %{"comments" => %{"page" => 5, "fields" => ["id"]}})
+
+      assert wire_shape(error) == %{
+               "type" => "invalid_pagination",
+               "fields" => ["comments"],
+               "path" => [],
+               "vars" => %{"field" => "comments"}
+             }
+
+      assert error["details"]["reason"] == "not_a_map"
     end
 
     test "an envelope on a relationship to an unexposed resource is unknown_field" do
@@ -699,7 +1030,7 @@ defmodule AshRpc.NestedQueryOptsTest do
                "vars" => %{"field" => "comments.post.unfilterableComments"}
              }
 
-      assert error["details"]["reason"] == :unsupported
+      assert error["details"]["reason"] == "unsupported"
     end
   end
 

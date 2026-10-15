@@ -17,7 +17,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "reason" => :unsupported,
+            "reason" => "unsupported",
             "suggestion" =>
               "Remove the sort parameter. It is unavailable because the action is not a list read (get?/non-read) or sorting is disabled via enable_sort?: false"
           },
@@ -117,7 +117,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{"suggestion" => "Provide a scalar value for each getBy field"},
           "fields" => [],
           "message" => "bad get_by",
-          "path" => [:get_by],
+          "path" => ["getBy"],
           "shortMessage" => "Invalid getBy value",
           "type" => "invalid_get_by",
           "vars" => %{}
@@ -207,7 +207,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "fields" => [],
           "message" =>
             "Identity is required but not provided. Expected one of: [%{expectedKeys}]",
-          "path" => [:identity],
+          "path" => ["identity"],
           "shortMessage" => "Missing identity",
           "type" => "missing_identity",
           "vars" => %{"expectedKeys" => "id, slug"}
@@ -243,7 +243,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           },
           "fields" => ["title"],
           "message" => "Required getBy fields are missing: %{fields}",
-          "path" => [:get_by],
+          "path" => ["getBy"],
           "shortMessage" => "Missing required getBy fields",
           "type" => "missing_required_input",
           "vars" => %{"fields" => "title"}
@@ -295,7 +295,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "fields" => [],
           "message" =>
             "Identity fields do not match any configured identity. Provided: [%{providedKeys}], expected: [%{expectedKeys}]",
-          "path" => [:identity],
+          "path" => ["identity"],
           "shortMessage" => "Invalid identity",
           "type" => "invalid_identity",
           "vars" => %{"expectedKeys" => "id", "providedKeys" => "slug"}
@@ -383,7 +383,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{"suggestion" => "Check the configured identities for this action"},
           "fields" => [],
           "message" => "bad identity",
-          "path" => [:identity],
+          "path" => ["identity"],
           "shortMessage" => "Invalid identity",
           "type" => "invalid_identity",
           "vars" => %{}
@@ -581,7 +581,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           },
           "fields" => [],
           "message" => "Identity is required. Provide the id value directly.",
-          "path" => [:identity],
+          "path" => ["identity"],
           "shortMessage" => "Missing identity",
           "type" => "missing_identity",
           "vars" => %{"expectedKeys" => "id"}
@@ -632,7 +632,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "reason" => :disabled,
+            "reason" => "disabled",
             "suggestion" =>
               "Remove the filter parameter. It is unavailable because the action is not a list read (get?/non-read) or filtering is disabled via enable_filter?: false"
           },
@@ -652,7 +652,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "reason" => :disabled,
+            "reason" => "disabled",
             "suggestion" =>
               "Remove the sort key. Sorting is unavailable because the entrypoint disables it (enable_sort?: false) or the relationship is not sortable?"
           },
@@ -779,7 +779,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "reason" => :unsupported,
+            "reason" => "unsupported",
             "suggestion" =>
               "Remove the page parameter. It is unavailable because the action is not a list read (get?/non-read) or has no pagination configured"
           },
@@ -823,7 +823,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "fields" => ["viewCount"],
           "message" =>
             "Unexpected getBy fields: %{extraFields}. Allowed fields: %{allowedFields}",
-          "path" => [:get_by],
+          "path" => ["getBy"],
           "shortMessage" => "Unexpected getBy fields",
           "type" => "unexpected_get_by_fields",
           "vars" => %{"allowedFields" => "title", "extraFields" => "viewCount"}
@@ -874,7 +874,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "reason" => :unsupported,
+            "reason" => "unsupported",
             "suggestion" =>
               "The relationship's read action has no pagination configured. Use bare limit/offset, or add pagination to the destination read action"
           },
@@ -912,7 +912,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "reason" => :disabled,
+            "reason" => "disabled",
             "suggestion" =>
               "Remove the filter key. Filtering is unavailable because the entrypoint disables it (enable_filter?: false) or the relationship is not filterable?"
           },
@@ -932,7 +932,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "reason" => "{:unknown_keys, [\"x\"]}",
+            "reason" => "unknown_keys",
             "suggestion" =>
               "Provide page keys valid for the relationship's pagination type (offset: limit/offset/count, keyset: limit/after/before/count)"
           },
@@ -941,7 +941,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "path" => [],
           "shortMessage" => "Invalid pagination",
           "type" => "invalid_pagination",
-          "vars" => %{"field" => "posts"}
+          "vars" => %{"field" => "posts", "keys" => "x"}
         }
       ],
       "success" => false

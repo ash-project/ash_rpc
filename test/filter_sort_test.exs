@@ -117,6 +117,13 @@ defmodule AshRpc.FilterSortTest do
       assert list_titles(%{"filter" => filter, "sort" => "title"}) == ["Bravo", "Charlie"]
     end
 
+    test "isNil on a defaulted field: false keeps every record, true none" do
+      assert list_titles(%{"filter" => %{"viewCount" => %{"isNil" => false}}, "sort" => "title"}) ==
+               ["Alpha", "Bravo", "Charlie"]
+
+      assert list_titles(%{"filter" => %{"viewCount" => %{"isNil" => true}}}) == []
+    end
+
     test "filter and sort reach the request with internal names" do
       assert {:ok, request} =
                parse(%{
@@ -131,6 +138,154 @@ defmodule AshRpc.FilterSortTest do
     end
   end
 
+  # Comment counts: Bravo 2, Alpha 1, Charlie 1, Delta 0. Comment bodies sort
+  # first, so firstCommentBody is "nice", "great", "meh" and nil.
+  defp seed_rated_posts do
+    for {title, comments} <- [
+          {"Alpha", [{"nice", 4}]},
+          {"Bravo", [{"ok", 3}, {"great", 5}]},
+          {"Charlie", [{"meh", 2}]},
+          {"Delta", []}
+        ] do
+      post = Ash.create!(Post, %{title: title})
+
+      for {body, rating} <- comments do
+        Ash.create!(Comment, %{body: body, rating: rating, post_id: post.id})
+      end
+    end
+
+    :ok
+  end
+
+  describe "aggregates" do
+    setup do
+      seed_rated_posts()
+    end
+
+    test "a sort on an aggregate breaks ties with a secondary key, as a string or a list" do
+      assert list_titles(%{"sort" => "-commentCount,title"}) ==
+               ["Bravo", "Alpha", "Charlie", "Delta"]
+
+      assert list_titles(%{"sort" => ["-commentCount", "-title"]}) ==
+               ["Bravo", "Charlie", "Alpha", "Delta"]
+    end
+
+    test "a max aggregate filters with greaterThanOrEqual" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title", "maxRating"],
+               "filter" => %{"maxRating" => %{"greaterThanOrEqual" => 4}},
+               "sort" => "title"
+             }) == [
+               %{"title" => "Alpha", "maxRating" => 4},
+               %{"title" => "Bravo", "maxRating" => 5}
+             ]
+    end
+
+    test "an avg aggregate filters with greaterThan" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title", "avgRating"],
+               "filter" => %{"avgRating" => %{"greaterThan" => 3}},
+               "sort" => "title"
+             }) == [
+               %{"title" => "Alpha", "avgRating" => 4.0},
+               %{"title" => "Bravo", "avgRating" => 4.0}
+             ]
+    end
+
+    test "a first aggregate filters with eq" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title", "firstCommentBody"],
+               "filter" => %{"firstCommentBody" => %{"eq" => "meh"}}
+             }) == [%{"title" => "Charlie", "firstCommentBody" => "meh"}]
+    end
+
+    test "a filter on one aggregate combines with a sort on another" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title", "hasComments", "maxRating"],
+               "filter" => %{"hasComments" => %{"eq" => true}},
+               "sort" => ["-maxRating"]
+             }) == [
+               %{"title" => "Bravo", "hasComments" => true, "maxRating" => 5},
+               %{"title" => "Alpha", "hasComments" => true, "maxRating" => 4},
+               %{"title" => "Charlie", "hasComments" => true, "maxRating" => 2}
+             ]
+    end
+
+    test "isNil on an aggregate combines with a sort on it" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title", "maxRating"],
+               "filter" => %{"maxRating" => %{"isNil" => false}},
+               "sort" => "maxRating"
+             }) == [
+               %{"title" => "Charlie", "maxRating" => 2},
+               %{"title" => "Alpha", "maxRating" => 4},
+               %{"title" => "Bravo", "maxRating" => 5}
+             ]
+    end
+
+    test "aggregates used only in filter and sort stay out of the output" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title"],
+               "filter" => %{"maxRating" => %{"greaterThan" => 1}},
+               "sort" => "-commentCount,title"
+             }) == [%{"title" => "Bravo"}, %{"title" => "Alpha"}, %{"title" => "Charlie"}]
+    end
+  end
+
+  describe "calculations" do
+    setup do
+      seed_rated_posts()
+    end
+
+    test "a sort on a calculation breaks ties with a secondary key" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title", "titleLength"],
+               "sort" => "-titleLength,title"
+             }) == [
+               %{"title" => "Charlie", "titleLength" => 7},
+               %{"title" => "Alpha", "titleLength" => 5},
+               %{"title" => "Bravo", "titleLength" => 5},
+               %{"title" => "Delta", "titleLength" => 5}
+             ]
+    end
+
+    test "a calculation filters without being selected" do
+      assert list(%{
+               "action" => "list_posts",
+               "fields" => ["title"],
+               "filter" => %{"titleLength" => %{"greaterThan" => 5}}
+             }) == [%{"title" => "Charlie"}]
+    end
+
+    test "a calculation filter and sort apply before offset pagination" do
+      # weightedRating is rating * 2: 8, 6, 10 and 4.
+      assert list(%{
+               "action" => "list_comments",
+               "fields" => ["body", "weightedRating"],
+               "filter" => %{"weightedRating" => %{"greaterThan" => 4}},
+               "sort" => ["-weightedRating"],
+               "page" => %{"limit" => 2, "offset" => 0, "count" => true}
+             }) == %{
+               "type" => :offset,
+               "limit" => 2,
+               "offset" => 0,
+               "count" => 3,
+               "hasMore" => true,
+               "results" => [
+                 %{"body" => "great", "weightedRating" => 10},
+                 %{"body" => "nice", "weightedRating" => 8}
+               ]
+             }
+    end
+  end
+
   describe "enable_filter?: false" do
     test "a filter is rejected as disabled" do
       assert {:error, {:filter_not_supported, :top_level, :disabled}} =
@@ -142,7 +297,6 @@ defmodule AshRpc.FilterSortTest do
     end
 
     test "the wire error is filter_not_supported with reason disabled" do
-      # `details.reason` stays an atom on the wire, as in error_builder_golden_test.exs
       assert %{
                "success" => false,
                "errors" => [
@@ -150,7 +304,7 @@ defmodule AshRpc.FilterSortTest do
                    "type" => "filter_not_supported",
                    "path" => [],
                    "fields" => [],
-                   "details" => %{"reason" => :disabled}
+                   "details" => %{"reason" => "disabled"}
                  }
                ]
              } =
@@ -196,7 +350,6 @@ defmodule AshRpc.FilterSortTest do
     end
 
     test "the wire error is sort_not_supported with reason disabled" do
-      # `details.reason` stays an atom on the wire, as in error_builder_golden_test.exs
       assert %{
                "success" => false,
                "errors" => [
@@ -204,7 +357,7 @@ defmodule AshRpc.FilterSortTest do
                    "type" => "sort_not_supported",
                    "path" => [],
                    "fields" => [],
-                   "details" => %{"reason" => :disabled}
+                   "details" => %{"reason" => "disabled"}
                  }
                ]
              } =

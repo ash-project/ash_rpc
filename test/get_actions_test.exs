@@ -127,7 +127,7 @@ defmodule AshRpc.GetActionsTest do
                    "shortMessage" => "Missing required getBy fields",
                    "vars" => %{"fields" => "title"},
                    "fields" => ["title"],
-                   "path" => [:get_by]
+                   "path" => ["getBy"]
                  }
                ]
              } = run(params)
@@ -265,7 +265,7 @@ defmodule AshRpc.GetActionsTest do
                    "message" => "Primary key identity not allowed for this action",
                    "shortMessage" => "Invalid identity",
                    "vars" => vars,
-                   "path" => [:identity]
+                   "path" => ["identity"]
                  }
                ]
              } =
@@ -293,7 +293,7 @@ defmodule AshRpc.GetActionsTest do
       assert %{
                "type" => "invalid_identity",
                "shortMessage" => "Invalid identity",
-               "path" => [:identity],
+               "path" => ["identity"],
                "vars" => %{"expectedKeys" => "id, name, isActive", "providedKeys" => provided},
                "details" => %{
                  "expectedKeys" => ["id", "name", "isActive"],
@@ -337,7 +337,7 @@ defmodule AshRpc.GetActionsTest do
                    "type" => "missing_identity",
                    "shortMessage" => "Missing identity",
                    "message" => "Identity is required. Provide the id value directly.",
-                   "path" => [:identity],
+                   "path" => ["identity"],
                    "details" => %{"expectedKeys" => ["id"]}
                  }
                ]
@@ -435,7 +435,7 @@ defmodule AshRpc.GetActionsTest do
                  %{
                    "type" => "invalid_get_by",
                    "shortMessage" => "Invalid getBy value",
-                   "path" => [:get_by]
+                   "path" => ["getBy"]
                  }
                ]
              } = result = run(params)
@@ -469,7 +469,7 @@ defmodule AshRpc.GetActionsTest do
                    "type" => "invalid_identity",
                    "shortMessage" => "Invalid identity",
                    "message" => message,
-                   "path" => [:identity]
+                   "path" => ["identity"]
                  }
                ]
              } =
@@ -549,7 +549,7 @@ defmodule AshRpc.GetActionsTest do
       assert %{
                "type" => "invalid_identity",
                "shortMessage" => "Invalid identity",
-               "path" => [:identity],
+               "path" => ["identity"],
                "vars" => %{"providedKeys" => "postId", "expectedKeys" => "postId, tagId"},
                "details" => %{"providedKeys" => ["postId"], "expectedKeys" => ["postId", "tagId"]}
              } = error
