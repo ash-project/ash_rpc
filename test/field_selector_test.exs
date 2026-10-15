@@ -429,4 +429,32 @@ defmodule AshRpc.FieldSelectorTest do
              } = single_error(run("list_posts", [%{"author" => [%{"posts" => ["titleShout"]}]}]))
     end
   end
+
+  describe "Atomizer without a resource context" do
+    alias AshRpc.FieldProcessing.Atomizer
+
+    test "keeps string field names as sent and never mints atoms" do
+      unknown = "notAField#{System.unique_integer([:positive])}"
+
+      assert Atomizer.atomize_requested_fields(["id", "isActive", unknown], nil, runtime()) ==
+               ["id", "isActive", unknown]
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(unknown) end
+    end
+
+    test "passes atom field names through unchanged" do
+      assert Atomizer.atomize_requested_fields([:id, :title, :is_active?], nil, runtime()) ==
+               [:id, :title, :is_active?]
+    end
+
+    test "keeps nested selections and calculation envelopes as sent" do
+      fields = [
+        "id",
+        %{"author" => ["id", "isActive"]},
+        %{"calc" => %{"args" => %{"count" => 5}, "fields" => ["value"]}}
+      ]
+
+      assert Atomizer.atomize_requested_fields(fields, nil, runtime()) == fields
+    end
+  end
 end

@@ -85,6 +85,218 @@ defmodule AshRpc.FieldFormatterTest do
     assert AshRpc.Case.pascal_to_snake_case("UserName") == "user_name"
   end
 
+  describe "format_field_name/2" do
+    test "single-word and empty names under each built-in formatter" do
+      assert FieldFormatter.format_field_name(:name, :camel_case) == "name"
+      assert FieldFormatter.format_field_name(:email, :pascal_case) == "Email"
+      assert FieldFormatter.format_field_name(:title, :snake_case) == "title"
+
+      for formatter <- [:camel_case, :pascal_case, :snake_case] do
+        assert FieldFormatter.format_field_name("", formatter) == ""
+      end
+    end
+
+    test "a {module, function} formatter is called with the field name" do
+      assert FieldFormatter.format_field_name(:author_name, {__MODULE__, :prefix_custom}) ==
+               "custom_author_name"
+
+      assert FieldFormatter.format_field_name("email", {__MODULE__, :upcase}) == "EMAIL"
+    end
+
+    test "a {module, function, args} formatter gets the extra args after the field name" do
+      assert FieldFormatter.format_field_name(:author_name, {__MODULE__, :suffix, ["test"]}) ==
+               "author_name_test"
+
+      assert FieldFormatter.format_field_name(
+               "email",
+               {__MODULE__, :wrap, ["prefix", "suffix"]}
+             ) == "prefix_email_suffix"
+    end
+
+    test "an unsupported formatter raises ArgumentError" do
+      # Built at runtime so the type checker sees `atom()` rather than an
+      # invalid formatter literal.
+      invalid = String.to_atom("invalid_formatter")
+
+      assert_raise ArgumentError, "Unsupported formatter: :invalid_formatter", fn ->
+        FieldFormatter.format_field_name(:author_name, invalid)
+      end
+    end
+
+    test "an exception raised by a custom formatter propagates" do
+      assert_raise RuntimeError, "custom formatter error", fn ->
+        FieldFormatter.format_field_name(:author_name, {__MODULE__, :raise_error})
+      end
+    end
+  end
+
+  describe "parse_input_field/2" do
+    test "parses each built-in casing to the existing atom" do
+      assert FieldFormatter.parse_input_field("emailAddress", :camel_case) == :email_address
+      assert FieldFormatter.parse_input_field("EmailAddress", :pascal_case) == :email_address
+      assert FieldFormatter.parse_input_field("email_address", :snake_case) == :email_address
+      assert FieldFormatter.parse_input_field("Email", :pascal_case) == :email
+    end
+
+    test "an empty name parses to the empty atom under each built-in formatter" do
+      for formatter <- [:camel_case, :pascal_case, :snake_case] do
+        assert FieldFormatter.parse_input_field("", formatter) == :""
+      end
+    end
+
+    test "a {module, function} parser's atom result is returned as-is" do
+      assert FieldFormatter.parse_input_field("input_author_name", {__MODULE__, :strip_input}) ==
+               :author_name
+
+      assert FieldFormatter.parse_input_field("input_email", {__MODULE__, :strip_input}) ==
+               :email
+    end
+
+    test "an unsupported formatter raises ArgumentError" do
+      invalid = String.to_atom("invalid_formatter")
+
+      assert_raise ArgumentError, "Unsupported formatter: :invalid_formatter", fn ->
+        FieldFormatter.parse_input_field("authorName", invalid)
+      end
+    end
+  end
+
+  describe "format_fields/2" do
+    @fields %{author_name: "Ada", email_address: "ada@example.com", created_at: "2023-01-01"}
+
+    test "formats every key with each built-in formatter" do
+      assert FieldFormatter.format_fields(@fields, :camel_case) == %{
+               "authorName" => "Ada",
+               "emailAddress" => "ada@example.com",
+               "createdAt" => "2023-01-01"
+             }
+
+      assert FieldFormatter.format_fields(@fields, :pascal_case) == %{
+               "AuthorName" => "Ada",
+               "EmailAddress" => "ada@example.com",
+               "CreatedAt" => "2023-01-01"
+             }
+
+      assert FieldFormatter.format_fields(@fields, :snake_case) == %{
+               "author_name" => "Ada",
+               "email_address" => "ada@example.com",
+               "created_at" => "2023-01-01"
+             }
+    end
+
+    test "formats every key with custom formatters" do
+      fields = %{author_name: "Ada", email: "ada@example.com"}
+
+      assert FieldFormatter.format_fields(fields, {__MODULE__, :prefix_custom}) == %{
+               "custom_author_name" => "Ada",
+               "custom_email" => "ada@example.com"
+             }
+
+      assert FieldFormatter.format_fields(fields, {__MODULE__, :suffix, ["test"]}) == %{
+               "author_name_test" => "Ada",
+               "email_test" => "ada@example.com"
+             }
+    end
+
+    test "string keys are formatted and an empty map stays empty" do
+      assert FieldFormatter.format_fields(
+               %{"author_name" => "Ada", "email_address" => "ada@example.com"},
+               :camel_case
+             ) == %{"authorName" => "Ada", "emailAddress" => "ada@example.com"}
+
+      assert FieldFormatter.format_fields(%{}, :camel_case) == %{}
+      assert FieldFormatter.format_fields(%{}, {__MODULE__, :prefix_custom}) == %{}
+    end
+
+    test "nil values are kept" do
+      assert FieldFormatter.format_fields(
+               %{author_name: nil, email_address: "ada@example.com"},
+               :camel_case
+             ) == %{"authorName" => nil, "emailAddress" => "ada@example.com"}
+    end
+
+    test "only top-level keys are formatted; nested values are left untouched" do
+      fields = %{
+        user_info: %{nested_field: "value", another_nested: [1, 2, 3]},
+        settings: %{enabled: true}
+      }
+
+      assert FieldFormatter.format_fields(fields, :camel_case) == %{
+               "userInfo" => %{nested_field: "value", another_nested: [1, 2, 3]},
+               "settings" => %{enabled: true}
+             }
+    end
+
+    test "numeric and boolean keys become strings" do
+      assert FieldFormatter.format_fields(%{123 => "value", true => "another"}, :snake_case) ==
+               %{"123" => "value", "true" => "another"}
+    end
+  end
+
+  describe "parse_input_fields/2" do
+    @parsed %{author_name: "Ada", email_address: "ada@example.com", created_at: "2023-01-01"}
+
+    test "parses every key from each built-in casing" do
+      assert FieldFormatter.parse_input_fields(
+               %{
+                 "authorName" => "Ada",
+                 "emailAddress" => "ada@example.com",
+                 "createdAt" => "2023-01-01"
+               },
+               :camel_case
+             ) == @parsed
+
+      assert FieldFormatter.parse_input_fields(
+               %{
+                 "AuthorName" => "Ada",
+                 "EmailAddress" => "ada@example.com",
+                 "CreatedAt" => "2023-01-01"
+               },
+               :pascal_case
+             ) == @parsed
+
+      assert FieldFormatter.parse_input_fields(
+               %{
+                 "author_name" => "Ada",
+                 "email_address" => "ada@example.com",
+                 "created_at" => "2023-01-01"
+               },
+               :snake_case
+             ) == @parsed
+    end
+
+    test "parses every key with a custom parser, and an empty map stays empty" do
+      assert FieldFormatter.parse_input_fields(
+               %{"input_author_name" => "Ada", "input_email" => "ada@example.com"},
+               {__MODULE__, :strip_input}
+             ) == %{author_name: "Ada", email: "ada@example.com"}
+
+      assert FieldFormatter.parse_input_fields(%{}, :camel_case) == %{}
+      assert FieldFormatter.parse_input_fields(%{}, {__MODULE__, :strip_input}) == %{}
+    end
+
+    test "nested map keys are parsed while nil, list and scalar values are kept" do
+      assert FieldFormatter.parse_input_fields(
+               %{
+                 "authorName" => %{"nested" => "value"},
+                 "emailAddress" => [1, 2, 3],
+                 "createdAt" => nil
+               },
+               :camel_case
+             ) == %{author_name: %{nested: "value"}, email_address: [1, 2, 3], created_at: nil}
+    end
+  end
+
+  def prefix_custom(field), do: "custom_#{field}"
+  def upcase(field), do: field |> to_string() |> String.upcase()
+  def suffix(field, suffix), do: "#{field}_#{suffix}"
+  def wrap(field, prefix, suffix), do: "#{prefix}_#{field}_#{suffix}"
+  def raise_error(_field), do: raise("custom formatter error")
+
+  def strip_input(field) do
+    field |> to_string() |> String.replace_leading("input_", "") |> String.to_existing_atom()
+  end
+
   describe "atom safety" do
     test "resolves an existing field name to its atom" do
       # :view_count exists as an atom because AshRpc.Test.Post has that attribute.
