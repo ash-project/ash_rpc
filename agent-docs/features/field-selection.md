@@ -160,7 +160,12 @@ field list:
 8. `page` is not mixed with bare `limit`/`offset` (otherwise `invalid_query_opts`);
 9. `fields` is non-empty (otherwise `requires_field_selection`).
 
-An unknown key inside a nested `page` is `invalid_pagination`. Allowed page
+An unknown key inside a nested `page` is `invalid_pagination` with
+`details.reason` `"unknown_keys"` and the keys in `vars.keys` (parsed, then
+re-formatted with the output formatter, so `foo_bar` reads `fooBar`); a
+non-map nested `page` has reason `"not_a_map"` (`test/nested_query_opts_test.exs`
+"an unknown page key on a mixed-pagination relationship is invalid_pagination",
+"a nested page that is not a map is invalid_pagination"). Allowed page
 keys are `limit`, `offset`, `count` for offset pagination and `limit`, `after`,
 `before`, `count` for keyset pagination.
 

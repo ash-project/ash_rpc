@@ -196,8 +196,9 @@ changeset or action input without executing it and sends its errors through
 `AshRpc.Errors` (no AshPhoenix). Covered in `test/validation_test.exs`:
 
 - A missing required input is type `required`, `fields: ["title"]` ("create: a
-  missing required attribute is a native 'required' error"). The message,
-  `"attribute title is required"`, comes from Ash and isn't asserted.
+  missing required attribute is a native 'required' error"). The message is a
+  template, `"attribute %{field} is required"` (`"argument %{field} …"` for an
+  argument), filled from `vars.field`, the client name.
 - A valid create returns `%{"success" => true}` and persists nothing
   ("create: nothing is persisted").
 - Update/destroy load the target with `Ash.get/3` using the entrypoint's
@@ -299,12 +300,12 @@ empty map or string still counts as present; absent or `nil` never errors.
 
 | Situation | Error | `details.reason` |
 |-----------|-------|------------------|
-| Non-list action (any non-read action, or a read made single by `get?` / `get_by`) with `filter` or `sort` | `filter_not_supported` / `sort_not_supported` | `:unsupported` |
-| List read, `entrypoint.enable_filter?: false` with `filter` | `filter_not_supported` | `:disabled` |
-| List read, `entrypoint.enable_sort?: false` with `sort` | `sort_not_supported` | `:disabled` |
-| `page` on a non-list action, or on a read without pagination | `pagination_not_supported` | `:unsupported` |
+| Non-list action (any non-read action, or a read made single by `get?` / `get_by`) with `filter` or `sort` | `filter_not_supported` / `sort_not_supported` | `"unsupported"` |
+| List read, `entrypoint.enable_filter?: false` with `filter` | `filter_not_supported` | `"disabled"` |
+| List read, `entrypoint.enable_sort?: false` with `sort` | `sort_not_supported` | `"disabled"` |
+| `page` on a non-list action, or on a read without pagination | `pagination_not_supported` | `"unsupported"` |
 
-- `details.reason` is an atom in the response map (JSON-encodes to a string).
+- `details.reason` is always a string; the pipeline reason tuple keeps the atom.
 - Filter is checked before sort, so a request breaking both reports only
   `filter_not_supported` ("filter is checked before sort").
 - Disabling one flag leaves the other, and `input`/`page`, unaffected ("sort

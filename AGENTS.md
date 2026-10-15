@@ -244,6 +244,7 @@ stacktrace and returned as `unknown_error`.
 | `invalid_union_input` "must be a map" | Bare value for a union input | Wrap it: `%{"member_name" => value}` |
 | `invalid_union_input` "does not contain any valid member key" | Map has no key naming a member | Use a member name from `vars.expectedMembers` |
 | `invalid_union_input` "contains multiple member keys" | More than one member key in the map | Send exactly one member key |
+| `AshRpc.RuntimeBoundaryTest` failure | Runtime code under `lib/ash_rpc/` calls `Ash.Resource.Info`, `Ash.DataLayer` or reads the app env (Rule 3) | Read shape from `runtime` lookups; allowlist only calls that classify runtime values, with a reason |
 | `reuse lint` failure | New file without an SPDX header | Add the header (or a `.license` sidecar) |
 
 ## Safety Checklist
@@ -251,7 +252,7 @@ stacktrace and returned as `unknown_error`.
 - ✅ `mix check` passes (not just `mix test`)
 - ✅ Public API changes checked and tested against known consumers
 - ✅ No consumer names in `lib/`, `test/`, `agent-docs/` or this file
-- ✅ Runtime code reads shape from `runtime` lookups only
+- ✅ Runtime code reads shape from `runtime` lookups only (`test/runtime_boundary_test.exs`)
 - ✅ New files carry SPDX headers
 - ✅ Regression test written before the fix
 

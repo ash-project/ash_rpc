@@ -90,6 +90,17 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   stale-client hint ("NoSuchInput is unknown_input naming the input as sent,
   with no path"; `test/field_name_translation_test.exs` "a rejected private
   argument is unknown_input under its client name").
+- A `required` message is a template naming the field through `vars.field`,
+  prefixed with Ash's field type: `"attribute %{field} is required"`,
+  `"argument %{field} is required"`, `"relationship %{field} is required"`, or
+  `"%{field} is required"` when Ash gives no type ("a Required message names the
+  field type Ash gives", "changeset and query Required share one impl").
+- A Reactor `RunStepError` inside an error class (what a Reactor-run generic
+  action returns) is replaced by its inner error before any impl runs ("a
+  RunStepError inside an error class is built from the inner error").
+- Pipeline paths are client-cased strings: `invalid_identity` and
+  `missing_identity` use `["identity"]`, the getBy errors `["getBy"]` and
+  `invalid_pagination` `["page"]` under camelCase (`test/get_actions_test.exs`, `test/error_builder_golden_test.exs`).
 - Bread crumbs (`"Returned from bulk update: …"`) are cleared before any impl
   runs, so they never reach a message (`test/errors_test.exs` "bread crumbs
   never reach the client message"; `test/field_name_translation_test.exs` "an

@@ -24,7 +24,7 @@ Documentation Index in `AGENTS.md`.
 | [action metadata](features/action-metadata.md) | `test/action_metadata_test.exs` |
 | [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
 
-Four files belong to no feature doc:
+Five files belong to no feature doc:
 
 - `test/fixtures_test.exs`: smoke tests for the fixtures themselves (ETS
   persistence, the generator seeing the fixture domain, row opts reaching
@@ -36,6 +36,10 @@ Four files belong to no feature doc:
   test fixtures, so they never name `AshRpc.Test.*`.
 - `test/security_regression_test.exs`: values that must never reach the wire
   (`%Ash.ForbiddenField{}` contents, unserializable terms in error vars).
+- `test/runtime_boundary_test.exs`: Rule 3's source guard. It walks the AST of
+  `lib/ash_rpc.ex` and `lib/ash_rpc/**` (decoration excluded) for
+  `Ash.Resource.Info`, `Ash.DataLayer` and `Application` env calls, apart from
+  an allowlist of value-classification calls; a stale allowlist entry fails too.
 
 ## `AshRpc.Test.ManifestBuilder`
 
@@ -237,12 +241,14 @@ Update `@golden` only for an intentional wire change; add a case to
 | `widget_item.ex` | `AshRpc.Test.WidgetItem`: `Ash.Type.NewType` union with one `:struct` member (`post`, `instance_of: Post`) |
 | `place.ex` | `AshRpc.Test.Place`: keyword `options` and tuple `coordinates` with `fields`, `location` (`GeoPoint`), generic actions returning a keyword (`keyword_options`) and a tuple (`coordinates_info`). Rows `create_place`, `list_places`, `get_place`, `place_keyword_options`, `place_coordinates_info` |
 | `geo_point.ex` | `AshRpc.Test.GeoPoint`: tuple NewType (`lat_1`, `lng_1`, `is_verified?` → `lat1`, `lng1`, `isVerified` via `type_field_names/1`); also used by `Intake.location` |
-| `project.ex` | `AshRpc.Test.Project`: embedded `metadata` and `history` (array), custom `palette`, `due_date`/`started_at`/atom `priority`, TypedStruct `stats`, `has_many :notes`; calcs `summary`, `report` (typed map with embedded rows), `self` (arg `prefix`), `is_late`, `days_left`; `first` aggregates `first_note_meta` and `first_note_author_info`; generic `process_meta` and `process_meta_batch` taking embedded arguments. Rows `create_project`, `update_project`, `list_projects`, `get_project`, `process_project_meta`, `process_project_meta_batch` |
+| `project.ex` | `AshRpc.Test.Project`: embedded `metadata` and `history` (array), custom `palette`, custom `trail`/`strict_trail` (`Trail`), `due_date`/`started_at`/atom `priority`, `:duration` `estimate` and `{:array, :duration}` `breaks`, TypedStruct `stats`, `has_many :notes`; calcs `summary`, `report` (typed map with embedded rows), `self` (arg `prefix`), `is_late`, `days_left`; `first` aggregates `first_note_meta` and `first_note_author_info`; generic `process_meta` and `process_meta_batch` taking embedded arguments. Rows `create_project`, `update_project`, `list_projects`, `get_project`, `process_project_meta`, `process_project_meta_batch` |
 | `project_note.ex` | `AshRpc.Test.ProjectNote`: has_many target of `Project` with embedded `meta` and a tagged union `author_info` (`meta` member tagged by `info_type`, string `anonymous`). Row `create_project_note` |
 | `project_meta.ex` | `AshRpc.Test.ProjectMeta` (embedded: `category`, `priority_score`, `is_urgent`, `deadline`, atom `status`, nested `detail`, `info_type` tag, non-public `internal_notes` its actions still accept; calcs `display_category` and `adjusted_priority` with required arg `multiplier`) and `AshRpc.Test.ProjectMetaDetail` (`note`, `level`) |
 | `project_stats.ex` | `AshRpc.Test.ProjectStats`: `Ash.TypedStruct` with a nested typed-map `metrics` field; `all_done?` → `allDone` |
+| `trail.ex` | `AshRpc.Test.Trail`: hand-rolled `use Ash.Type` stored as `{:array, :string}`; casts a dotted string or a list of labels, and `strict?: true` rejects a string with a message |
+| `missing_post_reactor.ex` | `AshRpc.Test.MissingPostReactor`: a Reactor whose one step fails with `NotFound`, so `Catalog.find_post_via_reactor` returns an error class wrapping a `RunStepError` |
 | `palette.ex` | `AshRpc.Test.Palette`: hand-rolled `use Ash.Type` with map storage (`primary`, `secondary`), which the runtime must treat as a primitive |
-| `catalog.ex` | `AshRpc.Test.Catalog`: generic actions only (ETS and a read exist for the data layer). Returns `{:array, :struct}` of `Post`, `{:array, :uuid}`, `TaskStats` and an array of it, `{:array, PostStats}`, unconstrained `{:array, :map}`, `:date`, `{:array, :date}`, a typed-map `digest`; struct arguments (`assign`, `assign_many`, `instance_of: Author`). Rows `catalog_<action>` |
+| `catalog.ex` | `AshRpc.Test.Catalog`: generic actions only (ETS and a read exist for the data layer). Returns `{:array, :struct}` of `Post`, `{:array, :uuid}`, `TaskStats` and an array of it, `{:array, PostStats}`, unconstrained `{:array, :map}`, `:date`, `{:array, :date}`, a typed-map `digest`; struct arguments (`assign`, `assign_many`, `instance_of: Author`); `find_post_via_reactor`, run by `MissingPostReactor`. Rows `catalog_<action>` |
 | `task_stats.ex` | `AshRpc.Test.TaskStats`: `Ash.TypedStruct`; `completed?` → `completed`, `is_urgent?` → `isUrgent` |
 | `intake.ex` | `AshRpc.Test.Intake`: input theme, every value shape carrying name overrides (`is_active?` → `isActive`, `version_1` → `version1`; `search` arguments `includeDeleted`, `filterBy1`); typed map, NewType maps, keyword and tuple NewTypes, embedded and nested embedded values, a `:type_and_value` and a `:map_with_tag` union; generic `process_data` with a NewType argument. Rows `create_intake`, `update_intake`, `search_intakes`, `process_intake_data` |
 | `intake_types.ex` | `Intake`'s NewTypes with `type_field_names/1` overrides: `IntakeStats` (`last_updated_at` deliberately unmapped), `IntakeDeep` holding `IntakeInner`, keyword `IntakePrefs`, union member `IntakeData`, argument type `IntakeInput` |
