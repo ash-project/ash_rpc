@@ -161,8 +161,10 @@ AshRpc.InputFormatter.format(data, resource, action_name_or_action, runtime)
   value before throwing `{:unknown_nested_input, reasons}`, and each parent
   prepends its key (`ValueFormatter.collect_input/2`), so every miss is
   reported at once (`test/complex_input_test.exs` "strict nested input keys").
-  A node with no decorated names (`ClientNames.resource_named?/2`,
-  `type_named?/2` false) keeps its keys as sent and leaves them to Ash
+  Every embedded resource is decorated (an unexposed one under formatter-only
+  names), so its nested keys are strict too. A node with no decorated names
+  (`ClientNames.resource_named?/2`, `type_named?/2` false) keeps its keys as
+  sent and leaves them to Ash
   (`test/value_formatter_test.exs` "a type that was never decorated keeps its
   keys as sent").
 - Non-embedded struct inputs whose type is backed by an Ash resource are cast to

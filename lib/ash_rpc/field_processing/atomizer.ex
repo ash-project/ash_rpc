@@ -45,11 +45,9 @@ defmodule AshRpc.FieldProcessing.Atomizer do
   defp original_name(name, resource, runtime) do
     res_struct = Map.get(runtime.resource_lookup, resource)
 
-    with true <- Custom.exposed?(res_struct),
-         original when is_atom(original) and not is_nil(original) <-
-           Custom.original_field_name(res_struct, name) do
-      original
-    else
+    # Undecorated resources have no reverse map, so their names stay strings
+    case Custom.original_field_name(res_struct, name) do
+      original when is_atom(original) and not is_nil(original) -> original
       _ -> name
     end
   end

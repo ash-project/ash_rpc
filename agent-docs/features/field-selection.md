@@ -220,7 +220,9 @@ here; see [pipeline](pipeline.md).
   and for envelopes. `Post.secret` points at `AshRpc.Test.Secret`, which is
   deliberately left out of `@exposed` in `test/support/mapping_source.ex`
   (`test/field_selector_test.exs` "a relationship to an unexposed resource is
-  unknown_field").
+  unknown_field"). Embedded resources are not reached through relationships:
+  one the mapping source doesn't expose is selectable under formatter-only
+  names, as an attribute or a union member (`test/unexposed_embedded_test.exs`).
 
 ## Embedded Resources and Typed Values
 

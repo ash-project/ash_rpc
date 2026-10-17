@@ -12,6 +12,9 @@ defmodule AshRpc.Manifest.Decorator do
     * exposed resources (domain and embedded) — client names, argument
       overrides, bulk-authorization strategy; many-cardinality relationships
       to exposed destinations get pagination capabilities
+    * embedded resources the mapping source does not expose — formatter-only
+      client names (the mapping source is not asked for overrides), marked
+      `exposed: false`. Unexposed domain resources stay undecorated
     * every type tree, inline types included — forward and reverse client
       names (`decorate_type/3`)
     * every entrypoint action — expected input keys, input field types,
@@ -83,35 +86,57 @@ defmodule AshRpc.Manifest.Decorator do
 
   # ── resources ─────────────────────────────────────────────────────
 
+  # Exposed resources get the mapping source's overrides. An embedded resource
+  # the source does not expose still gets client names, from the formatter
+  # alone, so its fields can be selected and its input keys resolved; the
+  # source is not asked about it (it may not know the module), and it carries
+  # `exposed: false`, which keeps every exposure gate closed. Unexposed domain
+  # resources stay undecorated: they are reachable only through relationships,
+  # which strict exposure rejects.
   defp decorate_resource(%Manifest.Resource{module: module} = resource, ctx) do
-    if MapSet.member?(ctx.exposed, module) do
-      overrides = module |> ctx.source.field_names() |> Map.new()
-      field_names = full_field_names(resource, overrides, ctx.formatter)
-      check_collisions!(field_names, "resource #{inspect(module)}")
-      argument_overrides = argument_overrides(module, ctx)
+    cond do
+      MapSet.member?(ctx.exposed, module) ->
+        overrides = module |> ctx.source.field_names() |> Map.new()
+        put_resource_names(resource, overrides, argument_overrides(module, ctx), true, ctx)
 
-      payload = %{
-        field_names: field_names,
-        client_field_names: reverse_map(field_names),
-        calculation_argument_names: calculation_argument_names(resource, ctx.formatter),
-        field_name_overrides: overrides,
-        reverse_field_name_overrides: reverse_map(overrides),
-        argument_name_overrides: argument_overrides,
-        reverse_argument_name_overrides:
-          Map.new(argument_overrides, fn {a, m} -> {a, reverse_map(m)} end),
-        authorize_bulk_strategy: authorize_bulk_strategy(module)
-      }
+      resource.embedded? ->
+        put_resource_names(resource, %{}, %{}, false, ctx)
 
-      %Manifest.Resource{
+      true ->
         resource
-        | custom: Map.put(resource.custom, :ash_rpc, payload),
-          fields:
-            Map.new(resource.fields, fn {name, field} -> {name, decorate_field(field, ctx)} end),
-          relationships: decorate_relationships(resource, ctx)
-      }
-    else
-      resource
     end
+  end
+
+  defp put_resource_names(
+         %Manifest.Resource{module: module} = resource,
+         overrides,
+         argument_overrides,
+         exposed?,
+         ctx
+       ) do
+    field_names = full_field_names(resource, overrides, ctx.formatter)
+    check_collisions!(field_names, "resource #{inspect(module)}")
+
+    payload = %{
+      exposed: exposed?,
+      field_names: field_names,
+      client_field_names: reverse_map(field_names),
+      calculation_argument_names: calculation_argument_names(resource, ctx.formatter),
+      field_name_overrides: overrides,
+      reverse_field_name_overrides: reverse_map(overrides),
+      argument_name_overrides: argument_overrides,
+      reverse_argument_name_overrides:
+        Map.new(argument_overrides, fn {a, m} -> {a, reverse_map(m)} end),
+      authorize_bulk_strategy: authorize_bulk_strategy(module)
+    }
+
+    %Manifest.Resource{
+      resource
+      | custom: Map.put(resource.custom, :ash_rpc, payload),
+        fields:
+          Map.new(resource.fields, fn {name, field} -> {name, decorate_field(field, ctx)} end),
+        relationships: decorate_relationships(resource, ctx)
+    }
   end
 
   defp decorate_field(%Manifest.Field{} = field, ctx) do

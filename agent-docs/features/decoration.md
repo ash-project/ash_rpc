@@ -37,7 +37,7 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 | Callback | Returns | Used for |
 |----------|---------|----------|
 | `output_formatter/0` | `formatter()` | Internal → client names, computed at decoration (forward and reverse maps) and applied to output at runtime. The only formatter: client input is matched against its names exactly |
-| `exposed_resource?/1` | `boolean()` | Which resources (domain and embedded) get decorated. Everything else stays undecorated (strict exposure) |
+| `exposed_resource?/1` | `boolean()` | Which resources (domain and embedded) get the source's overrides and count as exposed. An unexposed embedded resource is still decorated with formatter-only names; an unexposed domain resource stays undecorated (strict exposure) |
 | `field_names/1` | `%{atom() => String.t()}` | Client-name **overrides only**; unlisted fields use the output formatter |
 | `argument_names/2` | `%{atom() => String.t()}` | Per-action argument overrides `(resource, action)` |
 | `type_field_names/1` | map or `nil` | Field overrides for a type module; `nil` = none |
@@ -104,6 +104,7 @@ default for undecorated structs):
 | Element | Data | Accessors |
 |---------|------|-----------|
 | Exposed resource (domain or embedded) | Full client `field_names` (fields and relationships) and their reverse `client_field_names`, `calculation_argument_names` (`%{calc => %{client => arg}}`), the overrides and their reverse, per-action argument overrides and their reverse, `authorize_bulk_strategy` | `exposed?/1`, `field_names/1`, `client_field_names/1`, `calculation_argument_names/2`, `field_name_override/2`, `original_field_name/2`, `argument_name_override/3`, `original_argument_name/3`, `authorize_bulk_strategy/1` |
+| Embedded resource the source doesn't expose | The same names, from the output formatter alone: empty overrides, no argument overrides, and `exposed: false`. `field_names/1` and `argument_names/2` are never called for it | `client_field_names/1`, `field_names/1`, `original_field_name/2`; `exposed?/1` is false |
 | Many-cardinality relationship to an exposed destination | `pagination` (`:offset`, `:keyset`, `:mixed`, `:none`) and `read_action` (the relationship's, else the destination's primary read) | `relationship_pagination/1`, `relationship_read_action/1` |
 | Type with named fields (typed map, keyword, tuple, TypedStruct), in `manifest.types` or inline on a field, argument, input, return or metadata | `field_names` and their reverse `client_field_names`; plus the overrides and their reverse when `type_field_names/1` maps the module | `type_field_names/1`, `type_client_field_names/1`, `type_field_name_overrides/1`, `type_field_name_overrides_pair/1` |
 | Union type | `client_member_names` (`%{client => member}`) | `type_client_member_names/1` |
@@ -116,9 +117,17 @@ resources are decorated and in the resource lookup", "mapped types carry
 overrides", "entrypoint actions carry expected input keys, field types and
 return classification".
 
-An unexposed resource (the fixture `AshRpc.Test.Secret`) carries no
+An unexposed domain resource (the fixture `AshRpc.Test.Secret`) carries no
 `custom.ash_rpc`, so `Custom.exposed?/1` is false and selecting it through a
 relationship is `unknown_field` (see [field selection](field-selection.md)).
+
+An unexposed embedded resource (the fixture `AshRpc.Test.QuoteBlock`, reached
+through `Widget.caption` and the `Widget.aside` union) is decorated so its
+fields can be selected and its input keys resolved, under output-formatter
+names. Its payload carries `exposed: false`, so `Custom.exposed?/1` stays
+false. That flag only gates relationship destinations, which an embedded
+resource never is, so no exposure gate opens. Its nested input keys are strict
+like any decorated resource's (`test/unexposed_embedded_test.exs`).
 
 ## `AshRpc.Entrypoint` Fields
 
@@ -186,7 +195,8 @@ the manifest build"). The `list_posts_allow_author` row is
 
 - For each exposed resource, every field and relationship gets a client name:
   the `field_names/1` override if present, otherwise the output formatter's
-  result. At runtime `AshRpc.FieldFormatter.format_field_for_client/3` applies
+  result. An unexposed embedded resource gets the output formatter's result
+  for every field. At runtime `AshRpc.FieldFormatter.format_field_for_client/3` applies
   the same rule, and an override wins whatever formatter is passed
   (`test/field_formatter_test.exs` "overrides win over the formatter for
   decorated resources").

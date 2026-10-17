@@ -15,8 +15,13 @@ defmodule AshRpc.Manifest.Custom do
   def ash_rpc(%{custom: %{ash_rpc: data}}), do: data
   def ash_rpc(_), do: nil
 
-  @doc "A resource is exposed exactly when it carries `custom.ash_rpc`."
+  @doc """
+  Whether the mapping source exposes the resource. Exposed resources carry
+  `custom.ash_rpc`; so do embedded resources the source does not expose (for
+  their formatter-only client names), marked `exposed: false`.
+  """
   @spec exposed?(Manifest.Resource.t() | nil) :: boolean()
+  def exposed?(%Manifest.Resource{custom: %{ash_rpc: %{exposed: false}}}), do: false
   def exposed?(%Manifest.Resource{custom: %{ash_rpc: _}}), do: true
   def exposed?(_), do: false
 

@@ -49,6 +49,8 @@ defmodule AshRpc.Test.MappingSource do
 
   def field_names(AshRpc.Test.IntakeSection), do: %{level_1: "level1"}
   def field_names(AshRpc.Test.IntakeStatus), do: %{is_final?: "isFinal"}
+  # Unexposed: decoration must never ask for its overrides
+  def field_names(AshRpc.Test.QuoteBlock), do: raise("field_names/1 called for QuoteBlock")
   def field_names(_resource), do: %{}
 
   @impl true
@@ -58,6 +60,9 @@ defmodule AshRpc.Test.MappingSource do
 
   def argument_names(AshRpc.Test.Intake, :search),
     do: %{include_deleted?: "includeDeleted", filter_by_1?: "filterBy1"}
+
+  def argument_names(AshRpc.Test.QuoteBlock, _action),
+    do: raise("argument_names/2 called for QuoteBlock")
 
   def argument_names(_resource, _action), do: %{}
 

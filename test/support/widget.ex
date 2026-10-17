@@ -29,6 +29,13 @@ defmodule AshRpc.Test.Widget do
         ]
       ]
 
+    # QuoteBlock is not exposed by the test mapping source
+    attribute :caption, AshRpc.Test.QuoteBlock, public?: true
+
+    attribute :aside, :union,
+      public?: true,
+      constraints: [types: [quote: [type: AshRpc.Test.QuoteBlock], note: [type: :string]]]
+
     attribute :status, :union,
       public?: true,
       constraints: [
@@ -85,6 +92,6 @@ defmodule AshRpc.Test.Widget do
   end
 
   actions do
-    defaults [:read, create: [:content, :status, :attachments, :post_id]]
+    defaults [:read, create: [:content, :caption, :aside, :status, :attachments, :post_id]]
   end
 end
