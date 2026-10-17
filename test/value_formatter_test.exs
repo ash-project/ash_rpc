@@ -30,6 +30,17 @@ defmodule AshRpc.ValueFormatterTest do
              ValueFormatter.format(%{theme_name: "x"}, AshRpc.Test.PostSettings, [], :output, rt)
   end
 
+  describe ":map_with_tag tag keys" do
+    test "the tag key uses the member's decorated name, not re-formatted" do
+      rt = Runtime.from_manifest(AshRpc.Test.ManifestBuilder.build(output_formatter: :snake_case))
+      status = Ash.Info.Manifest.get_field(rt.resource_lookup, AshRpc.Test.Intake, :status).type
+      value = %{active: %{status_type: "active", message: "on"}}
+
+      assert ValueFormatter.format(value, status, [], :output, rt) ==
+               %{"active" => %{"statusKind" => "active", "message" => "on"}}
+    end
+  end
+
   describe "strict input keys" do
     setup do
       rt = Runtime.from_manifest(AshRpc.Test.ManifestBuilder.manifest())

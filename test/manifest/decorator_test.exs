@@ -47,6 +47,20 @@ defmodule AshRpc.Manifest.DecoratorTest do
     refute Custom.exposed?(resource(m, AshRpc.Test.Secret))
   end
 
+  test "unexposed domain resources used as struct inputs get formatter names", %{manifest: m} do
+    voucher = resource(m, AshRpc.Test.Voucher)
+    refute Custom.exposed?(voucher)
+
+    assert Custom.field_names(voucher) == %{
+             id: "id",
+             voucher_code: "voucherCode",
+             post_id: "postId"
+           }
+
+    assert Custom.field_name_overrides(voucher) == %{}
+    refute Map.has_key?(resource(m, AshRpc.Test.Secret).custom, :ash_rpc)
+  end
+
   test "embedded resources are decorated and in the resource lookup", %{manifest: m} do
     assert Custom.exposed?(resource(m, AshRpc.Test.PostSettings))
   end

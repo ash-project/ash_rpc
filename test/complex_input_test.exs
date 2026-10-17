@@ -218,7 +218,7 @@ defmodule AshRpc.ComplexInputTest do
                [{["content", "data"], "item_count"}]
 
       assert unknown_nested(%{
-               "status" => %{"active" => %{"statusType" => "active", "is_final" => true}}
+               "status" => %{"active" => %{"statusKind" => "active", "is_final" => true}}
              }) == [{["status", "active"], "is_final"}]
 
       assert unknown_nested(
@@ -311,7 +311,7 @@ defmodule AshRpc.ComplexInputTest do
       intake =
         create_intake!(%{
           "status" => %{
-            "active" => %{"statusType" => "active", "message" => "on", "isFinal" => true}
+            "active" => %{"statusKind" => "active", "message" => "on", "isFinal" => true}
           }
         })
 
@@ -319,6 +319,21 @@ defmodule AshRpc.ComplexInputTest do
                type: :active,
                value: %IntakeStatus{status_type: "active", message: "on", is_final?: true}
              } = intake.status
+    end
+
+    test "a :map_with_tag tag key is output under the member's client name" do
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "create_intake",
+                 "input" => %{
+                   "userName" => "ada",
+                   "status" => %{"active" => %{"statusKind" => "active", "message" => "on"}}
+                 },
+                 "fields" => ["id", %{"status" => [%{"active" => ["statusKind", "message"]}]}]
+               })
+
+      assert %{"active" => %{"statusKind" => "active", "message" => "on"}} = data["status"]
+      refute Map.has_key?(data["status"]["active"], "statusType")
     end
 
     test "an array of unions maps each item to its member" do
@@ -492,6 +507,35 @@ defmodule AshRpc.ComplexInputTest do
                %{"assigneeId" => author.id, "assigneeName" => "Ada"},
                %{"assigneeId" => other.id, "assigneeName" => "Bob"}
              ]
+    end
+
+    test "a struct input on an unexposed domain resource takes formatter names" do
+      post_id = Ash.UUID.generate()
+      voucher = %{"id" => Ash.UUID.generate(), "voucherCode" => "V1", "postId" => post_id}
+
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "catalog_redeem_voucher",
+                 "input" => %{"voucher" => voucher},
+                 "fields" => ["voucherCode", "postId"]
+               })
+
+      assert data == %{"voucherCode" => "V1", "postId" => post_id}
+    end
+
+    test "a struct input on an unexposed domain resource has strict keys" do
+      voucher = %{"id" => Ash.UUID.generate(), "voucher_code" => "V1"}
+
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{
+                 "action" => "catalog_redeem_voucher",
+                 "input" => %{"voucher" => voucher},
+                 "fields" => ["voucherCode"]
+               })
+
+      assert error["type"] == "unknown_input"
+      assert error["fields"] == ["voucher_code"]
+      assert error["path"] == ["voucher"]
     end
 
     test "an empty array returns an empty list" do

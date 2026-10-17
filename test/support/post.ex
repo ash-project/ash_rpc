@@ -55,6 +55,9 @@ defmodule AshRpc.Test.Post do
     # Secret is not exposed: a query envelope on this relationship must fail.
     has_many :secrets, AshRpc.Test.Secret, public?: true
 
+    # Voucher is not exposed either, though it is decorated as a struct input.
+    has_many :vouchers, AshRpc.Test.Voucher, public?: true
+
     many_to_many :tags, AshRpc.Test.Tag do
       public? true
       through AshRpc.Test.PostTag

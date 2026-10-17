@@ -48,7 +48,10 @@ defmodule AshRpc.Test.MappingSource do
     do: %{bio_text_1: "bioText1", is_public?: "isPublic"}
 
   def field_names(AshRpc.Test.IntakeSection), do: %{level_1: "level1"}
-  def field_names(AshRpc.Test.IntakeStatus), do: %{is_final?: "isFinal"}
+
+  def field_names(AshRpc.Test.IntakeStatus),
+    do: %{is_final?: "isFinal", status_type: "statusKind"}
+
   # Unexposed: decoration must never ask for its overrides
   def field_names(AshRpc.Test.QuoteBlock), do: raise("field_names/1 called for QuoteBlock")
   def field_names(_resource), do: %{}

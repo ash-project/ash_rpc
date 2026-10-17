@@ -19,7 +19,7 @@ defmodule AshRpc.ValueFormatter do
   """
 
   alias Ash.Info.Manifest.Type
-  alias AshRpc.{ClientNames, FieldFormatter, Introspection}
+  alias AshRpc.{ClientNames, ClientPath, FieldFormatter, Introspection}
   alias AshRpc.Manifest.Custom
 
   @type direction :: :input | :output
@@ -548,7 +548,7 @@ defmodule AshRpc.ValueFormatter do
     case find_union_member_spec(value, members) do
       %{} = member ->
         member_data =
-          extract_union_member_data_spec(value, member, storage_type, formatter)
+          extract_union_member_data_spec(value, member, storage_type, formatter, rt)
 
         formatted_member_value =
           do_format(member_data, member.type, [], formatter, :output, rt)
@@ -645,7 +645,7 @@ defmodule AshRpc.ValueFormatter do
     Enum.find(members, fn member -> MapSet.member?(map_keys, member.name) end)
   end
 
-  defp extract_union_member_data_spec(data, member, storage_type, formatter) do
+  defp extract_union_member_data_spec(data, member, storage_type, formatter, rt) do
     case storage_type do
       :type_and_value ->
         data[member.name]
@@ -654,7 +654,9 @@ defmodule AshRpc.ValueFormatter do
         tag_field = Map.get(member, :tag)
         member_data = data[member.name]
 
-        if tag_field && is_map(member_data) && Map.has_key?(member_data, tag_field) do
+        if tag_field && is_map(member_data) && Map.has_key?(member_data, tag_field) &&
+             not member_names_field?(rt, member.type, tag_field) do
+          # The member type carries no decorated name for its tag: the formatter names it.
           tag_value = Map.get(member_data, tag_field)
           formatted_tag_field = FieldFormatter.format_field_name(tag_field, formatter)
 
@@ -669,6 +671,22 @@ defmodule AshRpc.ValueFormatter do
         data[member.name]
     end
   end
+
+  # The member's own formatting names every field it declares, overrides
+  # included; only an undeclared tag field needs the formatter here.
+  defp member_names_field?(rt, %Type{} = member_type, field) do
+    names =
+      if Type.resource_kind?(member_type),
+        do:
+          rt.resource_lookup
+          |> Map.get(Type.effective_resource(member_type))
+          |> Custom.field_names(),
+        else: member_type |> ClientPath.decorated_type(rt) |> Custom.type_field_names()
+
+    Map.has_key?(names, field)
+  end
+
+  defp member_names_field?(_rt, _member_type, _field), do: false
 
   defp maybe_inject_tag(formatted_value, member) when is_map(formatted_value) do
     tag_field = Map.get(member, :tag)

@@ -14,7 +14,9 @@ defmodule AshRpc.Manifest.Decorator do
       to exposed destinations get pagination capabilities
     * embedded resources the mapping source does not expose — formatter-only
       client names (the mapping source is not asked for overrides), marked
-      `exposed: false`. Unexposed domain resources stay undecorated
+      `exposed: false`. Unexposed domain resources stay undecorated, unless an
+      entrypoint takes them as a struct input; those get formatter-only names
+      and `exposed: false` too
     * every type tree, inline types included — forward and reverse client
       names (`decorate_type/3`)
     * every entrypoint action — expected input keys, input field types,
@@ -42,10 +44,13 @@ defmodule AshRpc.Manifest.Decorator do
     output_formatter =
       Keyword.get_lazy(opts, :output_formatter, &mapping_source.output_formatter/0)
 
+    exposed = exposed_modules(manifest, mapping_source)
+
     ctx = %{
       source: mapping_source,
       formatter: output_formatter,
-      exposed: exposed_modules(manifest, mapping_source),
+      exposed: exposed,
+      struct_inputs: struct_input_resources(manifest, exposed),
       actions_by_resource: Enum.group_by(manifest.entrypoints, & &1.resource, & &1.action.name)
     }
 
@@ -84,6 +89,44 @@ defmodule AshRpc.Manifest.Decorator do
     |> MapSet.new()
   end
 
+  # Unexposed, non-embedded resources an entrypoint takes as a struct input
+  # (directly, in an array, or nested in a typed container, union or named
+  # type). They get formatter-only names so their input keys resolve.
+  defp struct_input_resources(manifest, exposed) do
+    types = Map.new(manifest.types, &{&1.module, &1})
+
+    domain =
+      for %Manifest.Resource{embedded?: false, module: m} <- manifest.resources,
+          into: MapSet.new(),
+          do: m
+
+    manifest.entrypoints
+    |> Enum.flat_map(fn e ->
+      Enum.flat_map(e.action.inputs, &input_resources(Map.get(&1, :type), types, []))
+    end)
+    |> Enum.filter(&(MapSet.member?(domain, &1) and not MapSet.member?(exposed, &1)))
+    |> MapSet.new()
+  end
+
+  defp input_resources(%Manifest.Type{kind: :resource} = type, _types, _seen),
+    do: List.wrap(Manifest.Type.effective_resource(type))
+
+  # `seen` holds the named types on the current branch (recursive types).
+  defp input_resources(%Manifest.Type{kind: :type_ref, module: m}, types, seen) do
+    if m in seen,
+      do: [],
+      else: input_resources(Map.get(types, m), types, [m | seen])
+  end
+
+  defp input_resources(%Manifest.Type{} = type, types, seen) do
+    entries = (type.fields || []) ++ (type.element_types || []) ++ (type.members || [])
+
+    [type.item_type | Enum.map(entries, &Map.get(&1, :type))]
+    |> Enum.flat_map(&input_resources(&1, types, seen))
+  end
+
+  defp input_resources(_other, _types, _seen), do: []
+
   # ── resources ─────────────────────────────────────────────────────
 
   # Exposed resources get the mapping source's overrides. An embedded resource
@@ -91,15 +134,16 @@ defmodule AshRpc.Manifest.Decorator do
   # alone, so its fields can be selected and its input keys resolved; the
   # source is not asked about it (it may not know the module), and it carries
   # `exposed: false`, which keeps every exposure gate closed. Unexposed domain
-  # resources stay undecorated: they are reachable only through relationships,
-  # which strict exposure rejects.
+  # resources an entrypoint takes as a struct input get the same treatment.
+  # Other unexposed domain resources stay undecorated: they are reachable only
+  # through relationships, which strict exposure rejects.
   defp decorate_resource(%Manifest.Resource{module: module} = resource, ctx) do
     cond do
       MapSet.member?(ctx.exposed, module) ->
         overrides = module |> ctx.source.field_names() |> Map.new()
         put_resource_names(resource, overrides, argument_overrides(module, ctx), true, ctx)
 
-      resource.embedded? ->
+      resource.embedded? or MapSet.member?(ctx.struct_inputs, module) ->
         put_resource_names(resource, %{}, %{}, false, ctx)
 
       true ->

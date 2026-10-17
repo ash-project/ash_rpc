@@ -90,6 +90,14 @@ defmodule AshRpc.UnexposedEmbeddedTest do
       assert error["type"] == "unknown_field"
     end
 
+    test "a relationship to an unexposed resource decorated as a struct input stays unknown_field" do
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{"action" => "list_posts", "fields" => ["id", %{"vouchers" => ["id"]}]})
+
+      assert error["type"] == "unknown_field"
+      assert error["fields"] == ["vouchers"]
+    end
+
     test "an unexposed domain resource is not decorated" do
       lookup = AshRpc.Manifest.resource_lookup(ManifestBuilder.manifest())
       refute Custom.exposed?(Map.get(lookup, AshRpc.Test.Secret))

@@ -8,7 +8,7 @@ defmodule AshRpc.Test.Catalog do
   # primary key and a primary read.
   use Ash.Resource, domain: AshRpc.Test.Domain, data_layer: Ash.DataLayer.Ets
 
-  alias AshRpc.Test.{Author, Post, PostSettings, PostStats, TaskStats}
+  alias AshRpc.Test.{Author, Post, PostSettings, PostStats, TaskStats, Voucher}
 
   ets do
     private? true
@@ -145,6 +145,16 @@ defmodule AshRpc.Test.Catalog do
            input.arguments[:assignees] || [],
            &%{assignee_id: &1.id, assignee_name: &1.name}
          )}
+      end
+    end
+
+    action :redeem_voucher, :map do
+      constraints fields: [voucher_code: [type: :string], post_id: [type: :uuid]]
+      argument :voucher, :struct, allow_nil?: false, constraints: [instance_of: Voucher]
+
+      run fn input, _context ->
+        voucher = input.arguments.voucher
+        {:ok, %{voucher_code: voucher.voucher_code, post_id: voucher.post_id}}
       end
     end
   end

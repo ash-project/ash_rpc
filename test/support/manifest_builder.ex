@@ -125,6 +125,7 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"catalog_digest", AshRpc.Test.Catalog, :digest},
     {"catalog_assign", AshRpc.Test.Catalog, :assign},
     {"catalog_assign_many", AshRpc.Test.Catalog, :assign_many},
+    {"catalog_redeem_voucher", AshRpc.Test.Catalog, :redeem_voucher},
     # Input and overrides
     {"create_intake", AshRpc.Test.Intake, :create},
     {"update_intake", AshRpc.Test.Intake, :update},
@@ -156,8 +157,13 @@ defmodule AshRpc.Test.ManifestBuilder do
     manifest
   end
 
-  @doc "Builds a fresh manifest; `opts` are passed to the decorator."
+  @doc """
+  Builds a fresh manifest; `opts` are passed to the decorator, apart from
+  `:mapping_source` (default `AshRpc.Test.MappingSource`).
+  """
   def build(opts \\ []) do
+    {mapping_source, opts} = Keyword.pop(opts, :mapping_source, AshRpc.Test.MappingSource)
+
     entrypoints =
       for row <- @entrypoints do
         {name, resource, action, entry_opts} = normalize(row)
@@ -171,7 +177,7 @@ defmodule AshRpc.Test.ManifestBuilder do
 
     entrypoints
     |> generate!()
-    |> AshRpc.Manifest.Decorator.decorate(AshRpc.Test.MappingSource, opts)
+    |> AshRpc.Manifest.Decorator.decorate(mapping_source, opts)
   end
 
   defp normalize({name, resource, action}), do: {name, resource, action, []}
