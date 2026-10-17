@@ -17,7 +17,7 @@ Documentation Index in `AGENTS.md`.
 
 | Feature doc | Test files |
 |-------------|------------|
-| [decoration](features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
+| [decoration](features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/custom_test.exs`, `test/manifest/redecorate_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
 | [pipeline](features/pipeline.md) | `test/run_action_test.exs`, `test/validation_test.exs`, `test/context_test.exs`, `test/plug_test.exs`, `test/channel_test.exs`, `test/multitenancy_test.exs`, `test/filter_sort_test.exs`, `test/get_actions_test.exs` |
 | [field selection](features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
 | [formatting](features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs`, `test/client_names_test.exs`, `test/filter_input_test.exs` |
@@ -51,7 +51,9 @@ with `AshRpc.Test.MappingSource`.
   cached in `:persistent_term`. `AshRpc.Test.Profile` resolves to it. Never
   mutate it; build a variant instead.
 - `build/1`: a fresh, decorated manifest; `opts` go to
-  `AshRpc.Manifest.Decorator.decorate/3` (e.g. `output_formatter:`).
+  `AshRpc.Manifest.Decorator.decorate/3` (e.g. `output_formatter:`), apart
+  from `mapping_source:`, which swaps `AshRpc.Test.MappingSource` for a
+  test-local source (e.g. one that delegates and adds overrides).
 - `generate!/1`: an **undecorated** manifest for any `:action_entrypoints` form.
   Use it to test decoration itself or the "no decoration" error.
 
@@ -213,7 +215,7 @@ Update `@golden` only for an intentional wire change; add a case to
 
 | File | Purpose |
 |------|---------|
-| `domain.ex` | `AshRpc.Test.Domain`: the sixteen fixture resources (embedded types are not listed) |
+| `domain.ex` | `AshRpc.Test.Domain`: the seventeen fixture resources (embedded types are not listed) |
 | `mapping_source.ex` | `AshRpc.Test.MappingSource`: `@exposed` list, overrides (`Author` `isActive`/`isProlific`, `word_count` argument `text` → `body`, `set_viewed` argument `is_viewed?` → `isViewed`, `PostStats` `wordCount1`/`isFeatured`, plus the theme overrides listed with each fixture below), row opts → `%AshRpc.Entrypoint{}` via `struct!/2` |
 | `manifest_builder.ex` | `AshRpc.Test.ManifestBuilder`: `@entrypoints` wire rows; `manifest/0`, `build/1`, `generate!/1` |
 | `profile.ex` | `AshRpc.Test.Profile`: `use AshRpc.Profile, manifest: AshRpc.Test.ManifestBuilder`, all callbacks default |
@@ -221,7 +223,7 @@ Update `@golden` only for an intentional wire change; add a case to
 | `endpoint.ex` | `AshRpc.Test.Socket`, `AshRpc.Test.Endpoint`, and `AshRpc.Test.RpcChannel` (`use AshRpc.Channel`, joins `"rpc:*"`) |
 | `error_cases.ex` | `AshRpc.Test.ErrorCases`: one reason per `ErrorBuilder` clause, for the golden test |
 | `formatters.ex` | `AshRpc.Test.Formatters.upcase/1`: a custom output formatter with no inverse (`ManifestBuilder.build(output_formatter: {AshRpc.Test.Formatters, :upcase})`) |
-| `post.ex` | `AshRpc.Test.Post`: the main resource. Typed-map `stats`, embedded `settings`, unconstrained `data`, `unique_slug` identity; relationships to `author`, unexposed `secret`, `comments` (plus offset-only/keyset-only variants), `tags`; calculations with and without args (`title_shout` is `field? false`); aggregates; metadata actions; a `read_unviewed` read filtered to `view_count == 0` (the `read_action:` of `update_post_scoped`); `unfilterable_comments` / `unsortable_comments` (`filterable?`/`sortable?` false) and `secrets` (has_many to the unexposed `Secret`); `create_for_owner` with a required multi-word `owner_id` (`create_post_for_owner`); `set_viewed` with a mapped `is_viewed?` → `isViewed`, an inline change and a private `audit_note` argument (`set_post_viewed`); generic actions returning `:map`, typed map, tuple, union and nothing |
+| `post.ex` | `AshRpc.Test.Post`: the main resource. Typed-map `stats`, embedded `settings`, unconstrained `data`, `unique_slug` identity; relationships to `author`, unexposed `secret`, `comments` (plus offset-only/keyset-only variants), `tags`; calculations with and without args (`title_shout` is `field? false`); aggregates; metadata actions; a `read_unviewed` read filtered to `view_count == 0` (the `read_action:` of `update_post_scoped`); `unfilterable_comments` / `unsortable_comments` (`filterable?`/`sortable?` false) `secrets` (has_many to the unexposed `Secret`) and `vouchers` (has_many to the unexposed, struct-input-decorated `Voucher`); `create_for_owner` with a required multi-word `owner_id` (`create_post_for_owner`); `set_viewed` with a mapped `is_viewed?` → `isViewed`, an inline change and a private `audit_note` argument (`set_post_viewed`); generic actions returning `:map`, typed map, tuple, union and nothing |
 | `account.ex` | `AshRpc.Test.Account`: non-public `secret` and `internal_notes` attributes, and an `embedding` vector with `dimensions: 3` (`create_account`, `list_accounts`) |
 | `author.ex` | `AshRpc.Test.Author`: `is_active?` / `is_prolific?` (name overrides), `post_count` aggregate, `name_active` identity, actor-scoped `me` / `update_me` / `destroy_me` |
 | `comment.ex` | `AshRpc.Test.Comment`: has_many target. Union `attachment` (embedded `file` / string `note`), `weighted_rating` calc, reads with offset+keyset, offset-only, keyset-only and a `rated` read filtered by a `min_rating` argument |
@@ -232,6 +234,7 @@ Update `@golden` only for an intentional wire change; add a case to
 | `note_reply.ex` | `AshRpc.Test.NoteReply`: multitenant child of `Note` with a paginated read |
 | `ledger.ex` | `AshRpc.Test.Ledger`: union `count` and arrays allowing nil items; `count` deliberately collides with the page-map key (`page_ledgers`) |
 | `secret.ex` | `AshRpc.Test.Secret`: in the domain but deliberately **not exposed**, for strict-exposure tests; `post_id` is the destination of `Post.secrets` |
+| `voucher.ex` | `AshRpc.Test.Voucher`: in the domain and **not exposed**, but taken as a struct input by `Catalog.redeem_voucher`, so it is decorated with formatter-only names and `exposed: false`; `post_id` is the destination of `Post.vouchers`, which stays `unknown_field` |
 | `post_settings.ex` | `AshRpc.Test.PostSettings`: embedded resource with a `theme_label` calculation |
 | `post_stats.ex` | `AshRpc.Test.PostStats`: `Ash.Type.NewType` map with fields `word_count_1` and `is_featured?` (client names via `type_field_names/1`) |
 | `calculations.ex` | Module calculations. For `Post`: `Excerpt` (arg `length`, optional multi-word `omission_text` appended to the slice), `ScoredStats` (arg `boost`, returns `PostStats`), `SelfPost` (returns the record). For `Widget`: `FeaturedPost` (`strict_loads?: false`, wraps the loaded `post` in a union). For `Project`: `ProjectSummary` (a fixed `ProjectStats`), `ProjectReport` (two `ProjectMeta` rows, `total: 2`), `SelfRecords`, `IsLate` and `DaysLeft` (module calcs over `due_date`, so ETS needs no date functions) |
@@ -249,11 +252,11 @@ Update `@golden` only for an intentional wire change; add a case to
 | `trail.ex` | `AshRpc.Test.Trail`: hand-rolled `use Ash.Type` stored as `{:array, :string}`; casts a dotted string or a list of labels, and `strict?: true` rejects a string with a message |
 | `missing_post_reactor.ex` | `AshRpc.Test.MissingPostReactor`: a Reactor whose one step fails with `NotFound`, so `Catalog.find_post_via_reactor` returns an error class wrapping a `RunStepError` |
 | `palette.ex` | `AshRpc.Test.Palette`: hand-rolled `use Ash.Type` with map storage (`primary`, `secondary`, optional multi-word `accent_color`), which the runtime must treat as a primitive; its keys round-trip verbatim |
-| `catalog.ex` | `AshRpc.Test.Catalog`: generic actions only (ETS and a read exist for the data layer). Returns `{:array, :struct}` of `Post`, `{:array, :uuid}`, `TaskStats` and an array of it, `{:array, PostStats}`, unconstrained `{:array, :map}`, `:date`, `{:array, :date}`, a typed-map `digest`; struct arguments (`assign`, `assign_many`, `instance_of: Author`); `find_post_via_reactor`, run by `MissingPostReactor`. Rows `catalog_<action>` |
+| `catalog.ex` | `AshRpc.Test.Catalog`: generic actions only (ETS and a read exist for the data layer). Returns `{:array, :struct}` of `Post`, `{:array, :uuid}`, `TaskStats` and an array of it, `{:array, PostStats}`, unconstrained `{:array, :map}`, `:date`, `{:array, :date}`, a typed-map `digest`; struct arguments (`assign`, `assign_many`, `instance_of: Author`; `redeem_voucher`, `instance_of: Voucher`); `find_post_via_reactor`, run by `MissingPostReactor`. Rows `catalog_<action>` |
 | `task_stats.ex` | `AshRpc.Test.TaskStats`: `Ash.TypedStruct`; `completed?` → `completed`, `is_urgent?` → `isUrgent` |
 | `intake.ex` | `AshRpc.Test.Intake`: input theme, every value shape carrying name overrides (`is_active?` → `isActive`, `version_1` → `version1`; `search` arguments `includeDeleted`, `filterBy1`); typed map, NewType maps, keyword and tuple NewTypes, embedded and nested embedded values, a `:type_and_value` and a `:map_with_tag` union; generic `process_data` with a NewType argument. Rows `create_intake`, `update_intake`, `search_intakes`, `process_intake_data` |
 | `intake_types.ex` | `Intake`'s NewTypes with `type_field_names/1` overrides: `IntakeStats` (`last_updated_at` deliberately unmapped), `IntakeDeep` holding `IntakeInner`, keyword `IntakePrefs`, union member `IntakeData`, argument type `IntakeInput` |
-| `intake_embedded.ex` | `Intake`'s embedded resources with `field_names/1` overrides: `IntakeProfile` (`bioText1`, `isPublic`), `IntakeSection` (`level1`, nested `profile`), `IntakeStatus` (`isFinal`, the `status` union member) |
+| `intake_embedded.ex` | `Intake`'s embedded resources with `field_names/1` overrides: `IntakeProfile` (`bioText1`, `isPublic`), `IntakeSection` (`level1`, nested `profile`), `IntakeStatus` (`isFinal`, and its `status_type` tag → `statusKind`; the `status` union member) |
 
 ## Regression Tests
 

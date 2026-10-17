@@ -72,10 +72,13 @@ See [field selection](features/field-selection.md) for the full rules.
 
 **Cause:** strict exposure. The relationship's destination is not exposed by
 the mapping source (`exposed_resource?/1` returns false), so the decorator
-leaves it undecorated and the field selector refuses to walk into it. The
-resource is still in the resource lookup, so a lookup alone won't tell you;
-check `AshRpc.Manifest.Custom.exposed?/1` on it. In the fixtures, `Post.secret`
-→ `AshRpc.Test.Secret` is unexposed on purpose
+leaves it undecorated (or, when an entrypoint takes it as a struct input,
+decorates it with formatter-only names and `exposed: false`) and the field
+selector refuses to walk into it. The resource is still in the resource
+lookup, and may carry client names, so neither tells you; check
+`AshRpc.Manifest.Custom.exposed?/1` on it. In the fixtures, `Post.secret`
+→ `AshRpc.Test.Secret` and `Post.vouchers` → `AshRpc.Test.Voucher` are
+unexposed on purpose
 (`test/field_selector_test.exs` "a relationship to an unexposed resource is
 unknown_field").
 

@@ -31,7 +31,7 @@ formatter's casing. Exceptions raised anywhere inside `AshRpc.run_action/4` or
 | `shortMessage` | Short title |
 | `vars` | Placeholder values |
 | `fields` | Affected client field names (dotted for nested paths) |
-| `path` | Client-formatted path to the error location |
+| `path` | Client path to the error location: atom segments take the decorated client name of the node they are on (see step 7 and [field-selection paths](#field-selection-paths)), string segments are reported as sent |
 | `details` | Optional extras: `suggestion`, `hint` (see [stale-client hint](#stale-client-hint)) and reason-specific keys |
 | `errorId` | Only on `internal_error`: the id that is also logged server-side |
 
@@ -129,7 +129,16 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
 - A Reactor `RunStepError` inside an error class (what a Reactor-run generic
   action returns) is replaced by its inner error before any impl runs ("a
   RunStepError inside an error class is built from the inner error").
-- Pipeline paths are client-cased strings: `invalid_identity` and
+- <a id="field-selection-paths"></a>Field-selection errors (`unknown_field`,
+  `requires_field_selection`, `invalid_field_selection`, the query-option
+  errors on relationships, …) name their `path` and dotted `fields` /
+  `vars.field` with the same walk, from the selection root that the pipeline
+  puts in the error scope as `selection:`: a generic action's decorated
+  `returns`, otherwise the entrypoint's resource. Reason tuples don't change
+  shape. `AshRpc.error_response/3` and other callers without a scope fall back
+  to the formatter for atoms (`test/field_selector_test.exs` `describe
+  "field-selection error paths use decorated client names"`).
+- Fixed-vocabulary paths are client-cased strings: `invalid_identity` and
   `missing_identity` use `["identity"]`, the getBy errors `["getBy"]`,
   `invalid_pagination` `["page"]` and `unknown_metadata_fields`
   `["metadataFields"]` under camelCase (`test/get_actions_test.exs`, `test/error_builder_golden_test.exs`).
@@ -187,12 +196,28 @@ request and `context` is the request's Ash context. Errors from
    `handle_error/2` is called), an `{m, f, a}` tuple (called as
    `apply(m, f, [error, context | a])`), or `nil` (skipped). The default is
    `AshRpc.DefaultErrorHandler`, which returns the error unchanged.
-7. `fields` and `vars.field` are formatted for the client using the resource's
-   field-name overrides when the resource is known, and the action's
-   `argument_names` overrides for names that are not resource fields; `path`
-   segments get plain formatter casing only. Values are
+7. `path` is walked through the decorated manifest (`AshRpc.ClientPath`),
+   starting at the action and resource. The first atom segment is an action
+   input when the action declares it (argument overrides apply), else a
+   resource field or relationship. Later segments descend: resources through
+   their `field_names` into the field's type or the relationship's destination,
+   typed containers through `type_field_names`, unions through
+   `type_member_names` into the member's type, arrays to their items, and
+   `:type_ref`s through the type lookup. Integers keep the current node. A
+   string segment is a name the client sent, so it is reported as sent and ends
+   the walk. Once the path leaves decorated data (a miss, an undecorated node,
+   an unconstrained map, no resource), atoms use the output formatter.
+   With a non-empty `path`, atom `fields` and `vars.field` are named against
+   the node the path ends at. With an empty path they are named against the
+   root: the action's `argument_names` overrides, then the resource's field
+   names, then the formatter. String fields are reported as sent. Values are
    made JSON-safe (unknown structs are reduced to their module name so their
-   fields are not disclosed).
+   fields are not disclosed). Tests: `test/errors_test.exs` `describe "path
+   segments"` ("resource and nested type overrides are used as written", "an
+   action argument uses its argument override", "string segments are reported
+   as sent and stop the walk", "outside decorated data the formatter applies",
+   "fields and vars.field are named against the node at the end of the path",
+   "with an empty path, fields are named against the root").
 
 A handler returning `nil` drops the error and the remaining handlers are
 skipped. A handler that raises or throws fails closed: the error becomes a

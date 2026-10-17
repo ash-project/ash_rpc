@@ -37,7 +37,7 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 | Callback | Returns | Used for |
 |----------|---------|----------|
 | `output_formatter/0` | `formatter()` | Internal → client names, computed at decoration (forward and reverse maps) and applied to output at runtime. The only formatter: client input is matched against its names exactly |
-| `exposed_resource?/1` | `boolean()` | Which resources (domain and embedded) get the source's overrides and count as exposed. An unexposed embedded resource is still decorated with formatter-only names; an unexposed domain resource stays undecorated (strict exposure) |
+| `exposed_resource?/1` | `boolean()` | Which resources (domain and embedded) get the source's overrides and count as exposed. An unexposed embedded resource is still decorated with formatter-only names, and so is an unexposed domain resource an entrypoint takes as a struct input; any other unexposed domain resource stays undecorated (strict exposure) |
 | `field_names/1` | `%{atom() => String.t()}` | Client-name **overrides only**; unlisted fields use the output formatter |
 | `argument_names/2` | `%{atom() => String.t()}` | Per-action argument overrides `(resource, action)` |
 | `type_field_names/1` | map or `nil` | Field overrides for a type module; `nil` = none |
@@ -105,21 +105,41 @@ default for undecorated structs):
 |---------|------|-----------|
 | Exposed resource (domain or embedded) | Full client `field_names` (fields and relationships) and their reverse `client_field_names`, `calculation_argument_names` (`%{calc => %{client => arg}}`), the overrides and their reverse, per-action argument overrides and their reverse, `authorize_bulk_strategy` | `exposed?/1`, `field_names/1`, `client_field_names/1`, `calculation_argument_names/2`, `field_name_override/2`, `original_field_name/2`, `argument_name_override/3`, `original_argument_name/3`, `authorize_bulk_strategy/1` |
 | Embedded resource the source doesn't expose | The same names, from the output formatter alone: empty overrides, no argument overrides, and `exposed: false`. `field_names/1` and `argument_names/2` are never called for it | `client_field_names/1`, `field_names/1`, `original_field_name/2`; `exposed?/1` is false |
+| Unexposed domain resource taken as a struct input (an entrypoint action input of `kind: :resource`, directly, in an array, or nested in a typed container, union or named type) | The same formatter-only names and `exposed: false` as an unexposed embedded resource | As above |
 | Many-cardinality relationship to an exposed destination | `pagination` (`:offset`, `:keyset`, `:mixed`, `:none`) and `read_action` (the relationship's, else the destination's primary read) | `relationship_pagination/1`, `relationship_read_action/1` |
 | Type with named fields (typed map, keyword, tuple, TypedStruct), in `manifest.types` or inline on a field, argument, input, return or metadata | `field_names` and their reverse `client_field_names`; plus the overrides and their reverse when `type_field_names/1` maps the module | `type_field_names/1`, `type_client_field_names/1`, `type_field_name_overrides/1`, `type_field_name_overrides_pair/1` |
-| Union type | `client_member_names` (`%{client => member}`) | `type_client_member_names/1` |
+| Union type | `client_member_names` (`%{client => member}`) | `type_client_member_names/1`; `type_member_names/1` is the forward map (`%{member => client}`) |
 | Every entrypoint action | `expected_input_keys` (client key → input name), `input_field_types`, `return_classification` | `action_expected_input_keys/1`, `action_input_field_types/1`, `action_return_classification/1` |
+| Wire entrypoint (`%AshRpc.Entrypoint{}`) | `client_metadata_field_names` (`%{client => field}`) | `entrypoint_metadata_field_names/1` (the forward map, `%{field => client}`) |
+
+`type_field_names/1`, `type_member_names/1` and
+`entrypoint_metadata_field_names/1` return `%{}` for an undecorated node. The
+forward maps are safe inversions of the stored reverse maps, because decoration
+raises `NameCollisionError` on duplicate client names
+(`test/manifest/custom_test.exs`).
 
 Tests in `test/manifest/decorator_test.exs`: "exposed resources carry
 precomputed names; overrides win", "argument overrides are scoped per action",
 "unexposed resources are left undecorated (strict exposure)", "embedded
 resources are decorated and in the resource lookup", "mapped types carry
 overrides", "entrypoint actions carry expected input keys, field types and
-return classification".
+return classification", "unexposed domain resources used as struct inputs get
+formatter names".
 
 An unexposed domain resource (the fixture `AshRpc.Test.Secret`) carries no
 `custom.ash_rpc`, so `Custom.exposed?/1` is false and selecting it through a
 relationship is `unknown_field` (see [field selection](field-selection.md)).
+
+An unexposed domain resource that an entrypoint takes as a struct input (the
+fixture `AshRpc.Test.Voucher`, the `voucher` argument of
+`Catalog.redeem_voucher`) is decorated with formatter-only names and
+`exposed: false`, so its input keys resolve (and are strict) like an
+unexposed embedded resource's. Relationship gating stays strict: selecting
+`Post.vouchers` is still `unknown_field`. Tests: "a struct input on an
+unexposed domain resource takes formatter names" and "... has strict keys"
+(`test/complex_input_test.exs`), "a relationship to an unexposed resource
+decorated as a struct input stays unknown_field"
+(`test/unexposed_embedded_test.exs`).
 
 An unexposed embedded resource (the fixture `AshRpc.Test.QuoteBlock`, reached
 through `Widget.caption` and the `Widget.aside` union) is decorated so its

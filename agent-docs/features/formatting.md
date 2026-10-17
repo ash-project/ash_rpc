@@ -210,6 +210,15 @@ Arrays of unions wrap each element the same way.
    must match; a non-client casing is not a member
    (`test/union_input_test.exs` "a member key in a non-client casing is not a member").
 
+**`:map_with_tag` output.** The tag key is named by the member type's
+decoration, overrides included and used as written, so it matches the
+member's other keys: `IntakeStatus` maps `status_type` to `"statusKind"`, and
+the output is `"statusKind"` under every formatter. Only a tag field the member
+type doesn't declare is named by the output formatter
+(`test/complex_input_test.exs` "a :map_with_tag tag key is output under the
+member's client name", `test/value_formatter_test.exs` "the tag key uses the
+member's decorated name, not re-formatted").
+
 The three errors, all `type: "invalid_union_input"` (`AshRpc.ErrorBuilder`),
 asserted end to end by `test/union_input_test.exs`:
 
@@ -276,6 +285,7 @@ Lookup calls:
 | Direction | Call |
 |---|---|
 | Internal → client, resource or type field | `AshRpc.FieldFormatter.format_field_for_client(field, resource_or_type, formatter)`: the override wins and is used as-is; `nil` or a module atom falls back to the formatter |
+| Internal → client, decorated maps | `AshRpc.Manifest.Custom.field_names/1` (resource), `type_field_names/1` (typed container), `type_member_names/1` (union members), `entrypoint_metadata_field_names/1` (wire entrypoint metadata): forward `%{atom => client}` maps, `%{}` when undecorated (`test/manifest/custom_test.exs`) |
 | Client → internal, resource field | `AshRpc.ClientNames.resource_field/3` (exact lookup in `client_field_names`, overrides included) |
 | Action argument | `AshRpc.Manifest.Custom.argument_name_override/3` / `original_argument_name/3` |
 | Type fields | `AshRpc.Manifest.Custom.type_field_name_overrides_pair/1`, else `AshRpc.Introspection.type_field_name_overrides/2` |

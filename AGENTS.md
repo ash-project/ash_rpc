@@ -227,7 +227,7 @@ stacktrace and returned as `unknown_error`.
 
 ### Core Patterns
 - **Type-driven dispatch**: `FieldSelector` and `ValueFormatter` both recurse on `{type, constraints}`
-- **Strict exposure**: selecting through a relationship to a resource the mapping source doesn't expose is `unknown_field`. Embedded resources the source doesn't expose are still decorated, under formatter-only names and `exposed: false`, so they stay selectable as attributes and union members
+- **Strict exposure**: selecting through a relationship to a resource the mapping source doesn't expose is `unknown_field`. Embedded resources the source doesn't expose are still decorated, under formatter-only names and `exposed: false`, so they stay selectable as attributes and union members. So are unexposed domain resources an entrypoint takes as a struct input, so their input keys resolve; relationships to them stay `unknown_field`
 - **Tenant param**: a `tenant` request param overrides the transport tenant (`conn` or `socket.assigns[:ash_tenant]`)
 - **Optional transports**: `AshRpc.Plug` / `AshRpc.Channel` are wrapped in `Code.ensure_loaded?/1` and only exist when plug/phoenix are present. `AshRpc.Context.from_source/1` follows the same rule
 
