@@ -37,6 +37,56 @@ defmodule AshRpc.FilterSortTest do
     Enum.map(errors, & &1["type"])
   end
 
+  defp run_error(params) do
+    {result, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        AshRpc.run_action(@profile, ctx(), Map.put_new(params, "fields", ["title"]))
+      end)
+
+    # The log is shared with concurrent tests, so look only for these errors
+    refute log =~ "Error type: Ash.Error.Query.NoSuch"
+    assert %{"success" => false, "errors" => [error]} = result
+    error
+  end
+
+  describe "unknown names" do
+    setup do
+      seed_posts()
+    end
+
+    test "an unknown sort field is unknown_field naming the field as sent" do
+      error = run_error(%{"action" => "list_posts", "sort" => "-view_count"})
+
+      assert error["type"] == "unknown_field"
+      assert error["fields"] == ["view_count"]
+      assert error["vars"]["field"] == "view_count"
+      assert error["path"] == ["sort"]
+    end
+
+    test "an unknown filter field is unknown_field naming the field as sent" do
+      error = run_error(%{"action" => "list_posts", "filter" => %{"view_count" => %{"eq" => 1}}})
+
+      assert error["type"] == "unknown_field"
+      assert error["fields"] == ["view_count"]
+      assert error["vars"]["field"] == "view_count"
+      assert error["path"] == ["filter"]
+    end
+
+    test "an unknown filter operator is unknown_filter_operator naming it as sent" do
+      error =
+        run_error(%{"action" => "list_posts", "filter" => %{"viewCount" => %{"bogusOp" => 1}}})
+
+      assert error["type"] == "unknown_filter_operator"
+      assert error["fields"] == ["bogusOp"]
+      assert error["vars"]["operator"] == "bogusOp"
+    end
+
+    test "unknown filter and sort names carry the stale-client hint" do
+      error = run_error(%{"action" => "list_posts", "sort" => "view_count"})
+      assert is_binary(error["details"]["hint"])
+    end
+  end
+
   describe "sort strings" do
     setup do
       seed_posts()

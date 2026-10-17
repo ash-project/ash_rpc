@@ -24,7 +24,8 @@ defmodule AshRpc.Errors do
      profile's `show_raised_errors?/1` is true for the domain)
   4. Replace policy messages with a breakdown when the profile's
      `show_policy_breakdowns?/0` is true, and add the profile's
-     `stale_client_hint/0` to `unknown_input`
+     `stale_client_hint/0` to unknown inputs, filter/sort fields and filter
+     operators
   5. Apply resource-level error handler (if configured)
   6. Apply the profile's `error_handler/1` for the domain (`nil` included)
 
@@ -198,13 +199,15 @@ defmodule AshRpc.Errors do
 
   defp maybe_policy_breakdown(transformed, _source, _runtime), do: transformed
 
-  # An unknown input is what a client built against an older manifest sends,
-  # so it carries the same hint as the request errors ErrorBuilder flags.
-  defp maybe_stale_client_hint(
-         %{type: "unknown_input"} = transformed,
-         %Ash.Error.Invalid.NoSuchInput{},
-         runtime
-       ) do
+  # An unknown input, filter/sort field or filter operator is what a client
+  # built against an older manifest sends, so it carries the same hint as the
+  # request errors ErrorBuilder flags.
+  defp maybe_stale_client_hint(transformed, %struct{}, runtime)
+       when struct in [
+              Ash.Error.Invalid.NoSuchInput,
+              Ash.Error.Query.NoSuchField,
+              Ash.Error.Query.NoSuchFilterPredicate
+            ] do
     case stale_client_hint(runtime) do
       nil -> transformed
       hint -> Map.update(transformed, :details, %{hint: hint}, &Map.put(&1, :hint, hint))
@@ -303,6 +306,12 @@ defmodule AshRpc.Errors do
   end
 
   defp format_error_field_names(error, _resource, _action, _runtime), do: error
+
+  # A string field name is one the client sent (an unknown input, filter or
+  # sort name), so it is reported as sent. Atom names are internal and are
+  # formatted for the client.
+  defp format_error_field(field, _resource, _action, _formatter) when is_binary(field),
+    do: field
 
   # An action argument is named the way the client sent it.
   defp format_error_field(field, %Ash.Info.Manifest.Resource{} = resource, action, formatter)

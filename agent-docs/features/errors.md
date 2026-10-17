@@ -78,6 +78,8 @@ Built-in impls live in `lib/ash_rpc/error.ex`:
 | `Ash.Error.Invalid.InvalidPrimaryKey` | `invalid_primary_key` |
 | `Ash.Error.Query.ReadActionRequiresActor` | `forbidden` |
 | `Ash.Error.Invalid.NoSuchInput` | `unknown_input` |
+| `Ash.Error.Query.NoSuchField` | `unknown_field` |
+| `Ash.Error.Query.NoSuchFilterPredicate` | `unknown_filter_operator` |
 | `Ash.Error.Unknown.UnknownError` | `unknown_error` |
 
 Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
@@ -104,10 +106,21 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   keys as sent plus array indexes, e.g. `["history", 1]` or
   `["attachments", 0, "file"]`. Every miss in the input is reported, top-level
   and nested together (`test/complex_input_test.exs` "strict nested input
-  keys"; golden case `unknown_input_nested`). A node without decorated names
-  (an unexposed embedded resource, a type that never went through the
-  decorator) keeps its keys as sent, and unconstrained and custom map-storage
-  values are verbatim.
+  keys"; golden case `unknown_input_nested`). An embedded resource the mapping
+  source doesn't expose is strict too, under formatter-only names
+  (`test/unexposed_embedded_test.exs`). A node without decorated names (a type
+  that never went through the decorator) keeps its keys as sent, and
+  unconstrained and custom map-storage values are verbatim.
+- `AshRpc.FilterInput` reports a filter or sort name that isn't a client name
+  of the resource as Ash's `NoSuchField` (path `["filter"]` / `["sort"]`) and an
+  unknown filter operator as `NoSuchFilterPredicate`. They become
+  `unknown_field` and `unknown_filter_operator`, name the field or operator as
+  the client sent it, and carry the stale-client hint
+  (`test/filter_sort_test.exs` "unknown names" describe). Before these impls
+  existed, both fell through to `unknown_error` with a "no protocol
+  implementation" warning.
+- `AshRpc.Errors` formats atom field names for the client and leaves string
+  ones as sent: a string in `fields` or `vars.field` is a name the client sent.
 - A `required` message is a template naming the field through `vars.field`,
   prefixed with Ash's field type: `"attribute %{field} is required"`,
   `"argument %{field} is required"`, `"relationship %{field} is required"`, or
@@ -117,8 +130,14 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   action returns) is replaced by its inner error before any impl runs ("a
   RunStepError inside an error class is built from the inner error").
 - Pipeline paths are client-cased strings: `invalid_identity` and
-  `missing_identity` use `["identity"]`, the getBy errors `["getBy"]` and
-  `invalid_pagination` `["page"]` under camelCase (`test/get_actions_test.exs`, `test/error_builder_golden_test.exs`).
+  `missing_identity` use `["identity"]`, the getBy errors `["getBy"]`,
+  `invalid_pagination` `["page"]` and `unknown_metadata_fields`
+  `["metadataFields"]` under camelCase (`test/get_actions_test.exs`, `test/error_builder_golden_test.exs`).
+- `unknown_metadata_fields` is one error for every `metadataFields` entry that
+  isn't the client name of an exposed metadata field: `fields` and
+  `vars.fields` name the misses as sent, `details.allowedFields` the exposed
+  client names (`test/action_metadata_test.exs`; golden case
+  `unknown_metadata_fields`).
 - Bread crumbs (`"Returned from bulk update: …"`) are cleared before any impl
   runs, so they never reach a message (`test/errors_test.exs` "bread crumbs
   never reach the client message"; `test/field_name_translation_test.exs` "an

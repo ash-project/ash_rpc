@@ -87,6 +87,40 @@ defimpl AshRpc.Error, for: Ash.Error.Invalid.NoSuchInput do
   end
 end
 
+# A filter or sort name that is not a client name of the resource.
+# `AshRpc.FilterInput` reports these misses as Ash's NoSuchField, naming the
+# field as the client sent it, with `path` `[:filter]` or `[:sort]`.
+defimpl AshRpc.Error, for: Ash.Error.Query.NoSuchField do
+  def to_error(error) do
+    field = to_string(error.field)
+
+    %{
+      message: "Unknown field %{field}",
+      short_message: "Unknown field",
+      vars: %{field: field},
+      type: "unknown_field",
+      fields: [field],
+      path: error.path || []
+    }
+  end
+end
+
+# A filter operator the field doesn't support, named as the client sent it
+defimpl AshRpc.Error, for: Ash.Error.Query.NoSuchFilterPredicate do
+  def to_error(error) do
+    operator = to_string(error.key)
+
+    %{
+      message: "Unknown filter operator %{operator}",
+      short_message: "Unknown filter operator",
+      vars: %{operator: operator},
+      type: "unknown_filter_operator",
+      fields: [operator],
+      path: error.path || []
+    }
+  end
+end
+
 defimpl AshRpc.Error, for: Ash.Error.Query.NotFound do
   def to_error(error) do
     %{
