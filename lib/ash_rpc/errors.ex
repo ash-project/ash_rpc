@@ -12,6 +12,7 @@ defmodule AshRpc.Errors do
 
   require Logger
 
+  alias AshRpc.ClientPath
   alias AshRpc.Error, as: ErrorProtocol
 
   @doc """
@@ -288,19 +289,34 @@ defmodule AshRpc.Errors do
     }
   end
 
-  # Formats field names in error structures for client consumption.
-  # Applies resource-level field_names mappings and, for names that are not
-  # resource fields, the action's argument_names mappings (if resource and
-  # action are known), then the output formatter.
-  # Also serializes values to ensure they are JSON-safe via serialize_error/1.
+  # Names an error's path, fields and vars.field for the client, then makes
+  # every value JSON-safe (serialize_error/1).
+  #
+  # The path is walked through the decorated manifest from the action and
+  # resource (AshRpc.ClientPath): each atom segment takes the client name of
+  # the resource, action input or type it is on, overrides included; string
+  # segments are reported as sent. With a non-empty path, fields are named
+  # against the node the path ends at. With an empty path they are named
+  # against the root: the action's argument overrides, then resource fields,
+  # then the output formatter.
   defp format_error_field_names(error, resource, action, runtime) when is_map(error) do
     formatter = runtime.output_formatter
     resource_struct = resource && Map.get(runtime.resource_lookup, resource)
-    format_field = &format_error_field(&1, resource_struct, action, formatter)
+
+    {error, format_field} =
+      case error do
+        %{path: [_ | _] = path} ->
+          {client_path, leaf} =
+            ClientPath.resolve(path, ClientPath.root(runtime, resource, action), runtime)
+
+          {%{error | path: client_path}, &ClientPath.name(leaf, &1, runtime)}
+
+        _ ->
+          {error, &format_error_field(&1, resource_struct, action, formatter)}
+      end
 
     error
     |> format_fields_array(format_field)
-    |> format_path_array(formatter)
     |> format_vars_field(format_field)
     |> serialize_error()
   end
@@ -325,25 +341,6 @@ defmodule AshRpc.Errors do
     do: %{error | fields: Enum.map(fields, format_field)}
 
   defp format_fields_array(error, _format_field), do: error
-
-  defp format_path_array(%{path: path} = error, formatter) when is_list(path) do
-    # Path segments use simple formatting (no resource-level mappings)
-    formatted_path =
-      Enum.map(path, fn
-        segment when is_atom(segment) ->
-          AshRpc.FieldFormatter.format_field_name(to_string(segment), formatter)
-
-        segment when is_binary(segment) ->
-          AshRpc.FieldFormatter.format_field_name(segment, formatter)
-
-        other ->
-          other
-      end)
-
-    %{error | path: formatted_path}
-  end
-
-  defp format_path_array(error, _formatter), do: error
 
   defp format_vars_field(%{vars: vars} = error, format_field) when is_map(vars) do
     formatted_vars =

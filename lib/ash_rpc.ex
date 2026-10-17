@@ -36,7 +36,7 @@ defmodule AshRpc do
         end
 
       {:error, reason} ->
-        Pipeline.error_response(runtime, reason, nil)
+        parse_error_response(runtime, reason, params, opts)
     end
   rescue
     e -> rescued_response(profile, e, __STACKTRACE__, opts)
@@ -48,8 +48,11 @@ defmodule AshRpc do
     opts = Keyword.put(opts, :validation_mode?, true)
 
     case Pipeline.parse_request(runtime, Context.from_source(source), params, opts) do
-      {:ok, request} -> request |> Validation.validate() |> Pipeline.format_output(request)
-      {:error, reason} -> Pipeline.error_response(runtime, reason, nil)
+      {:ok, request} ->
+        request |> Validation.validate() |> Pipeline.format_output(request)
+
+      {:error, reason} ->
+        parse_error_response(runtime, reason, params, opts)
     end
   rescue
     e -> rescued_response(profile, e, __STACKTRACE__, opts)
@@ -64,6 +67,10 @@ defmodule AshRpc do
   @spec failure_response(module(), [map()], opts()) :: map()
   def failure_response(profile, errors, opts \\ []) when is_list(errors),
     do: Pipeline.format_response(Runtime.new(profile, opts), %{success: false, errors: errors})
+
+  defp parse_error_response(runtime, reason, params, opts),
+    do:
+      Pipeline.error_response(runtime, reason, Pipeline.parse_error_scope(runtime, params, opts))
 
   defp rescued_response(profile, exception, stacktrace, opts) do
     Logger.error(Exception.format(:error, exception, stacktrace))

@@ -107,7 +107,7 @@ defmodule AshRpc.ErrorBuilder do
   protocol impl (or is the underscored exception name).
   """
 
-  alias AshRpc.{Errors, FieldFormatter}
+  alias AshRpc.{ClientPath, Errors, FieldFormatter}
 
   @doc """
   Builds a detailed error response from various error types.
@@ -121,7 +121,10 @@ defmodule AshRpc.ErrorBuilder do
 
   `scope` is `nil` or `%{domain:, resource:, action:, context:}`; Ash errors are
   routed through `AshRpc.Errors.to_errors/6` with it, so the profile's domain
-  error handling applies to execution errors too.
+  error handling applies to execution errors too. An optional `selection:` key
+  is where field-selection paths start (the entrypoint's resource, or a generic
+  action's return type); their `path` and dotted field name then take the
+  decorated client names on the way. Without it atoms use the formatter.
   """
   @spec build_error_response(AshRpc.Runtime.t(), term(), map() | nil) :: map() | list(map())
   def build_error_response(runtime, error, scope \\ nil) do
@@ -129,6 +132,7 @@ defmodule AshRpc.ErrorBuilder do
       runtime: runtime,
       scope: scope,
       formatter: runtime.output_formatter,
+      selection: (scope && scope[:selection]) || :none,
       hint: Errors.stale_client_hint(runtime)
     }
 
@@ -157,15 +161,21 @@ defmodule AshRpc.ErrorBuilder do
   end
 
   # The `vars.field` / `fields` / `path` triple shared by field-level errors.
+  # The path is a field-selection path: it and the trailing field are named
+  # through the decorated manifest from the selection root.
   defp field_opts(path, field, ctx, extra_vars \\ %{}) do
-    full_field_path = build_complete_field_path(path, field, ctx.formatter)
+    {client_path, leaf} = ClientPath.resolve(path, ctx.selection, ctx.runtime)
+    full_field_path = Enum.join(client_path ++ [ClientPath.name(leaf, field, ctx.runtime)], ".")
 
     [
       vars: Map.put(extra_vars, :field, full_field_path),
-      path: format_path(path, ctx.formatter),
+      path: client_path,
       fields: [full_field_path]
     ]
   end
+
+  defp selection_path(path, ctx),
+    do: path |> ClientPath.resolve(ctx.selection, ctx.runtime) |> elem(0)
 
   # Action discovery errors
   defp build({:action_not_found, action_name}, ctx) do
@@ -265,7 +275,7 @@ defmodule AshRpc.ErrorBuilder do
       "invalid_field_format",
       "Invalid field specification format",
       "Invalid field format",
-      path: format_path(path, ctx.formatter),
+      path: selection_path(path, ctx),
       details: %{
         field_spec: inspect(field_spec),
         suggestion: "Check the documentation for valid field specification formats"
@@ -342,7 +352,7 @@ defmodule AshRpc.ErrorBuilder do
       "Cannot select fields from primitive type %{return_type}",
       "Invalid field selection",
       vars: %{return_type: format_field_type(return_type)},
-      path: format_path(path, ctx.formatter),
+      path: selection_path(path, ctx),
       details: %{
         requested_fields: requested_fields,
         suggestion: "Remove the field selection for this primitive type"
@@ -906,6 +916,7 @@ defmodule AshRpc.ErrorBuilder do
   defp format_field_type({:ash_type, type, _}), do: inspect(type)
   defp format_field_type(other), do: inspect(other)
 
+  # Fixed-vocabulary paths (`getBy`, `identity`, `metadataFields`, `page`).
   defp format_path(path, formatter) when is_list(path) do
     Enum.map(path, &FieldFormatter.format_field_name(to_string(&1), formatter))
   end
@@ -917,13 +928,4 @@ defmodule AshRpc.ErrorBuilder do
 
   defp path_segment(index, _formatter) when is_integer(index), do: index
   defp path_segment(name, formatter), do: client_name(name, formatter)
-
-  defp build_complete_field_path(path, field_name, formatter) when is_list(path) do
-    formatted_field = client_name(field_name, formatter)
-
-    case format_path(path, formatter) do
-      [] -> formatted_field
-      formatted_path -> Enum.join(formatted_path ++ [formatted_field], ".")
-    end
-  end
 end

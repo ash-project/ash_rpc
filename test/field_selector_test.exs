@@ -478,4 +478,82 @@ defmodule AshRpc.FieldSelectorTest do
                })
     end
   end
+
+  describe "field-selection error paths use decorated client names" do
+    defmodule ContainerOverrideSource do
+      @moduledoc false
+      # Overrides on fields that hold nested data, so a selection path runs
+      # through them.
+      @behaviour AshRpc.MappingSource
+      alias AshRpc.Test.MappingSource
+
+      @impl true
+      defdelegate output_formatter, to: MappingSource
+      @impl true
+      defdelegate exposed_resource?(resource), to: MappingSource
+
+      @impl true
+      def field_names(AshRpc.Test.Intake),
+        do: Map.put(MappingSource.field_names(AshRpc.Test.Intake), :section, "intakeSection")
+
+      def field_names(AshRpc.Test.IntakeSection),
+        do:
+          Map.put(
+            MappingSource.field_names(AshRpc.Test.IntakeSection),
+            :profile,
+            "sectionProfile"
+          )
+
+      def field_names(resource), do: MappingSource.field_names(resource)
+
+      @impl true
+      defdelegate argument_names(resource, action), to: MappingSource
+      @impl true
+      defdelegate type_field_names(type), to: MappingSource
+      @impl true
+      defdelegate entrypoint(entrypoint), to: MappingSource
+    end
+
+    setup do
+      %{manifest: AshRpc.Test.ManifestBuilder.build(mapping_source: ContainerOverrideSource)}
+    end
+
+    defp search_error(fields, opts \\ []) do
+      params = %{"action" => "search_intakes", "input" => %{"query" => "x"}, "fields" => fields}
+      single_error(AshRpc.run_action(@profile, %AshRpc.Context{}, params, opts))
+    end
+
+    test "path segments and the dotted field use overrides on the way", %{manifest: m} do
+      error =
+        search_error(["id", %{"intakeSection" => [%{"sectionProfile" => ["nope"]}]}], manifest: m)
+
+      assert error["type"] == "unknown_field"
+      assert error["path"] == ["intakeSection", "sectionProfile"]
+      assert error["fields"] == ["intakeSection.sectionProfile.nope"]
+      assert error["vars"]["field"] == "intakeSection.sectionProfile.nope"
+    end
+
+    test "an atom field is named against the node the path ends at", %{manifest: m} do
+      error =
+        search_error(
+          ["id", %{"intakeSection" => [%{"sectionProfile" => [%{"isPublic" => ["x"]}]}]}],
+          manifest: m
+        )
+
+      assert error["path"] == ["intakeSection", "sectionProfile"]
+      assert error["fields"] == ["intakeSection.sectionProfile.isPublic"]
+    end
+
+    test "with the default manifest, a nested override is the field's client name" do
+      error = search_error(["id", %{"profile" => [%{"isPublic" => ["x"]}]}])
+      assert error["path"] == ["profile"]
+      assert error["fields"] == ["profile.isPublic"]
+    end
+
+    test "a generic action names fields against its decorated return type" do
+      error = single_error(run("catalog_stats_list", [%{"isFeatured" => ["x"]}]))
+      assert error["type"] == "invalid_field_selection"
+      assert error["path"] == ["isFeatured"]
+    end
+  end
 end

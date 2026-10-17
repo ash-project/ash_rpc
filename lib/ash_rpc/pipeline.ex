@@ -33,6 +33,7 @@ defmodule AshRpc.Pipeline do
 
   alias AshRpc.{
     ClientNames,
+    ClientPath,
     FilterInput,
     InputFormatter,
     Request,
@@ -270,8 +271,39 @@ defmodule AshRpc.Pipeline do
       domain: r.entrypoint.domain,
       resource: r.resource,
       action: r.action.name,
-      context: r.context
+      context: r.context,
+      selection: ClientPath.selection_root(r.runtime, r.resource, r.action)
     }
+
+  @doc false
+  # For a parse_request failure: only where field-selection paths start, so
+  # ErrorBuilder can name them; nil before the entrypoint resolves. Ash errors
+  # keep the unscoped handling they get today (no domain).
+  def parse_error_scope(runtime, params, opts) when is_map(params) do
+    case parse_error_entrypoint(runtime, params, opts) do
+      %AshRpc.Entrypoint{resource: resource, action: action} ->
+        action_struct = Map.get(runtime.action_lookup, {resource, action})
+        %{selection: ClientPath.selection_root(runtime, resource, action_struct)}
+
+      _ ->
+        nil
+    end
+  end
+
+  def parse_error_scope(_runtime, _params, _opts), do: nil
+
+  defp parse_error_entrypoint(runtime, params, opts) do
+    case Keyword.fetch(opts, :entrypoint) do
+      {:ok, %AshRpc.Entrypoint{} = entrypoint} ->
+        entrypoint
+
+      _ ->
+        case params |> resolve_param_keys(runtime) |> Map.get(:action) do
+          name when is_binary(name) -> Map.get(runtime.entrypoints, name)
+          _ -> nil
+        end
+    end
+  end
 
   @doc """
   Stage 4: Format output for client consumption with type awareness.

@@ -442,4 +442,88 @@ defmodule AshRpc.ErrorsTest do
              }
     end
   end
+
+  describe "path segments" do
+    @describetag :capture_log
+
+    defp path_of(error, resource, action) do
+      rt = Runtime.new(AshRpc.Test.Profile)
+      hd(Errors.to_errors(rt, error, AshRpc.Test.Domain, resource, action)).path
+    end
+
+    defp nested(path), do: NoImplError.exception(path: path)
+
+    test "resource and nested type overrides are used as written" do
+      assert path_of(nested([:is_active?]), AshRpc.Test.Intake, :create) == ["isActive"]
+
+      assert path_of(nested([:stats, :is_complete?]), AshRpc.Test.Intake, :create) ==
+               ["stats", "isComplete"]
+
+      assert path_of(nested([:history, 1, :is_public?]), AshRpc.Test.Intake, :create) ==
+               ["history", 1, "isPublic"]
+
+      assert path_of(nested([:status, :active, :is_final?]), AshRpc.Test.Intake, :create) ==
+               ["status", "active", "isFinal"]
+
+      assert path_of(nested([:deep, :inner, :is_cached?]), AshRpc.Test.Intake, :create) ==
+               ["deep", "inner", "isCached"]
+    end
+
+    test "an action argument uses its argument override" do
+      assert path_of(nested([:include_deleted?]), AshRpc.Test.Intake, :search) ==
+               ["includeDeleted"]
+
+      assert path_of(nested([:input_data, :is_valid?]), AshRpc.Test.Intake, :process_data) ==
+               ["inputData", "isValid"]
+    end
+
+    test "string segments are reported as sent and stop the walk" do
+      assert path_of(nested([:settings, "theme_name", :is_x?]), AshRpc.Test.Intake, :create) ==
+               ["settings", "theme_name", "isX?"]
+    end
+
+    test "outside decorated data the formatter applies" do
+      assert path_of(nested([:post, :title]), nil, nil) == ["post", "title"]
+      assert path_of(nested([:unknown_thing]), AshRpc.Test.Intake, :create) == ["unknownThing"]
+      assert path_of(nested([:is_active?]), nil, nil) == ["isActive?"]
+    end
+
+    test "fields and vars.field are named against the node at the end of the path" do
+      error =
+        Ash.Error.Changes.InvalidAttribute.exception(
+          field: :is_complete?,
+          path: [:stats],
+          message: "is invalid"
+        )
+
+      [e] =
+        Errors.to_errors(
+          Runtime.new(AshRpc.Test.Profile),
+          error,
+          AshRpc.Test.Domain,
+          AshRpc.Test.Intake,
+          :create
+        )
+
+      assert e.path == ["stats"]
+      assert e.fields == ["isComplete"]
+      assert e.vars.field == "isComplete"
+    end
+
+    test "with an empty path, fields are named against the root" do
+      error = Ash.Error.Changes.InvalidAttribute.exception(field: :is_active?, message: "bad")
+
+      [e] =
+        Errors.to_errors(
+          Runtime.new(AshRpc.Test.Profile),
+          error,
+          AshRpc.Test.Domain,
+          AshRpc.Test.Intake,
+          :create
+        )
+
+      assert e.path == []
+      assert e.fields == ["isActive"]
+    end
+  end
 end
