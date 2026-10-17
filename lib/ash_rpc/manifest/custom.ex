@@ -103,6 +103,18 @@ defmodule AshRpc.Manifest.Custom do
 
   def type_client_member_names(_), do: %{}
 
+  @doc "Forward client names (`%{field => client}`) of a decorated type; `%{}` when undecorated."
+  @spec type_field_names(Manifest.Type.t() | nil) :: %{atom() => String.t()}
+  def type_field_names(%Manifest.Type{custom: %{ash_rpc: %{field_names: m}}}), do: m
+  def type_field_names(_), do: %{}
+
+  @doc "Forward client names (`%{member => client}`) of a decorated union; `%{}` when undecorated."
+  @spec type_member_names(Manifest.Type.t() | nil) :: %{atom() => String.t()}
+  def type_member_names(%Manifest.Type{} = type),
+    do: type |> type_client_member_names() |> invert()
+
+  def type_member_names(_), do: %{}
+
   def type_field_name_overrides(%Manifest.Type{custom: %{ash_rpc: %{field_name_overrides: m}}}),
     do: m
 
@@ -133,4 +145,20 @@ defmodule AshRpc.Manifest.Custom do
     do: m
 
   def action_input_field_types(_), do: nil
+
+  # Entrypoints
+  @doc """
+  Forward client names (`%{field => client}`) of an entrypoint's exposed metadata
+  fields; `%{}` before decoration.
+  """
+  @spec entrypoint_metadata_field_names(AshRpc.Entrypoint.t() | nil) :: %{atom() => String.t()}
+  def entrypoint_metadata_field_names(%AshRpc.Entrypoint{client_metadata_field_names: m})
+      when is_map(m),
+      do: invert(m)
+
+  def entrypoint_metadata_field_names(_), do: %{}
+
+  # Decoration raises NameCollisionError on duplicate client names, so every
+  # stored reverse map is a bijection.
+  defp invert(map), do: Map.new(map, fn {k, v} -> {v, k} end)
 end
