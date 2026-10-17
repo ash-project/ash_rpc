@@ -112,6 +112,30 @@ returns `%{"scoredStats" => %{"wordCount1" => 5}}`
 
 See [pipeline.md](pipeline.md) for the stages themselves.
 
+### `format_input/3`: one typed value, errors returned
+
+```elixir
+AshRpc.ValueFormatter.format_input(value, %Ash.Info.Manifest.Type{} = type, runtime)
+# => {:ok, formatted} | {:error, reasons}
+```
+
+For a consumer formatting a single typed value outside an action input (for
+example an extension's own endpoint argument) with the same strict rules RPC
+applies to `params["input"]`. The pipeline doesn't call it, and `format/5` is
+unchanged.
+
+- Client names resolve by exact lookup, and every key of a node with decorated
+  names must be one of them. Undecorated nodes and unconstrained maps keep their
+  keys as sent.
+- `reasons` is every `{:unknown_input, key, path}` miss, in input order, with
+  `path` relative to `value`: `[]` for a key directly in it, `["history", 1]`
+  deeper. Unlike `InputFormatter`, there is no top-level action key to prepend.
+- A malformed union value returns its `:invalid_union_input` reason (for example
+  `{:error, [{:invalid_union_input, :not_a_map}]}`) instead of throwing. The
+  function never throws; `{:unknown_nested_input, …}` stays internal.
+
+Covered by `test/value_formatter_test.exs` `describe "format_input/3"`.
+
 ## Input formatting: `AshRpc.InputFormatter`
 
 ```elixir

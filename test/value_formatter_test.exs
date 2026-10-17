@@ -75,4 +75,126 @@ defmodule AshRpc.ValueFormatterTest do
       assert ValueFormatter.format(value, palette, [], :input, rt) == value
     end
   end
+
+  describe "format_input/3" do
+    alias Ash.Info.Manifest.Generator.TypeResolver
+    alias Ash.Info.Manifest.Type
+
+    setup do
+      rt = Runtime.from_manifest(AshRpc.Test.ManifestBuilder.manifest())
+
+      field_type = fn resource, field ->
+        Ash.Info.Manifest.get_field(rt.resource_lookup, resource, field).type
+      end
+
+      %{
+        rt: rt,
+        field_type: field_type,
+        intake: %Type{kind: :resource, resource_module: AshRpc.Test.Intake},
+        widget: %Type{kind: :resource, resource_module: AshRpc.Test.Widget}
+      }
+    end
+
+    test "formats a decorated typed map", %{rt: rt, field_type: ft} do
+      assert ValueFormatter.format_input(
+               %{"notificationEnabled" => true, "themeName" => "dark"},
+               ft.(AshRpc.Test.Intake, :settings),
+               rt
+             ) == {:ok, %{notification_enabled: true, theme_name: "dark"}}
+    end
+
+    test "formats an embedded resource and an array of them", %{rt: rt, field_type: ft} do
+      assert ValueFormatter.format_input(
+               %{"displayName" => "Ada", "bioText1" => "b"},
+               ft.(AshRpc.Test.Intake, :profile),
+               rt
+             ) == {:ok, %{display_name: "Ada", bio_text_1: "b"}}
+
+      assert ValueFormatter.format_input(
+               [%{"displayName" => "one"}, %{"isPublic" => true}],
+               ft.(AshRpc.Test.Intake, :history),
+               rt
+             ) == {:ok, [%{display_name: "one"}, %{is_public?: true}]}
+    end
+
+    test "formats a union member under its client key", %{rt: rt, widget: widget} do
+      assert {:ok, %{attachments: [%{filename: "a", mime_type: "x"}]}} =
+               ValueFormatter.format_input(
+                 %{"attachments" => [%{"file" => %{"filename" => "a", "mimeType" => "x"}}]},
+                 widget,
+                 rt
+               )
+    end
+
+    test "a miss directly in the value has an empty path", %{rt: rt, field_type: ft} do
+      assert ValueFormatter.format_input(
+               %{"theme_name" => "dark"},
+               ft.(AshRpc.Test.Intake, :settings),
+               rt
+             ) == {:error, [{:unknown_input, "theme_name", []}]}
+    end
+
+    test "deeper misses carry paths relative to the value", %{
+      rt: rt,
+      intake: intake,
+      widget: widget
+    } do
+      assert ValueFormatter.format_input(
+               %{"history" => [%{"displayName" => "one"}, %{"is_public" => true}]},
+               intake,
+               rt
+             ) == {:error, [{:unknown_input, "is_public", ["history", 1]}]}
+
+      assert ValueFormatter.format_input(
+               %{"attachments" => [%{"file" => %{"filename" => "a", "mime_type" => "x"}}]},
+               widget,
+               rt
+             ) == {:error, [{:unknown_input, "mime_type", ["attachments", 0, "file"]}]}
+    end
+
+    test "every miss is returned together, in input order", %{rt: rt, intake: intake} do
+      assert ValueFormatter.format_input(
+               %{
+                 "bogus" => 1,
+                 "profile" => %{"display_name" => "Ada"},
+                 "settings" => %{"theme_name" => "dark"}
+               },
+               intake,
+               rt
+             ) ==
+               {:error,
+                [
+                  {:unknown_input, "bogus", []},
+                  {:unknown_input, "display_name", ["profile"]},
+                  {:unknown_input, "theme_name", ["settings"]}
+                ]}
+    end
+
+    test "undecorated nodes and unconstrained maps pass through", %{rt: rt} do
+      value = %{"fooBar" => 1, "foo_bar" => 2}
+
+      assert ValueFormatter.format_input(
+               value,
+               TypeResolver.resolve(:map, fields: [foo_bar: [type: :integer]]),
+               rt
+             ) == {:ok, value}
+
+      loose = %{"anyKey" => %{"nested_key" => 1}}
+
+      assert ValueFormatter.format_input(loose, TypeResolver.resolve(:map, []), rt) ==
+               {:ok, loose}
+    end
+
+    test "a malformed union value is an error, not a throw", %{rt: rt, widget: widget} do
+      assert ValueFormatter.format_input(%{"attachments" => ["not a map"]}, widget, rt) ==
+               {:error, [{:invalid_union_input, :not_a_map}]}
+
+      assert {:error, [{:invalid_union_input, :multiple_member_keys, _, _}]} =
+               ValueFormatter.format_input(
+                 %{"attachments" => [%{"file" => %{}, "image" => %{}}]},
+                 widget,
+                 rt
+               )
+    end
+  end
 end

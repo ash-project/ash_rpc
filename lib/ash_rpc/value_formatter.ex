@@ -52,6 +52,36 @@ defmodule AshRpc.ValueFormatter do
   def format(value, type, constraints, direction, rt) when direction in [:input, :output],
     do: do_format(value, type, constraints, rt.output_formatter, direction, rt)
 
+  @typedoc "Why `format_input/3` rejected a value."
+  @type input_error ::
+          {:unknown_input, String.t(), [String.t() | non_neg_integer()]}
+          | {:invalid_union_input, term()}
+          | {:invalid_union_input, term(), term()}
+          | {:invalid_union_input, term(), term(), term()}
+
+  @doc """
+  Formats one typed value as client input, with the rules RPC applies to an
+  action input. Client names resolve by exact lookup, and every key of a node
+  with decorated names must be one of them. Nodes without decorated names, and
+  unconstrained maps, keep their keys as sent.
+
+  Returns `{:ok, formatted}` or `{:error, reasons}`. The reasons are every
+  `{:unknown_input, key, path}` miss in input order (`path` is relative to
+  `value`: `[]` for a key directly in it), or the `:invalid_union_input`
+  reason of a malformed union value. Never throws.
+  """
+  @spec format_input(term(), Type.t(), AshRpc.Runtime.t()) ::
+          {:ok, term()} | {:error, [input_error()]}
+  def format_input(value, %Type{} = type, rt) do
+    {:ok, do_format(value, type, [], rt.output_formatter, :input, rt)}
+  catch
+    :throw, {:unknown_nested_input, reasons} ->
+      {:error, reasons}
+
+    :throw, reason when is_tuple(reason) and elem(reason, 0) == :invalid_union_input ->
+      {:error, [reason]}
+  end
+
   defp do_format(nil, _type, _constraints, _formatter, _direction, _rt), do: nil
   defp do_format(value, nil, _constraints, _formatter, _direction, _rt), do: value
 
