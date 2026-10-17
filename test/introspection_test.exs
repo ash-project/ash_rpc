@@ -11,7 +11,9 @@ defmodule AshRpc.IntrospectionTest do
     manifest =
       AshRpc.Test.ManifestBuilder.generate!([
         {AshRpc.Test.Post, :read},
-        {AshRpc.Test.Post, :word_count}
+        {AshRpc.Test.Post, :word_count},
+        {AshRpc.Test.Catalog, :struct_summary},
+        {AshRpc.Test.Catalog, :struct_summaries}
       ])
 
     %{manifest: manifest, actions: Ash.Info.Manifest.action_lookup(manifest)}
@@ -29,6 +31,27 @@ defmodule AshRpc.IntrospectionTest do
 
     assert Introspection.compute_return_classification(action, Ash.Info.Manifest.type_lookup(m)) ==
              {:error, :not_field_selectable_type}
+  end
+
+  test "a :struct with fields and no instance_of classifies as a typed map",
+       %{manifest: m, actions: actions} do
+    lookup = Ash.Info.Manifest.type_lookup(m)
+
+    assert {:ok, :typed_map, fields} =
+             Introspection.compute_return_classification(
+               actions[{AshRpc.Test.Catalog, :struct_summary}],
+               lookup
+             )
+
+    assert Enum.map(fields, & &1.name) == [:title, :word_count, :published]
+
+    assert {:ok, :array_of_typed_map, item_fields} =
+             Introspection.compute_return_classification(
+               actions[{AshRpc.Test.Catalog, :struct_summaries}],
+               lookup
+             )
+
+    assert Enum.map(item_fields, & &1.name) == [:title, :word_count]
   end
 
   test "metadata helpers" do

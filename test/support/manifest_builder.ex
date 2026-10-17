@@ -126,6 +126,8 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"catalog_assign", AshRpc.Test.Catalog, :assign},
     {"catalog_assign_many", AshRpc.Test.Catalog, :assign_many},
     {"catalog_redeem_voucher", AshRpc.Test.Catalog, :redeem_voucher},
+    {"catalog_struct_summary", AshRpc.Test.Catalog, :struct_summary},
+    {"catalog_struct_summaries", AshRpc.Test.Catalog, :struct_summaries},
     # Input and overrides
     {"create_intake", AshRpc.Test.Intake, :create},
     {"update_intake", AshRpc.Test.Intake, :update},

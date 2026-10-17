@@ -148,6 +148,30 @@ defmodule AshRpc.Test.Catalog do
       end
     end
 
+    # A `:struct` with field constraints and no `instance_of`: field-selectable
+    # like a typed map.
+    action :struct_summary, :struct do
+      constraints fields: [
+                    title: [type: :string],
+                    word_count: [type: :integer],
+                    published: [type: :boolean]
+                  ]
+
+      run fn _input, _context ->
+        {:ok, %{title: "Alpha", word_count: 3, published: true}}
+      end
+    end
+
+    action :struct_summaries, {:array, :struct} do
+      constraints items: [
+                    fields: [title: [type: :string], word_count: [type: :integer]]
+                  ]
+
+      run fn _input, _context ->
+        {:ok, [%{title: "Alpha", word_count: 3}, %{title: "Beta", word_count: 7}]}
+      end
+    end
+
     action :redeem_voucher, :map do
       constraints fields: [voucher_code: [type: :string], post_id: [type: :uuid]]
       argument :voucher, :struct, allow_nil?: false, constraints: [instance_of: Voucher]

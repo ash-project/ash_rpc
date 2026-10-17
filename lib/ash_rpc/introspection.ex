@@ -111,7 +111,7 @@ defmodule AshRpc.Introspection do
   Returns:
   - `{:ok, :resource, resource_module}` - Single resource
   - `{:ok, :array_of_resource, resource_module}` - Array of resources
-  - `{:ok, :typed_map, fields}` - Typed map with constraints
+  - `{:ok, :typed_map, fields}` - Typed map with constraints, or a `:struct` with `fields` and no `instance_of`
   - `{:ok, :array_of_typed_map, fields}` - Array of typed maps
   - `{:ok, :typed_struct, {module, fields}}` - Type with field constraints (TypedStruct or similar)
   - `{:ok, :array_of_typed_struct, {module, fields}}` - Array of types with field constraints
@@ -205,6 +205,16 @@ defmodule AshRpc.Introspection do
        )
        when is_list(fields) and fields != [] and not is_nil(inst) do
     {:typed_struct, {inst, fields}}
+  end
+
+  # Without `instance_of` there is no struct module behind the fields, so the
+  # value is selected like a typed map (matching the field selector).
+  defp classify_return_type(
+         %Ash.Info.Manifest.Type{kind: :struct, fields: fields},
+         _type_lookup
+       )
+       when is_list(fields) and fields != [] do
+    {:typed_map, fields}
   end
 
   defp classify_return_type(

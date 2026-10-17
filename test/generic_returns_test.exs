@@ -31,6 +31,23 @@ defmodule AshRpc.GenericReturnsTest do
     %{author: author, alpha: alpha, beta: beta}
   end
 
+  describe ":struct with field constraints and no instance_of" do
+    test "returns only the selected fields" do
+      assert run("catalog_struct_summary", ["title", "published"]) |> data!() ==
+               %{"title" => "Alpha", "published" => true}
+    end
+
+    test "each array item carries only the selected fields" do
+      assert run("catalog_struct_summaries", ["wordCount"]) |> data!() ==
+               [%{"wordCount" => 3}, %{"wordCount" => 7}]
+    end
+
+    test "an unknown field is unknown_field" do
+      assert %{"success" => false, "errors" => [%{"type" => "unknown_field"}]} =
+               run("catalog_struct_summary", ["title", "missing"])
+    end
+  end
+
   describe "{:array, :struct} of a resource" do
     test "each item carries only the selected fields" do
       %{alpha: alpha, beta: beta} = seed!()
