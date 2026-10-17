@@ -25,6 +25,9 @@ defmodule AshRpc.ErrorBuilder do
   - `unknown_input` *(hint)*: an `input` key is not one of the action's
     client input names, or a nested key is not a client name of its type
     (`path` locates it). One error per key.
+  - `unknown_metadata_fields` *(hint)*: a `metadataFields` entry is not the
+    client name of a metadata field the entrypoint exposes. One error lists
+    every miss in `fields` and the allowed names in `details.allowedFields`.
 
   Field selection:
 
@@ -485,6 +488,26 @@ defmodule AshRpc.ErrorBuilder do
       details: %{
         allowed_fields: allowed_fields,
         suggestion: "Only provide the allowed getBy fields: %{allowed_fields}"
+      }
+    )
+  end
+
+  # Field names are the client's as sent; allowed names are client names
+  defp build({:unknown_metadata_fields, unknown_fields, allowed_fields}, ctx) do
+    drift(
+      ctx,
+      "unknown_metadata_fields",
+      "Unknown metadata fields: %{fields}. Allowed fields: %{allowed_fields}",
+      "Unknown metadata fields",
+      vars: %{
+        fields: Enum.join(unknown_fields, ", "),
+        allowed_fields: Enum.join(allowed_fields, ", ")
+      },
+      path: format_path([:metadata_fields], ctx.formatter),
+      fields: unknown_fields,
+      details: %{
+        allowed_fields: allowed_fields,
+        suggestion: "Only request the allowed metadata fields: %{allowed_fields}"
       }
     )
   end

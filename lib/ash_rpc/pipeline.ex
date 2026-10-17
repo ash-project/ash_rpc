@@ -99,12 +99,11 @@ defmodule AshRpc.Pipeline do
            ),
          {:ok, input} <- parse_action_input(normalized_params, action, resource, runtime),
          {:ok, get_by} <- parse_get_by(normalized_params, entrypoint, resource, runtime),
-         {:ok, pagination} <- parse_pagination(normalized_params, runtime) do
+         {:ok, pagination} <- parse_pagination(normalized_params, runtime),
+         {:ok, show_metadata} <-
+           resolve_show_metadata(normalized_params[:metadata_fields], entrypoint, action, runtime) do
       {filter, filter_errors} = FilterInput.parse(runtime, resource, normalized_params[:filter])
       {sort, sort_errors} = FilterInput.parse_sort(runtime, resource, normalized_params[:sort])
-
-      show_metadata =
-        resolve_show_metadata(normalized_params[:metadata_fields], entrypoint, action, runtime)
 
       request =
         %Request{
@@ -330,26 +329,38 @@ defmodule AshRpc.Pipeline do
     {resolved, Enum.reverse(misses)}
   end
 
-  defp resolve_show_metadata(requested, entrypoint, action, runtime) do
+  # Requested names resolve by exact lookup among the exposed fields' client
+  # names. A miss (another casing, a field the entrypoint doesn't expose, or
+  # any name when nothing is exposed) is an error listing the allowed names.
+  defp resolve_show_metadata(requested, entrypoint, _action, runtime)
+       when is_list(requested) and requested != [] do
+    exposed = entrypoint.exposed_metadata_fields
+    names = client_metadata_names(entrypoint, runtime)
+
+    {fields, unknown} =
+      Enum.reduce(requested, {[], []}, fn entry, {fields, unknown} ->
+        case metadata_field(entry, names) do
+          {:ok, field} -> {[field | fields], unknown}
+          :error -> {fields, [entry | unknown]}
+        end
+      end)
+
+    case unknown do
+      [] ->
+        {:ok, fields |> Enum.reverse() |> Enum.filter(&(&1 in exposed))}
+
+      _ ->
+        allowed = for field <- exposed, {client, ^field} <- names, do: client
+        {:error, {:unknown_metadata_fields, Enum.reverse(unknown), allowed}}
+    end
+  end
+
+  defp resolve_show_metadata(_requested, entrypoint, action, _runtime) do
     exposed = entrypoint.exposed_metadata_fields
 
-    cond do
-      not Introspection.metadata_enabled?(exposed) ->
-        []
-
-      is_list(requested) and requested != [] ->
-        names = client_metadata_names(entrypoint, runtime)
-
-        requested
-        |> Enum.flat_map(&metadata_field(&1, names))
-        |> Enum.filter(&(&1 in exposed))
-
-      action.type in [:create, :update, :destroy] ->
-        exposed
-
-      true ->
-        []
-    end
+    if Introspection.metadata_enabled?(exposed) and action.type in [:create, :update, :destroy],
+      do: {:ok, exposed},
+      else: {:ok, []}
   end
 
   # Wire entrypoints carry the decorated reverse map. An entrypoint passed with
@@ -366,14 +377,10 @@ defmodule AshRpc.Pipeline do
     end)
   end
 
-  defp metadata_field(field, _names) when is_atom(field), do: [field]
-
-  defp metadata_field(field, names) do
-    case Map.fetch(names, field) do
-      {:ok, name} -> [name]
-      :error -> []
-    end
-  end
+  # Atom names come from server-side callers that already hold internal names
+  defp metadata_field(field, _names) when is_atom(field), do: {:ok, field}
+  defp metadata_field(field, names) when is_binary(field), do: Map.fetch(names, field)
+  defp metadata_field(_field, _names), do: :error
 
   defp parse_action_input(params, action, resource, runtime) do
     raw_input = Map.get(params, :input, %{})

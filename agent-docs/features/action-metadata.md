@@ -55,14 +55,16 @@ returns from `entrypoint/1` (see [decoration](decoration.md)).
 `parse_request` resolves the param into `request.show_metadata`
 (`resolve_show_metadata/4` in `pipeline.ex`):
 
-- If the entrypoint exposes nothing, the result is `[]`, whatever was requested.
 - If the param is a non-empty list, each client name is looked up in the
   entrypoint's `client_metadata_field_names` (the decorator's reverse map over
   every exposed field, overrides included; built on the fly for an entrypoint
-  passed with `entrypoint:`). Names that miss, internal names such as
-  `"meta_1"` included, or that aren't in `exposed_metadata_fields`, are dropped
-  without an error (`test/action_metadata_test.exs` "internal names are not
-  client names and are dropped").
+  passed with `entrypoint:`). Any miss fails the request with one
+  `unknown_metadata_fields` error: an internal name such as `"meta_1"`, another
+  casing, a field the entrypoint doesn't expose, or any name when it exposes
+  nothing (including actions without metadata). `fields` lists the misses in
+  request order and `details.allowedFields` the exposed client names
+  (`test/action_metadata_test.exs` "internal names are not client names and are
+  rejected").
 - If the param is absent (or `[]`): read actions get `[]`, and create, update
   and destroy actions get every exposed field.
 
@@ -88,9 +90,11 @@ AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
 | Requested fields are merged into each record | "requested metadata fields are merged into each record" |
 | Only the requested subset is merged | "only the requested subset of exposed fields is merged" |
 | No `metadataFields` param, no metadata | "no metadataFields param merges no metadata" |
-| Requested but unexposed fields are dropped silently | "requested fields that are not exposed are silently dropped" |
-| An entrypoint exposing nothing drops every requested field | "an entrypoint exposing no metadata drops every requested field" |
-| An action without metadata ignores the param, and there's no `metadata` key | "an action without metadata ignores metadataFields" |
+| A non-client name is rejected | "a non-client metadata name is rejected" |
+| Requested but unexposed fields are rejected | "requested fields that are not exposed are rejected" |
+| An entrypoint exposing nothing rejects every requested field | "an entrypoint exposing no metadata rejects every requested field" |
+| An action without metadata rejects the param | "an action without metadata rejects metadataFields" |
+| An empty list is not an error | "an empty metadataFields list is not an error" |
 
 ## On mutations
 

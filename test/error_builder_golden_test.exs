@@ -865,6 +865,25 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
       ],
       "success" => false
     },
+    "unknown_metadata_fields" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "allowedFields" => ["totalScore", "isCached"],
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
+            "suggestion" => "Only request the allowed metadata fields: %{allowedFields}"
+          },
+          "fields" => ["isCachd"],
+          "message" => "Unknown metadata fields: %{fields}. Allowed fields: %{allowedFields}",
+          "path" => ["metadataFields"],
+          "shortMessage" => "Unknown metadata fields",
+          "type" => "unknown_metadata_fields",
+          "vars" => %{"allowedFields" => "totalScore, isCached", "fields" => "isCachd"}
+        }
+      ],
+      "success" => false
+    },
     "query_opts_on_non_relationship" => %{
       "errors" => [
         %{

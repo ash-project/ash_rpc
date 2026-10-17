@@ -33,6 +33,17 @@ defmodule AshRpc.ActionMetadataTest do
     record
   end
 
+  defp metadata_error(action, metadata_fields) do
+    assert %{"success" => false, "errors" => [error]} =
+             run(%{
+               "action" => action,
+               "fields" => ["id", "title"],
+               "metadataFields" => metadata_fields
+             })
+
+    error
+  end
+
   describe "read actions" do
     test "requested metadata fields are merged into each record" do
       first = create_post("First")
@@ -80,17 +91,24 @@ defmodule AshRpc.ActionMetadataTest do
       assert record == %{"id" => post.id, "title" => "None requested"}
     end
 
-    test "a non-client metadata name is dropped" do
-      post = create_post("Strict")
-      record = read_one("read_posts_with_metadata", post, ["total_score", "meta1"])
-      assert record == %{"id" => post.id, "title" => "Strict", "meta1" => "m1"}
+    test "a non-client metadata name is rejected" do
+      create_post("Strict")
+
+      assert %{"type" => "unknown_metadata_fields", "fields" => ["total_score"]} =
+               error =
+               metadata_error("read_posts_with_metadata", ["total_score", "meta1"])
+
+      assert error["path"] == ["metadataFields"]
+
+      assert error["details"]["allowedFields"] ==
+               ["totalScore", "meta1", "isCached", "breakdown", "extra"]
     end
 
-    test "requested fields that are not exposed are silently dropped" do
-      post = create_post("Some exposed")
+    test "requested fields that are not exposed are rejected" do
+      create_post("Some exposed")
 
-      record =
-        read_one("read_posts_with_some_metadata", post, [
+      error =
+        metadata_error("read_posts_with_some_metadata", [
           "totalScore",
           "meta1",
           "isCached",
@@ -98,36 +116,33 @@ defmodule AshRpc.ActionMetadataTest do
           "extra"
         ])
 
-      assert record == %{
+      assert error["fields"] == ["isCached", "breakdown", "extra"]
+      assert error["details"]["allowedFields"] == ["totalScore", "meta1"]
+    end
+
+    test "an entrypoint exposing no metadata rejects every requested field" do
+      create_post("None exposed")
+
+      error =
+        metadata_error("read_posts_without_metadata", ["totalScore", "meta1", "isCached"])
+
+      assert error["fields"] == ["totalScore", "meta1", "isCached"]
+      assert error["details"]["allowedFields"] == []
+    end
+
+    test "an action without metadata rejects metadataFields" do
+      create_post("Plain")
+
+      assert %{"fields" => ["totalScore"]} = metadata_error("list_posts", ["totalScore"])
+    end
+
+    test "an empty metadataFields list is not an error" do
+      post = create_post("Empty")
+
+      assert read_one("read_posts_with_metadata", post, []) == %{
                "id" => post.id,
-               "title" => "Some exposed",
-               "totalScore" => 42,
-               "meta1" => "m1"
+               "title" => "Empty"
              }
-    end
-
-    test "an entrypoint exposing no metadata drops every requested field" do
-      post = create_post("None exposed")
-
-      record =
-        read_one("read_posts_without_metadata", post, ["totalScore", "meta1", "isCached"])
-
-      assert record == %{"id" => post.id, "title" => "None exposed"}
-    end
-
-    test "an action without metadata ignores metadataFields" do
-      post = create_post("Plain")
-
-      result =
-        run(%{
-          "action" => "list_posts",
-          "fields" => ["id", "title"],
-          "metadataFields" => ["totalScore"]
-        })
-
-      assert %{"success" => true, "data" => [record]} = result
-      refute Map.has_key?(result, "metadata")
-      assert record == %{"id" => post.id, "title" => "Plain"}
     end
   end
 
@@ -213,12 +228,11 @@ defmodule AshRpc.ActionMetadataTest do
   end
 
   describe "metadata field names" do
-    test "internal names are not client names and are dropped" do
-      post = create_post("Original names")
+    test "internal names are not client names and are rejected" do
+      create_post("Original names")
 
-      record = read_one("read_posts_with_metadata", post, ["meta_1", "is_cached?"])
-
-      assert record == %{"id" => post.id, "title" => "Original names"}
+      assert %{"type" => "unknown_metadata_fields", "fields" => ["meta_1", "is_cached?"]} =
+               metadata_error("read_posts_with_metadata", ["meta_1", "is_cached?"])
     end
   end
 

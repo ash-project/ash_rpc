@@ -44,6 +44,8 @@ defmodule AshRpc.Test.ErrorCases do
       {"missing_required_parameter", {:missing_required_parameter, :action}},
       {"missing_get_by_fields", {:missing_get_by_fields, ["title"]}},
       {"unexpected_get_by_fields", {:unexpected_get_by_fields, ["viewCount"], ["title"]}},
+      {"unknown_metadata_fields",
+       {:unknown_metadata_fields, ["isCachd"], ["totalScore", "isCached"]}},
       {"empty_fields_array", {:empty_fields_array, []}},
       {"load_not_allowed", {:load_not_allowed, ["author.posts"]}},
       {"load_denied", {:load_denied, ["secret"]}},
