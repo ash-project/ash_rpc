@@ -7,6 +7,17 @@ defmodule AshRpc.PlugTest do
 
   defp post(params), do: Plug.Test.conn(:post, "/rpc", params)
 
+  defmodule ErrorHandlingRouter do
+    @moduledoc false
+    use Plug.Router
+    use Plug.ErrorHandler
+
+    plug(:match)
+    plug(:dispatch)
+
+    post("/rpc", do: AshRpc.Plug.run(conn, AshRpc.Test.Profile))
+  end
+
   test "run/2 responds 200 with the JSON envelope" do
     conn =
       AshRpc.Plug.run(
@@ -38,5 +49,24 @@ defmodule AshRpc.PlugTest do
 
     assert conn.status == 200
     assert %{"success" => false, "errors" => [_ | _]} = Jason.decode!(conn.resp_body)
+  end
+
+  test "untyped data Jason can't encode raises, and Plug answers 500" do
+    error =
+      assert_raise Protocol.UndefinedError, fn ->
+        AshRpc.Plug.run(post(%{"action" => "catalog_untyped_records_map"}), AshRpc.Test.Profile)
+      end
+
+    assert Exception.message(error) =~ "Jason.Encoder"
+    assert Plug.Exception.status(error) == 500
+
+    assert_raise Plug.Conn.WrapperError, fn ->
+      ErrorHandlingRouter.call(
+        post(%{"action" => "catalog_untyped_records_map"}),
+        ErrorHandlingRouter.init([])
+      )
+    end
+
+    assert_received {_ref, {500, _headers, "Something went wrong"}}
   end
 end

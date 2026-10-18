@@ -4,11 +4,20 @@
 
 defmodule AshRpc.Test.Catalog do
   @moduledoc false
-  # Generic actions only; the read exists because the data layer expects a
-  # primary key and a primary read.
+  # Generic actions, plus the primary read the data layer expects and
+  # `read_with_session_meta` (untyped metadata).
   use Ash.Resource, domain: AshRpc.Test.Domain, data_layer: Ash.DataLayer.Ets
 
-  alias AshRpc.Test.{Author, Post, PostSettings, PostStats, TaskStats, Voucher}
+  alias AshRpc.Test.{
+    Account,
+    Author,
+    PlainSession,
+    Post,
+    PostSettings,
+    PostStats,
+    TaskStats,
+    Voucher
+  }
 
   ets do
     private? true
@@ -172,6 +181,150 @@ defmodule AshRpc.Test.Catalog do
       end
     end
 
+    # Untyped data (unconstrained :map, :term): sent exactly as produced. Resource
+    # and TypedStruct structs have no Jason encoder, so encoding fails.
+    action :untyped_records_map, :map do
+      run fn _input, _context -> {:ok, AshRpc.Test.Catalog.untyped_records()} end
+    end
+
+    action :untyped_records_term, :term do
+      run fn _input, _context -> {:ok, AshRpc.Test.Catalog.untyped_records()} end
+    end
+
+    action :untyped_records_list, :term do
+      run fn _input, _context ->
+        {:ok,
+         [
+           AshRpc.Test.Catalog.untyped_account("1"),
+           AshRpc.Test.Catalog.untyped_account("2"),
+           %TaskStats{total_count: 2}
+         ]}
+      end
+    end
+
+    # Untyped data Jason encodes as is.
+    action :untyped_value_structs, :map do
+      run fn _input, _context ->
+        {:ok,
+         %{
+           at: ~U[2026-01-01 00:00:00Z],
+           amount: Decimal.new("1.5"),
+           status: :active,
+           choice: %Ash.Union{type: :note, value: "n"}
+         }}
+      end
+    end
+
+    # A ForbiddenField inside untyped data: Jason can't encode it.
+    action :untyped_forbidden_field, :map do
+      run fn _input, _context ->
+        {:ok,
+         %{
+           title: %Ash.ForbiddenField{field: :title, type: :attribute, original_value: "s3cr3t"}
+         }}
+      end
+    end
+
+    # Plain-struct shapes with no field types (see `PlainSession`). Not wire
+    # entrypoints: decoration rejects them, so tests build their own manifests.
+    action :plain_struct_result, :struct do
+      constraints instance_of: PlainSession
+
+      run fn _input, _context ->
+        {:ok, %PlainSession{user_id: 1, token: "s3cr3t"}}
+      end
+    end
+
+    action :bare_struct_result, :struct do
+      run fn _input, _context ->
+        {:ok, %PlainSession{user_id: 1, token: "s3cr3t"}}
+      end
+    end
+
+    action :plain_struct_list, {:array, :struct} do
+      constraints items: [instance_of: PlainSession]
+
+      run fn _input, _context ->
+        {:ok, [%PlainSession{user_id: 1, token: "s3cr3t"}]}
+      end
+    end
+
+    action :plain_struct_in_typed_map, :map do
+      constraints fields: [
+                    label: [type: :string],
+                    session: [type: :struct, constraints: [instance_of: PlainSession]]
+                  ]
+
+      run fn _input, _context ->
+        {:ok, %{label: "x", session: %PlainSession{user_id: 1, token: "s3cr3t"}}}
+      end
+    end
+
+    action :plain_struct_argument, :boolean do
+      argument :session, :struct, constraints: [instance_of: PlainSession]
+      run fn _input, _context -> {:ok, true} end
+    end
+
+    # A generic action's argument named like an attribute (`id`): still an argument.
+    action :plain_struct_id_argument, :boolean do
+      argument :id, :struct, constraints: [instance_of: PlainSession]
+      run fn _input, _context -> {:ok, true} end
+    end
+
+    action :plain_struct_in_union, :union do
+      constraints types: [
+                    label: [type: :string],
+                    session: [type: :struct, constraints: [instance_of: PlainSession]]
+                  ]
+
+      run fn _input, _context -> {:ok, "x"} end
+    end
+
+    action :plain_struct_named, AshRpc.Test.PlainSessionType do
+      run fn _input, _context -> {:ok, %PlainSession{user_id: 1, token: "s3cr3t"}} end
+    end
+
+    action :plain_struct_in_embedded, :struct do
+      constraints instance_of: AshRpc.Test.SessionHolder
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    # `instance_of` a TypedStruct: `:struct` doesn't take fields from it, so
+    # the manifest has none (use `TaskStats` as the type instead).
+    action :typed_struct_instance_of, :struct do
+      constraints instance_of: TaskStats
+      run fn _input, _context -> {:ok, %TaskStats{total_count: 1}} end
+    end
+
+    # An empty field list on a plain struct module is still untyped: the
+    # struct's own fields would reach the client.
+    action :plain_struct_empty_fields, :struct do
+      constraints instance_of: PlainSession, fields: []
+      run fn _input, _context -> {:ok, %PlainSession{user_id: 1, token: "s3cr3t"}} end
+    end
+
+    # An empty TypedStruct is typed: nothing to select, nothing leaks.
+    action :empty_typed_struct, AshRpc.Test.EmptyStats do
+      run fn _input, _context -> {:ok, %AshRpc.Test.EmptyStats{}} end
+    end
+
+    # An empty field list without `instance_of` is untyped: the returned
+    # struct's own fields would reach the client.
+    action :empty_struct_fields, :struct do
+      constraints fields: []
+      run fn _input, _context -> {:ok, %PlainSession{user_id: 1, token: "s3cr3t"}} end
+    end
+
+    # A recursive named type with no untyped struct in it.
+    action :tree_result, AshRpc.Test.TreeNode do
+      run fn _input, _context -> {:ok, %{label: "root", children: []}} end
+    end
+
+    # A read whose metadata is an untyped struct.
+    read :read_with_session_meta do
+      metadata :session, :struct, constraints: [instance_of: PlainSession]
+    end
+
     action :redeem_voucher, :map do
       constraints fields: [voucher_code: [type: :string], post_id: [type: :uuid]]
       argument :voucher, :struct, allow_nil?: false, constraints: [instance_of: Voucher]
@@ -181,5 +334,24 @@ defmodule AshRpc.Test.Catalog do
         {:ok, %{voucher_code: voucher.voucher_code, post_id: voucher.post_id}}
       end
     end
+  end
+
+  @doc false
+  def untyped_records do
+    %{
+      account: untyped_account("1"),
+      stats: %TaskStats{total_count: 2, is_urgent?: true}
+    }
+  end
+
+  @doc false
+  def untyped_account(n) do
+    %Account{
+      id: "00000000-0000-0000-0000-00000000000#{n}",
+      handle: "h#{n}",
+      email: "e#{n}@x",
+      secret: "s3cr3t",
+      internal_notes: "notes"
+    }
   end
 end

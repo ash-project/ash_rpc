@@ -26,8 +26,8 @@ defmodule AshRpc.SecurityRegressionTest do
   end
 
   describe "ForbiddenField redaction in results" do
-    test "normalize_value_for_json redacts a ForbiddenField", %{runtime: rt} do
-      result = ResultProcessor.normalize_value_for_json(forbidden(:title), rt)
+    test "normalize_primitive redacts a ForbiddenField", %{runtime: rt} do
+      result = ResultProcessor.normalize_primitive(forbidden(:title), rt)
 
       refute_leak(result)
     end
@@ -49,7 +49,7 @@ defmodule AshRpc.SecurityRegressionTest do
 
       refute_leak(ResultProcessor.process(post, [:title, {:settings, [:theme_name]}], Post, rt))
 
-      refute_leak(ResultProcessor.normalize_value_for_json(settings, rt))
+      refute_leak(ResultProcessor.normalize_primitive(settings, rt))
     end
   end
 

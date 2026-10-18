@@ -10,8 +10,12 @@ if Code.ensure_loaded?(Plug.Conn) do
         def run(conn, _params), do: AshRpc.Plug.run(conn, MyApp.RpcProfile)
         def validate(conn, _params), do: AshRpc.Plug.validate(conn, MyApp.RpcProfile)
 
-    Always responds 200; success or failure is in the body. Requires
-    `conn.params` to be parsed (e.g. `Plug.Parsers` with `:json`).
+    Responds 200 with the JSON body; success or failure is in the body.
+    Untyped data (an unconstrained `:map` or `:term`) is sent as the action
+    produced it, so a value Jason can't encode raises `Protocol.UndefinedError`
+    from `Jason.encode_to_iodata!/1`. Under Phoenix or `Plug.ErrorHandler`
+    that's a 500. Requires `conn.params` to be parsed (e.g. `Plug.Parsers`
+    with `:json`).
     """
 
     @spec run(Plug.Conn.t(), module()) :: Plug.Conn.t()

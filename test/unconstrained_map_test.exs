@@ -66,6 +66,20 @@ defmodule AshRpc.UnconstrainedMapTest do
 
       assert data == replacement
     end
+
+    test "a stored value is sent as stored, nothing converted" do
+      data = %{"at" => ~U[2026-01-01 00:00:00Z], "kind" => :draft}
+      post = seed_post(data)
+
+      # An update whose only change is skipped returns the stored record
+      assert %{"success" => true, "data" => %{"data" => ^data}} =
+               AshRpc.run_action(@profile, ctx(), %{
+                 "action" => "merge_post_data",
+                 "identity" => post.id,
+                 "input" => %{"data" => nil},
+                 "fields" => ["id", "data"]
+               })
+    end
   end
 
   describe "map argument on an update (merge_post_data)" do
@@ -135,6 +149,22 @@ defmodule AshRpc.UnconstrainedMapTest do
                })
 
       assert data == payload
+    end
+  end
+
+  describe "ResultProcessor.extract_value/5 on an untyped type" do
+    @map %Ash.Info.Manifest.Type{kind: :map, name: "Map", module: Ash.Type.Map}
+
+    test "returns the value as is" do
+      value = %{at: ~U[2026-01-01 00:00:00Z], rows: [a: 1]}
+      assert ResultProcessor.extract_value(value, @map, [], [], runtime()) == value
+    end
+
+    test "a forbidden or unloaded whole value is still redacted or skipped" do
+      forbidden = %Ash.ForbiddenField{field: :data, type: :attribute, original_value: "s3cr3t"}
+
+      assert ResultProcessor.extract_value(forbidden, @map, [], [], runtime()) == nil
+      assert ResultProcessor.extract_value(%Ash.NotLoaded{}, @map, [], [], runtime()) == :skip
     end
   end
 

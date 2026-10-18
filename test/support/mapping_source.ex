@@ -28,6 +28,7 @@ defmodule AshRpc.Test.MappingSource do
     AshRpc.Test.ProjectMeta,
     AshRpc.Test.ProjectMetaDetail,
     AshRpc.Test.ProjectNote,
+    AshRpc.Test.SessionLog,
     AshRpc.Test.Tag,
     AshRpc.Test.TextBlock,
     AshRpc.Test.Widget

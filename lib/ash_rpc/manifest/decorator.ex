@@ -23,11 +23,16 @@ defmodule AshRpc.Manifest.Decorator do
       return classification
 
   Pure: manifest in, manifest out. Raises `AshRpc.Manifest.NameCollisionError`
-  on client-name collisions and `ArgumentError` when a formatter misbehaves.
+  on client-name collisions, `AshRpc.Manifest.UntypedStructError` when a wire
+  entrypoint can reach a struct type with no field types
+  (`AshRpc.Introspection.find_untyped_struct/2`; `check_untyped_structs!/3`
+  runs that check for one entrypoint), and `ArgumentError` when a formatter
+  misbehaves.
   """
 
   alias Ash.Info.Manifest
-  alias AshRpc.{FieldFormatter, Introspection, Manifest.NameCollisionError}
+  alias AshRpc.{FieldFormatter, Introspection}
+  alias AshRpc.Manifest.{NameCollisionError, UntypedStructError}
 
   @vocabulary %{
     params: [:action, :fields, :get_by, :filter, :sort, :page, :tenant, :metadata_fields],
@@ -67,7 +72,11 @@ defmodule AshRpc.Manifest.Decorator do
     payload = %{
       mapping_source: mapping_source,
       output_formatter: output_formatter,
-      entrypoints: wire_entrypoints(entrypoints, mapping_source, output_formatter),
+      entrypoints:
+        wire_entrypoints(entrypoints, mapping_source, output_formatter, %{
+          resource_lookup: resource_lookup,
+          type_lookup: type_lookup
+        }),
       vocabulary: vocabulary(output_formatter)
     }
 
@@ -470,7 +479,7 @@ defmodule AshRpc.Manifest.Decorator do
     end)
   end
 
-  defp wire_entrypoints(entrypoints, source, formatter) do
+  defp wire_entrypoints(entrypoints, source, formatter, lookups) do
     Enum.reduce(entrypoints, %{}, fn entrypoint, acc ->
       case source.entrypoint(entrypoint) do
         nil ->
@@ -482,9 +491,85 @@ defmodule AshRpc.Manifest.Decorator do
                   "duplicate wire entrypoint name #{inspect(name)} from #{inspect(source)}"
           end
 
+          check_untyped_structs!(entrypoint, e, lookups)
           Map.put(acc, name, put_client_metadata_names(e, formatter))
       end
     end)
+  end
+
+  @doc """
+  Raises `AshRpc.Manifest.UntypedStructError` on the first untyped struct
+  (`AshRpc.Introspection.untyped_struct?/1`) the entrypoint can reach, and
+  returns `:ok` when there is none.
+
+  `decorate/3` runs it for every wire entrypoint. An extension runs it for
+  entrypoints it serves itself (ones its mapping source returns `nil` for),
+  passing the `%AshRpc.Entrypoint{}` it built for one. The roots, in order:
+  each input (`argument :name`, or `attribute :name` for an accepted attribute
+  of a non-generic action), `returns`, the entrypoint resource's records
+  (non-generic actions) and each metadata field in `exposed_metadata_fields`.
+  The error names `wire.name`.
+
+  `lookups` holds `:resource_lookup` and `:type_lookup` from a decorated
+  manifest (`AshRpc.Manifest.resource_lookup/1`, `type_lookup/1`).
+  """
+  @spec check_untyped_structs!(Manifest.Entrypoint.t(), AshRpc.Entrypoint.t(), %{
+          resource_lookup: map(),
+          type_lookup: map()
+        }) :: :ok
+  def check_untyped_structs!(
+        %Manifest.Entrypoint{resource: resource, action: action},
+        %AshRpc.Entrypoint{} = wire,
+        %{resource_lookup: _, type_lookup: _} = lookups
+      ) do
+    action
+    |> untyped_roots(resource, wire, lookups)
+    |> Introspection.find_untyped_root(lookups)
+    |> case do
+      nil ->
+        :ok
+
+      {path, found, verb} ->
+        raise UntypedStructError,
+          type: found,
+          path: path,
+          verb: verb,
+          entrypoint: %{name: wire.name, resource: resource, action: action.name}
+    end
+  end
+
+  # `{root, type, verb}` per place the wire reaches: each input, the return,
+  # the entrypoint resource's records (CRUD actions have no `returns`) and the
+  # metadata fields the wire entrypoint exposes.
+  defp untyped_roots(%Manifest.Action{} = action, resource, wire, lookups) do
+    inputs =
+      for input <- action.inputs do
+        kind =
+          if action.type != :action and
+               Introspection.accepted_attribute?(resource, input.name, lookups.resource_lookup),
+             do: "attribute",
+             else: "argument"
+
+        {"#{kind} #{inspect(input.name)}", input.type, "accepts"}
+      end
+
+    records =
+      if action.type == :action,
+        do: [],
+        else: [
+          {"#{inspect(resource)} records",
+           %Manifest.Type{kind: :resource, module: resource, resource_module: resource},
+           "returns"}
+        ]
+
+    exposed_metadata = wire.exposed_metadata_fields || []
+
+    metadata =
+      for %{name: name} = m <- action.metadata || [],
+          name in exposed_metadata,
+          do: {"metadata #{inspect(name)}", m.type, "returns"}
+
+    inputs ++ [{"returns", action.returns, "returns"}] ++ records ++ metadata
   end
 
   defp put_client_metadata_names(%AshRpc.Entrypoint{} = e, formatter) do

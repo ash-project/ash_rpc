@@ -162,16 +162,29 @@ defmodule AshRpc.Pipeline do
 
   Applies field selection to the Ash result using the pre-computed template.
   Performance-optimized single-pass filtering.
-  For unconstrained maps, returns the normalized result directly.
+  A generic action whose `returns` is untyped data (`Introspection.untyped_data_type?/2`:
+  an unconstrained `:map`, `Ash.Type.Term`, or an array of either) returns its
+  value unchanged: no field selection, no normalization.
   Handles metadata extraction for both read and mutation actions.
   If the extraction template is empty for mutation actions (create/update), returns empty data.
   """
   @spec process_result(term(), Request.t()) :: {:ok, term()} | {:error, term()}
-  def process_result(ash_result, %Request{} = request) do
-    case ash_result do
-      {:error, error} ->
-        {:error, error}
+  def process_result({:error, error}, %Request{}), do: {:error, error}
 
+  def process_result(ash_result, %Request{} = request) do
+    if untyped_return?(request.action, request.runtime),
+      do: {:ok, ash_result},
+      else: process_typed_result(ash_result, request)
+  end
+
+  # A generic action whose declared return has no shape: its value is the response.
+  defp untyped_return?(%{type: :action, returns: returns}, runtime),
+    do: Introspection.untyped_data_type?(returns, runtime.type_lookup)
+
+  defp untyped_return?(_action, _runtime), do: false
+
+  defp process_typed_result(ash_result, %Request{} = request) do
+    case ash_result do
       result when is_list(result) or is_map(result) or is_tuple(result) ->
         # For mutations with no field selection, use empty data
         # (metadata can still be added on top)
@@ -182,39 +195,35 @@ defmodule AshRpc.Pipeline do
         if is_mutation_with_no_fields and Enum.empty?(request.show_metadata) do
           {:ok, %{}}
         else
-          if unconstrained_map_action?(request.action, request.runtime) do
-            {:ok, ResultProcessor.normalize_primitive(result, request.runtime)}
-          else
-            filtered =
-              cond do
-                is_mutation_with_no_fields ->
-                  %{}
+          filtered =
+            cond do
+              is_mutation_with_no_fields ->
+                %{}
 
-                # Plain map data carries no type to dispatch on, so typed map
-                # returns are extracted against the declared `action.returns`
-                # (otherwise nested arrays/embedded resources come back whole).
-                typed_map_return?(request.action, request.runtime) ->
-                  ResultProcessor.extract_value(
-                    result,
-                    request.action.returns,
-                    [],
-                    request.extraction_template,
-                    request.runtime
-                  )
+              # Plain map data carries no type to dispatch on, so typed map
+              # returns are extracted against the declared `action.returns`
+              # (otherwise nested arrays/embedded resources come back whole).
+              typed_map_return?(request.action, request.runtime) ->
+                ResultProcessor.extract_value(
+                  result,
+                  request.action.returns,
+                  [],
+                  request.extraction_template,
+                  request.runtime
+                )
 
-                true ->
-                  ResultProcessor.process(
-                    result,
-                    request.extraction_template,
-                    get_field_mapping_module(request.action, request.resource, request.runtime),
-                    request.runtime
-                  )
-              end
+              true ->
+                ResultProcessor.process(
+                  result,
+                  request.extraction_template,
+                  get_field_mapping_module(request.action, request.resource, request.runtime),
+                  request.runtime
+                )
+            end
 
-            filtered_with_metadata = add_metadata(filtered, result, request)
+          filtered_with_metadata = add_metadata(filtered, result, request)
 
-            {:ok, filtered_with_metadata}
-          end
+          {:ok, filtered_with_metadata}
         end
 
       primitive_value ->
@@ -923,26 +932,25 @@ defmodule AshRpc.Pipeline do
   # Formats action output based on action return type
   # - Resource-returning actions are formatted against the resource (pages too)
   # - Composite types (typed maps, typed structs) use ValueFormatter with type constraints
-  # - Unconstrained maps are passed through unchanged — the action opted out of
-  #   typing, so its keys are the caller's responsibility and must not be renamed
+  # - Untyped data (`untyped_return?/2`) is passed through unchanged — the action
+  #   opted out of typing, so its keys are the caller's responsibility and must
+  #   not be renamed
   defp format_action_output(data, action, default_resource, runtime) do
-    if action.type != :action do
-      format_resource_output(data, default_resource, runtime)
-    else
-      case Introspection.return_classification(action, runtime.type_lookup) do
-        {:ok, type, resource_module} when type in [:resource, :array_of_resource] ->
-          format_resource_output(data, resource_module, runtime)
+    cond do
+      action.type != :action ->
+        format_resource_output(data, default_resource, runtime)
 
-        {:ok, type, _}
-        when type in [:typed_map, :array_of_typed_map, :typed_struct, :array_of_typed_struct] ->
-          format_generic_action_output(data, action, runtime)
+      untyped_return?(action, runtime) ->
+        data
 
-        {:ok, type, _} when type in [:unconstrained_map, :array_of_unconstrained_map] ->
-          data
+      true ->
+        case Introspection.return_classification(action, runtime.type_lookup) do
+          {:ok, type, resource_module} when type in [:resource, :array_of_resource] ->
+            format_resource_output(data, resource_module, runtime)
 
-        _ ->
-          format_generic_action_output(data, action, runtime)
-      end
+          _ ->
+            format_generic_action_output(data, action, runtime)
+        end
     end
   end
 
@@ -970,13 +978,6 @@ defmodule AshRpc.Pipeline do
 
   defp format_generic_action_output(data, action, runtime) do
     ValueFormatter.format(data, action.returns, [], :output, runtime)
-  end
-
-  defp unconstrained_map_action?(action, runtime) do
-    case Introspection.return_classification(action, runtime.type_lookup) do
-      {:ok, type, _} when type in [:unconstrained_map, :array_of_unconstrained_map] -> true
-      _ -> false
-    end
   end
 
   defp typed_map_return?(action, runtime) do

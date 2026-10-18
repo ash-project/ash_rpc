@@ -11,17 +11,24 @@ defmodule AshRpc.ResultProcessorTest do
     %{runtime: Runtime.new(AshRpc.Test.Profile)}
   end
 
-  test "normalize_value_for_json/2 makes untyped values JSON-encodable", %{runtime: rt} do
-    assert ResultProcessor.normalize_value_for_json([priority: 8, tags: []], rt) ==
+  test "normalize_primitive/2 makes values without a type JSON-encodable", %{runtime: rt} do
+    assert ResultProcessor.normalize_primitive([priority: 8, tags: []], rt) ==
              %{"priority" => 8, "tags" => []}
 
-    assert ResultProcessor.normalize_value_for_json(Duration.new!(hour: 1), rt) == "PT1H"
+    assert ResultProcessor.normalize_primitive(Duration.new!(hour: 1), rt) == "PT1H"
+  end
+
+  test "a zero Duration and one with microseconds become ISO 8601 strings", %{runtime: rt} do
+    assert ResultProcessor.normalize_primitive(%Duration{}, rt) == "PT0S"
+
+    with_microseconds = %Duration{second: 30, microsecond: {500_000, 6}}
+    assert ResultProcessor.normalize_primitive(with_microseconds, rt) == "PT30.500000S"
   end
 
   test "a Duration nested in a plain map is normalized to an ISO 8601 string", %{runtime: rt} do
     data = %{step: %{name: "Build", duration: %Duration{day: 1, hour: 4}}}
 
-    assert ResultProcessor.normalize_value_for_json(data, rt) ==
+    assert ResultProcessor.normalize_primitive(data, rt) ==
              %{step: %{name: "Build", duration: "P1DT4H"}}
   end
 
@@ -34,7 +41,7 @@ defmodule AshRpc.ResultProcessorTest do
         metadata: %{items: [], config: %{flags: []}}
       }
 
-      assert ResultProcessor.normalize_value_for_json(data, rt) == %{
+      assert ResultProcessor.normalize_primitive(data, rt) == %{
                id: "123",
                title: "First post",
                tags: [],
@@ -43,7 +50,7 @@ defmodule AshRpc.ResultProcessorTest do
     end
 
     test "empty arrays inside a list stay arrays", %{runtime: rt} do
-      assert ResultProcessor.normalize_value_for_json([[], [1, 2], [], [3]], rt) ==
+      assert ResultProcessor.normalize_primitive([[], [1, 2], [], [3]], rt) ==
                [[], [1, 2], [], [3]]
     end
 
@@ -56,7 +63,7 @@ defmodule AshRpc.ResultProcessorTest do
     test "a mixed list containing tuples is kept as a list", %{runtime: rt} do
       mixed_list = [{:key, "value"}, "not_tuple", 42]
 
-      assert ResultProcessor.normalize_value_for_json(mixed_list, rt) ==
+      assert ResultProcessor.normalize_primitive(mixed_list, rt) ==
                [{:key, "value"}, "not_tuple", 42]
     end
 
@@ -67,7 +74,7 @@ defmodule AshRpc.ResultProcessorTest do
         flags: [active: true, visible: false]
       ]
 
-      assert ResultProcessor.normalize_value_for_json(keyword_list, rt) == %{
+      assert ResultProcessor.normalize_primitive(keyword_list, rt) == %{
                "priority" => 5,
                "metadata" => %{created_by: "user", tags: ["urgent", "work"]},
                "flags" => %{"active" => true, "visible" => false}
@@ -110,7 +117,7 @@ defmodule AshRpc.ResultProcessorTest do
           internal_notes: "internal_notes_value"
         })
 
-      result = ResultProcessor.normalize_value_for_json(value, rt)
+      result = ResultProcessor.normalize_primitive(value, rt)
 
       assert Map.has_key?(result, :id)
       assert Map.has_key?(result, :handle)

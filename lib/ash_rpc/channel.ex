@@ -17,7 +17,10 @@ if Code.ensure_loaded?(Phoenix.Channel) do
     Handles `"run"` and `"validate"` (always `{:reply, {:ok, result}, socket}`;
     success or failure is in the body, and pipeline exceptions become wire
     errors) and replies `{:error, %{reason: "Unknown event: …", payload: …}}`
-    to anything else. Actor, tenant and context come from
+    to anything else. Phoenix encodes the reply in the channel process, so
+    untyped data Jason can't encode crashes the channel.
+
+    Actor, tenant and context come from
     `socket.assigns[:ash_actor | :ash_tenant | :ash_context]`; a `tenant`
     param overrides the tenant. The app owns `join/3`, topics and socket auth.
 

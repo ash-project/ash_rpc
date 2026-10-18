@@ -263,9 +263,9 @@ defmodule AshRpc.CalculationsTest do
       assert %{"success" => true, "data" => [row]} =
                list_projects([%{"report" => ["total", "rows"]}])
 
-      # The rows come back whole: every public attribute, the private
-      # `internal_notes` left out, and the embedded type's unloaded
-      # calculations as nil.
+      # The rows come back whole: every public attribute (the nested
+      # `detail` too), the private `internal_notes` left out, and the
+      # embedded type's unloaded calculations as nil.
       blank = %{
         "adjustedPriority" => nil,
         "deadline" => nil,
@@ -281,7 +281,11 @@ defmodule AshRpc.CalculationsTest do
                  "total" => 2,
                  "rows" => [
                    Map.merge(blank, %{"category" => "work", "priorityScore" => 80}),
-                   Map.merge(blank, %{"category" => "personal", "priorityScore" => 20})
+                   Map.merge(blank, %{
+                     "category" => "personal",
+                     "priorityScore" => 20,
+                     "detail" => %{"note" => "n", "level" => 1}
+                   })
                  ]
                }
              }

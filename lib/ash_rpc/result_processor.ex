@@ -14,6 +14,7 @@ defmodule AshRpc.ResultProcessor do
   ```
   extract_value/5 (unified type-driven dispatch)
      │
+     ├─> untyped data (Introspection.untyped_data_type?/2) → the value as is
      ├─> extract_resource_value/4    (Ash Resources)
      ├─> extract_typed_struct_value/4 (TypedStruct/NewType with field name mapping)
      ├─> extract_typed_map_value/4   (Map/Struct/Tuple/Keyword with fields)
@@ -183,14 +184,20 @@ defmodule AshRpc.ResultProcessor do
   def extract_value(value, nil, _constraints, _template, rt),
     do: normalize_primitive(value, rt)
 
+  # %Ash.Info.Manifest.Type{}: untyped data is the value as produced;
+  # everything else dispatches on the type.
+  def extract_value(value, %Ash.Info.Manifest.Type{} = type_info, _constraints, template, rt) do
+    if Introspection.untyped_data_type?(type_info, rt.type_lookup),
+      do: value,
+      else: extract_typed_value(value, type_info, template, rt)
+  end
+
+  # Catch-all for unrecognized types
+  def extract_value(value, _type, _constraints, _template, rt),
+    do: normalize_primitive(value, rt)
+
   # %Ash.Info.Manifest.Type{} — primary dispatch
-  def extract_value(
-        value,
-        %Ash.Info.Manifest.Type{} = type_info,
-        _constraints,
-        template,
-        rt
-      ) do
+  defp extract_typed_value(value, type_info, template, rt) do
     case Introspection.classify_type(type_info, rt) do
       {:array, item_type} -> extract_array_value(value, item_type, template, rt)
       {:resource, resource} -> extract_resource_value(value, resource, template, rt)
@@ -200,10 +207,6 @@ defmodule AshRpc.ResultProcessor do
       {:other, _type} -> normalize_primitive(value, rt)
     end
   end
-
-  # Catch-all for unrecognized types
-  def extract_value(value, _type, _constraints, _template, rt),
-    do: normalize_primitive(value, rt)
 
   # (Type checking helpers are in AshRpc.Introspection and Ash.Info.Manifest.Type)
 
@@ -444,13 +447,16 @@ defmodule AshRpc.ResultProcessor do
   # ─────────────────────────────────────────────────────────────────────────────
 
   @doc """
-  Normalizes a value without a type template into a JSON-encodable shape:
-  keyword lists become maps, `Duration`s become ISO 8601 strings, structs are
-  reduced to their public fields, and forbidden fields are redacted.
+  Converts a value without a type into a JSON-encodable shape: keyword lists
+  become maps, `Duration`s become ISO 8601 strings, resource structs are cut
+  to their public fields, other structs become maps, and forbidden fields are
+  redacted. Typed values fall back to this when a node carries no field
+  types. The pipeline doesn't apply it to untyped data (an unconstrained
+  `:map` or `Ash.Type.Term`), which is sent as the action produced it, except
+  the attributes of a typed resource selected whole. Call it to convert such
+  data yourself.
   """
-  @spec normalize_value_for_json(term(), AshRpc.Runtime.t()) :: term()
-  def normalize_value_for_json(value, rt), do: normalize_primitive(value, rt)
-
+  @spec normalize_primitive(term(), AshRpc.Runtime.t()) :: term()
   def normalize_primitive(nil, _rt), do: nil
 
   # Authorization-redacted and unloaded fields must never be serialized: the

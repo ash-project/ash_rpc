@@ -83,9 +83,15 @@ defmodule AshRpc.Test.Calculations.ProjectReport do
 
   @impl true
   def calculate(records, _opts, _context) do
+    # A nested embedded resource (`detail`) in a row: a typed resource
+    # selected whole is still normalized, nested structs included.
     rows = [
       %AshRpc.Test.ProjectMeta{category: "work", priority_score: 80},
-      %AshRpc.Test.ProjectMeta{category: "personal", priority_score: 20}
+      %AshRpc.Test.ProjectMeta{
+        category: "personal",
+        priority_score: 20,
+        detail: %AshRpc.Test.ProjectMetaDetail{note: "n", level: 1}
+      }
     ]
 
     Enum.map(records, fn _ -> %{rows: rows, total: 2} end)
