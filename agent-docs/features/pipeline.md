@@ -155,8 +155,8 @@ when the bulk target query is built.
 
 Returns `{:ok, data}` or passes `{:error, error}` through.
 
-- Unconstrained-map generic actions: the result is normalized and returned
-  without field selection.
+- Untyped generic returns (`Introspection.untyped_data_type?/2` on `returns`):
+  the value as produced, with no field selection and no normalization.
 - Typed-map generic returns: extracted against `action.returns` with the
   template.
 - Everything else (records, lists, offset/keyset pages): `AshRpc.ResultProcessor.process/4`
@@ -169,8 +169,9 @@ Returns `{:ok, data}` or passes `{:error, error}` through.
 Formats values with `AshRpc.ValueFormatter` (`:output`) against the resource,
 or the generic action's `returns`, and formats the envelope keys (`success`,
 `data`, `metadata`) with the output formatter. Page maps keep their page keys
-(formatted); only `results` are formatted against the resource. Unconstrained
-maps pass through untouched. See [formatting](formatting.md).
+(formatted); only `results` are formatted against the resource. Untyped data
+passes through untouched (`ValueFormatter` leaves an unconstrained `:map` and
+`Ash.Type.Term` alone). See [formatting](formatting.md).
 
 ## `AshRpc.Request`
 
@@ -232,16 +233,19 @@ Both are optional and wrapped in `Code.ensure_loaded?/1`; they only exist when
 plug / phoenix are in the consumer's deps.
 
 - **`AshRpc.Plug.run(conn, profile)` / `validate(conn, profile)`** call the
-  entry points with `conn.params` and always respond 200 with a JSON body
+  entry points with `conn.params` and respond 200 with a JSON body
   (`test/plug_test.exs` "run/2 responds 200 with the JSON envelope",
-  "pipeline exceptions respond 200 with a wire error").
+  "pipeline exceptions respond 200 with a wire error"), or raise when untyped
+  data can't be encoded (a 500 under Phoenix or `Plug.ErrorHandler`; "untyped
+  data Jason can't encode raises, and Plug answers 500").
 - **`use AshRpc.Channel, profile: MyExt.RpcProfile`** injects
   `handle_in("run" | "validate", …)`, replying `{:ok, result}`, and a catch-all
   replying `{:error, %{reason: "Unknown event: …", payload: …}}`. Because of the
   catch-all, define no further `handle_in/3` clauses. For extra events, skip
   `use AshRpc.Channel` and call `AshRpc.Channel.run/3` / `validate/3` from
   your own `handle_in/3`
-  (`test/channel_test.exs`).
+  (`test/channel_test.exs`). Phoenix encodes the reply in the channel
+  process, so untyped data Jason can't encode crashes the channel.
 
 ```elixir
 defmodule MyExt.RpcChannel do

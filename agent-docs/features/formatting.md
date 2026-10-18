@@ -108,7 +108,8 @@ returns `%{"scoredStats" => %{"wordCount1" => 5}}`
 - **`format_output`** (output): `AshRpc.Pipeline` calls `ValueFormatter.format/5`
   directly (there is no output-formatter module). Non-generic actions are
   formatted against the resource; generic actions use the classification of
-  `action.returns`, and an unconstrained-map return is passed through as-is.
+  `action.returns`, and an untyped return (an unconstrained map or
+  `Ash.Type.Term`) is passed through as-is.
 
 See [pipeline.md](pipeline.md) for the stages themselves.
 

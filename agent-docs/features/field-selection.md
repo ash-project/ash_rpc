@@ -296,19 +296,47 @@ takes a nested list:
 Union *input* (the wrapped `%{"member" => value}` format) is in
 [formatting](formatting.md).
 
-## Unconstrained Map Output
+## Untyped Data Output
 
-A `:map` without `fields` constraints is opaque:
+Untyped data is a value whose declared type has no shape.
+`Introspection.untyped_data_type?/2` is the definition: an unconstrained `:map`,
+`Ash.Type.Term`, an array of either, or a named type defined as an
+unconstrained map. `Ash.Type.Vector` (and `File`, `Function`) is `:term`-kind
+but typed, and so are custom Ash types, including a NewType over `:term`: the
+manifest carries only its module, not its subtype, so its values normalize. Untyped data is sent exactly as the action produced it:
+no normalization, no extraction and no output formatting.
 
-- A generic action whose return classifies as `:unconstrained_map` /
-  `:array_of_unconstrained_map` (`Introspection.return_classification/2`)
-  needs no `fields` param. Its result is returned verbatim: keys untouched
-  (snake_case, camelCase and nested keys alike), no extraction, and no output
-  formatting (`test/unconstrained_map_test.exs` "returns the payload verbatim
-  without a fields selection", on `echo_map`).
-- An unconstrained map attribute (`Post.data`) is selected by bare name and
-  comes back the same way ("create round-trips the map verbatim, snake_case and
-  nested keys untouched").
+- A generic action with an untyped return needs no `fields` param; sending
+  them is `invalid_field_selection`. Its value is the response's `data`,
+  unchanged: keys untouched (snake_case, camelCase and nested keys alike)
+  (`test/unconstrained_map_test.exs` "returns the payload verbatim without a
+  fields selection", on `echo_map`; `test/untyped_struct_test.exs` "untyped
+  data is sent wholesale"). `Pipeline.process_result/2` short-circuits it.
+- An untyped attribute (`Post.data`), typed-map field, union member or
+  calculation value inside a field-selected typed container comes back the
+  same way: `ResultProcessor.extract_value/5` returns it as is, before it
+  classifies the type. An untyped attribute is selected by bare name
+  (`test/unconstrained_map_test.exs` "a stored value is sent as stored,
+  nothing converted"). A `ForbiddenField` or `NotLoaded` as the
+  whole value is still redacted or skipped first.
+- A generic action returning a `:union` goes through `ResultProcessor.process/4`,
+  which normalizes the member value, untyped members included. Only a union
+  nested in a field-selected typed container sends an untyped member as is.
+- The exception: a typed resource selected whole has no per-field types, so
+  its untyped attributes are still normalized (`test/untyped_struct_test.exs`
+  "a typed resource selected whole normalizes its untyped attributes").
+- Jason encodes maps, lists, binaries, numbers, atoms,
+  `DateTime`/`Date`/`Time`/`NaiveDateTime`, `Decimal`, `Ash.CiString` and
+  `Ash.Union`, which encodes only its value (so the wire shape is `value`, not
+  `{member: value}`). Anything else fails the encode: structs without a
+  `Jason.Encoder` (plain, resource, TypedStruct), tuples, keyword lists,
+  `Duration`, `ForbiddenField`, `NotLoaded`. `AshRpc.Plug` raises and Plug
+  answers 500 (`test/plug_test.exs` "untyped data Jason can't encode raises,
+  and Plug answers 500"). A channel reply crashes the channel. Callers of
+  `run_action/4` get the raw value and encode it themselves.
+- The encode error message `inspect`s the value. `ForbiddenField` shows only
+  `field`/`type`, and `sensitive?` attributes are hidden, but other private
+  attributes of a resource struct appear in the server log.
 - `false` values survive extraction against a field template under atom or
   string keys (the `regression:` cases in the "ResultProcessor.extract_value/5
   on plain maps with a field template" describe).

@@ -78,7 +78,7 @@ end
 
 # 4. Transport
 AshRpc.run_action(MyExt.RpcProfile, conn_or_socket_or_context, params)
-AshRpc.Plug.run(conn, MyExt.RpcProfile)           # always 200, JSON body
+AshRpc.Plug.run(conn, MyExt.RpcProfile)           # 200, JSON body (raises if untyped data can't be encoded)
 use AshRpc.Channel, profile: MyExt.RpcProfile     # "run" / "validate" events
 ```
 
@@ -105,9 +105,9 @@ formatter.
 | **Runtime / entrypoint / context / request** | `lib/ash_rpc/runtime.ex`, `entrypoint.ex`, `context.ex`, `request.ex` |
 | **Manifest decoration** | `lib/ash_rpc/manifest/decorator.ex` (pure: manifest in, manifest out) |
 | **`custom.ash_rpc` readers, lookups, `redecorate/2`** | `lib/ash_rpc/manifest.ex`, `lib/ash_rpc/manifest/custom.ex` (reverse maps, plus the forward `field_names/1`, `type_field_names/1`, `type_member_names/1`, `entrypoint_metadata_field_names/1`) |
-| **Name collisions** | `lib/ash_rpc/manifest/name_collision_error.ex` |
+| **Name collisions / untyped structs** | `lib/ash_rpc/manifest/name_collision_error.ex`, `lib/ash_rpc/manifest/untyped_struct_error.ex` |
 | **Pipeline orchestration** | `lib/ash_rpc/pipeline.ex` |
-| **Manifest introspection (`get_action!/3`)** | `lib/ash_rpc/introspection.ex` |
+| **Manifest introspection (`get_action!/3`, `find_untyped_struct/2`)** | `lib/ash_rpc/introspection.ex` |
 | **Native validation (`validate_action`)** | `lib/ash_rpc/validation.ex` |
 | **Field processing (entry point)** | `lib/ash_rpc/requested_fields_processor.ex` (delegator) |
 | **Client name → atom** | `lib/ash_rpc/field_processing/atomizer.ex` |
@@ -168,9 +168,9 @@ from an existing file of the same kind. Formats without comment syntax need a
 
 | Working On | See Documentation | Test Files |
 |------------|-------------------|------------|
-| **MappingSource, decoration, entrypoints, client names, formatters** | [features/decoration.md](agent-docs/features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
+| **MappingSource, decoration, entrypoints, client names, formatters** | [features/decoration.md](agent-docs/features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/untyped_struct_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
 | **Pipeline stages, validation, transports, tenant, filter/sort/page, get actions** | [features/pipeline.md](agent-docs/features/pipeline.md) | `test/run_action_test.exs`, `test/validation_test.exs`, `test/context_test.exs`, `test/plug_test.exs`, `test/channel_test.exs`, `test/multitenancy_test.exs`, `test/filter_sort_test.exs`, `test/get_actions_test.exs` |
-| **Field selection, calculations, aggregates, nested query options, unions, load restrictions** | [features/field-selection.md](agent-docs/features/field-selection.md) | `test/field_selector_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
+| **Field selection, calculations, aggregates, nested query options, unions, load restrictions** | [features/field-selection.md](agent-docs/features/field-selection.md) | `test/field_selector_test.exs`, `test/untyped_struct_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
 | **Value/input formatting, union input, unconstrained maps, name mapping, client-name resolution** | [features/formatting.md](agent-docs/features/formatting.md) | `test/value_formatter_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs`, `test/client_names_test.exs`, `test/filter_input_test.exs` |
 | **Action metadata** | [features/action-metadata.md](agent-docs/features/action-metadata.md) | `test/action_metadata_test.exs` |
 | **Errors, handlers, wire error shape** | [features/errors.md](agent-docs/features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
@@ -193,6 +193,15 @@ from an existing file of the same kind. Formats without comment syntax need a
   that never enter the manifest with `Decorator.decorate_type/3`.
 - `Runtime.new/2` raises `ArgumentError` ("has no custom.ash_rpc decoration")
   when it gets an undecorated manifest.
+- Decoration raises `AshRpc.Manifest.UntypedStructError` when a wire
+  entrypoint's inputs, return, records or exposed metadata reach a struct type
+  with no field types: `fields: nil`, or `fields: []` without an `instance_of`
+  that is an Ash type or resource (none, or a plain `defstruct`). Only an
+  empty TypedStruct (or another Ash type) passes with `fields: []`.
+  Extensions check entrypoints they serve themselves with
+  `Decorator.check_untyped_structs!/3`, and their own types with
+  `AshRpc.Introspection.find_untyped_struct/2` (or `find_untyped_root/2` over
+  labelled roots).
 
 ### RPC Pipeline (Four Stages)
 Entry points are `AshRpc.run_action/4` and `AshRpc.validate_action/4` (profile, conn/socket/`%AshRpc.Context{}`, params, opts).
@@ -229,6 +238,15 @@ stacktrace and returned as `unknown_error`.
 ### Core Patterns
 - **Type-driven dispatch**: `FieldSelector` and `ValueFormatter` both recurse on `{type, constraints}`
 - **Strict exposure**: selecting through a relationship to a resource the mapping source doesn't expose is `unknown_field`. Embedded resources the source doesn't expose are still decorated, under formatter-only names and `exposed: false`, so they stay selectable as attributes and union members. So are unexposed domain resources an entrypoint takes as a struct input, so their input keys resolve; relationships to them stay `unknown_field`
+- **Untyped data**: a value whose declared type has no shape
+  (`AshRpc.Introspection.untyped_data_type?/2`: an unconstrained `:map`,
+  `Ash.Type.Term`, or an array of either) is sent exactly as produced, as a
+  generic return and nested in field-selected typed containers. Jason encodes
+  it or the encode fails. A typed resource selected whole is still normalized,
+  its untyped attributes included. Accepted side effects: an encode failure
+  logs `inspect(value)` (private attributes not marked `sensitive?` included),
+  an `Ash.Union` inside it encodes as its value instead of `{member: value}`,
+  and `run_action/4` callers get raw structs
 - **Tenant param**: a `tenant` request param overrides the transport tenant (`conn` or `socket.assigns[:ash_tenant]`)
 - **Optional transports**: `AshRpc.Plug` / `AshRpc.Channel` are wrapped in `Code.ensure_loaded?/1` and only exist when plug/phoenix are present. `AshRpc.Context.from_source/1` follows the same rule
 
@@ -238,6 +256,8 @@ stacktrace and returned as `unknown_error`.
 |-------|-------|----------|
 | "has no custom.ash_rpc decoration" `ArgumentError` | Raw `Ash.Info.Manifest` passed to the runtime | Decorate with `AshRpc.Manifest.Decorator.decorate/3` (or use the fixture `ManifestBuilder`) |
 | `AshRpc.Manifest.NameCollisionError` | Two fields/args map to the same client name | Fix `field_names` / `argument_names` overrides |
+| `AshRpc.Manifest.UntypedStructError` | A wire entrypoint accepts or returns a `:struct` without `fields` (a plain `defstruct` `instance_of`, `instance_of` an Ash type, or no constraints), or with `fields: []` and no Ash-type `instance_of` (none, or a plain one), anywhere in its exposed graph | Use an `Ash.TypedStruct`, a NewType over `:struct` with `fields`, `instance_of` a resource, or an unconstrained `:map` built in the action. For an Ash-type `instance_of`, use the type itself |
+| `Protocol.UndefinedError` "Jason.Encoder not implemented for X" (a 500 from `AshRpc.Plug`) | Untyped data (an unconstrained `:map` / `:term` return, attribute or field) holds a struct, tuple, keyword list, `Duration` or `ForbiddenField`; it is sent as produced | Convert it in the action, or declare the type (the resource, an `Ash.TypedStruct`, a typed map). The error message `inspect`s the value, so mark secret attributes `sensitive?: true` |
 | Formatter change in a test has no effect | The output formatter is fixed at decoration time | `ManifestBuilder.build(output_formatter: …)` or `AshRpc.Manifest.redecorate/2`, then pass `manifest:` |
 | Test sees unexpected data/state | `ManifestBuilder.manifest/0` is cached in `:persistent_term` | Use `build/1` for a variant manifest. Don't mutate the cached one |
 | `action_not_found` | Wire name not in `@entrypoints`, or `entrypoint/1` returned `nil` | Add it to `manifest_builder.ex` |

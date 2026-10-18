@@ -244,6 +244,76 @@ the manifest build"). The `list_posts_allow_author` row is
   (`test/manifest/decorator_test.exs` "a formatter returning a non-string raises
   naming formatter and field").
 
+## Untyped Structs Are Rejected
+
+A struct type the manifest has no field types for can't be selected, named or
+filtered, and every field would reach the client. `decorate/3` raises
+`AshRpc.Manifest.UntypedStructError` when a wire entrypoint can reach one.
+`AshRpc.Introspection.untyped_struct?/1` is the definition: `kind: :struct`,
+`fields: nil`, and an `instance_of` that is nil or not an Ash resource; or
+`fields: []` with no `instance_of` or `instance_of` a plain module (not an Ash
+type or resource): a struct the action returns would reach the client with all
+its own fields. An empty field list is typed only with `instance_of` an Ash
+type (an empty TypedStruct). In the manifest that is:
+
+- `:struct` with no constraints, or with `fields: []` and no `instance_of`
+  (`test/untyped_struct_test.exs` "a :struct with an empty field list and no
+  instance_of")
+- `:struct` with `instance_of` a plain `defstruct` module and no `fields`, or
+  `fields: []` (`test/untyped_struct_test.exs` "a plain struct instance_of
+  with an empty field list")
+- `:struct` with `instance_of` an Ash type (a TypedStruct or NewType):
+  `:struct` doesn't take fields from it, so the manifest has none
+- a NewType over any of these
+
+`:struct` with `instance_of` a resource is a `:resource` node, and `:struct`
+with non-empty `fields` (with or without `instance_of`) is a typed container;
+both pass.
+
+`AshRpc.Introspection.find_untyped_struct(type, lookups)` returns
+`{path, node}` for the first hit or `nil`. It follows array items (segment
+`[]`), the `fields` of maps, structs and keywords, tuple `element_types`,
+union members, `:type_ref` named types, and resource and embedded-resource
+nodes: their fields (attributes, calculations, aggregates, then each
+calculation's arguments) in name order, then their relationships in name
+order. A relationship is followed only to an exposed destination, since one
+to an unexposed resource is `unknown_field`; resource nodes reached by type
+are walked whatever their exposure. Each named type and resource is visited
+once, so recursive types terminate. `lookups` needs `:resource_lookup` and
+`:type_lookup` from a decorated manifest (an `%AshRpc.Runtime{}` works).
+`find_untyped_root(roots, lookups)` runs it over `{root, type, tag}` roots in
+order and returns `{[root | path], node, tag}` for the first hit; the
+decorator and extensions build their roots and errors on it.
+
+The decorator checks only wire entrypoints (those `entrypoint/1` returns a
+struct for), root by root, inputs first, through the public
+`Decorator.check_untyped_structs!(manifest_entrypoint, %AshRpc.Entrypoint{},
+lookups)`. It returns `:ok` or raises the error, and an extension calls it
+for entrypoints it serves off the wire (ones `entrypoint/1` returns `nil`
+for), with `lookups` from the decorated manifest
+(`AshRpc.Manifest.resource_lookup/1`, `type_lookup/1`). The roots:
+
+| Root | Checked when |
+|---|---|
+| `argument :name` / `attribute :name` | Every input; `attribute` for an accepted attribute of a non-generic action |
+| `returns` | Always (`nil` for CRUD actions) |
+| `<Resource> records` | Non-generic actions |
+| `metadata :name` | Metadata fields in `exposed_metadata_fields` |
+
+The message names the wire name, resource and action, the verb (`accepts` for
+inputs, `returns` otherwise), the struct (its `instance_of`, "`:struct`
+without constraints", plus the NewType it came through) and the path joined
+with ` → ` (`returns → session`). Then it lists the alternatives: an
+`Ash.TypedStruct`, a NewType over `:struct` with `fields`, `instance_of` an
+Ash resource, or an unconstrained `:map` converted in the action. An Ash-type
+`instance_of` gets "use it as the type" first. Extensions word their own
+errors with `UntypedStructError.details/2`.
+
+Tests: `test/untyped_struct_test.exs` "decoration rejects untyped structs",
+"check_untyped_structs!/3", "UntypedStructError", "typed and explicitly
+untyped shapes stay allowed";
+`test/introspection_test.exs` "untyped structs".
+
 ## The Output Formatter Is Fixed at Decoration
 
 `AshRpc.Runtime.new/2` reads the output formatter and vocabulary from
