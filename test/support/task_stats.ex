@@ -13,3 +13,13 @@ defmodule AshRpc.Test.TaskStats do
     field :average_duration, :float
   end
 end
+
+defmodule AshRpc.Test.EmptyStats do
+  @moduledoc false
+  # A TypedStruct with no fields: typed (an explicit empty field list), so
+  # decoration accepts it.
+  use Ash.TypedStruct
+
+  typed_struct do
+  end
+end

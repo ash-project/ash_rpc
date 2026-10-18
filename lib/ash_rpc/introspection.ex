@@ -334,6 +334,212 @@ defmodule AshRpc.Introspection do
 
   def resource_instance_of?(_), do: false
 
+  @typedoc "A step on a path through a type tree: a field, member or argument name, or `[]` for array items."
+  @type type_path_segment :: atom() | []
+
+  @doc """
+  True for a struct type the manifest has no field types for: `kind: :struct`
+  with `fields: nil` and an `instance_of` that is `nil` or not an Ash
+  resource. Such a value can't be selected, named or filtered.
+
+  An explicit empty field list (`fields: []`) is typed only when `instance_of`
+  is an Ash type (an empty TypedStruct) or an Ash resource. Without
+  `instance_of`, or with any other module (a plain `defstruct`), it is untyped:
+  a struct the action returns would reach the client with all its own fields.
+
+  A `:struct` whose `instance_of` is an Ash type (a TypedStruct or a NewType)
+  and has `fields: nil` counts too: `Ash.Type.Struct` doesn't take fields from
+  `instance_of`, so the manifest has none. Using that module as the type is
+  what carries its fields.
+
+  Decoration-time only: it may load the `instance_of` module to ask whether
+  it is an Ash type.
+
+  ## Examples
+
+      iex> AshRpc.Introspection.untyped_struct?(%Ash.Info.Manifest.Type{kind: :struct})
+      true
+
+      iex> AshRpc.Introspection.untyped_struct?(%Ash.Info.Manifest.Type{kind: :map})
+      false
+  """
+  @spec untyped_struct?(Ash.Info.Manifest.Type.t() | nil) :: boolean()
+  def untyped_struct?(%Ash.Info.Manifest.Type{kind: :struct, fields: nil, instance_of: inst}),
+    do: not ash_resource?(inst)
+
+  def untyped_struct?(%Ash.Info.Manifest.Type{kind: :struct, fields: [], instance_of: inst})
+      when is_atom(inst),
+      do: not ash_resource?(inst) and not ash_type_module?(inst)
+
+  def untyped_struct?(_), do: false
+
+  # `Ash.Type.ash_type?/1` doesn't load the module and raises and rescues for
+  # a plain struct, so check the export after loading it.
+  defp ash_type_module?(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :ash_type?, 0) and
+      module.ash_type?()
+  end
+
+  @doc """
+  Walks a manifest type tree and returns `{path, type}` for the first untyped
+  struct (`untyped_struct?/1`), or `nil` when there is none. `type` is the
+  offending node as the manifest has it, so its `instance_of` (or `module`)
+  names the struct.
+
+  The walk follows array items (path segment `[]`), the `fields` of maps,
+  structs and keywords, tuple `element_types`, union `members`, named types
+  (`:type_ref`, resolved with `named_type_definition/2`), and resource and
+  embedded-resource nodes. For a resource it walks the public fields the
+  manifest carries (attributes, calculations and aggregates, each field's type
+  and then its calculation arguments) in name order, then its relationships in
+  name order. A relationship is followed only when its destination is exposed
+  (`AshRpc.Manifest.Custom.exposed?/1`), because relationships to unexposed
+  resources can't be selected. Resource nodes reached by type are walked
+  whatever their exposure. Each named type and resource is visited once, so
+  recursive types terminate.
+
+  `lookups` is any map with `:resource_lookup` and `:type_lookup` (an
+  `%AshRpc.Runtime{}` qualifies). They must come from a decorated manifest, so
+  that relationship exposure is known. Only those lookups are read.
+  """
+  @spec find_untyped_struct(Ash.Info.Manifest.Type.t() | nil, %{
+          required(:resource_lookup) => map(),
+          required(:type_lookup) => map(),
+          optional(atom()) => term()
+        }) :: {[type_path_segment()], Ash.Info.Manifest.Type.t()} | nil
+  def find_untyped_struct(type, %{resource_lookup: _, type_lookup: _} = lookups) do
+    case walk_untyped(type, lookups, MapSet.new()) do
+      {:found, path, found} -> {path, found}
+      {:ok, _visited} -> nil
+    end
+  end
+
+  @doc """
+  Runs `find_untyped_struct/2` over `{root, type, tag}` roots in order and
+  returns `{[root | path], type, tag}` for the first that reaches an untyped
+  struct, or `nil`. `root` labels the place (such as `"returns"` or
+  `"argument :session"`); `tag` is carried through for the caller, such as
+  the verb for `AshRpc.Manifest.UntypedStructError`.
+  """
+  @spec find_untyped_root([{term(), Ash.Info.Manifest.Type.t() | nil, tag}], map()) ::
+          {list(), Ash.Info.Manifest.Type.t(), tag} | nil
+        when tag: term()
+  def find_untyped_root(roots, lookups) do
+    Enum.find_value(roots, fn {root, type, tag} ->
+      case find_untyped_struct(type, lookups) do
+        nil -> nil
+        {path, found} -> {[root | path], found, tag}
+      end
+    end)
+  end
+
+  defp walk_untyped(nil, _lookups, visited), do: {:ok, visited}
+
+  defp walk_untyped(%Ash.Info.Manifest.Type{} = type, lookups, visited) do
+    if untyped_struct?(type) do
+      {:found, [], type}
+    else
+      walk_untyped_children(type, lookups, visited)
+    end
+  end
+
+  defp walk_untyped(_other, _lookups, visited), do: {:ok, visited}
+
+  defp walk_untyped_children(
+         %Ash.Info.Manifest.Type{kind: :array, item_type: item},
+         lookups,
+         visited
+       ),
+       do: walk_untyped_segments([{[], item}], lookups, visited)
+
+  defp walk_untyped_children(
+         %Ash.Info.Manifest.Type{kind: :type_ref, module: module},
+         lookups,
+         visited
+       ) do
+    if MapSet.member?(visited, {:type, module}) do
+      {:ok, visited}
+    else
+      lookups.type_lookup
+      |> named_type_definition(module)
+      |> walk_untyped(lookups, MapSet.put(visited, {:type, module}))
+    end
+  end
+
+  defp walk_untyped_children(%Ash.Info.Manifest.Type{kind: kind} = type, lookups, visited)
+       when kind in [:resource, :embedded_resource] do
+    module = Ash.Info.Manifest.Type.effective_resource(type)
+    resource = Map.get(lookups.resource_lookup, module) || type.resource
+    walk_untyped_resource(module, resource, lookups, visited)
+  end
+
+  defp walk_untyped_children(%Ash.Info.Manifest.Type{} = type, lookups, visited) do
+    (List.wrap(type.fields) ++ List.wrap(type.element_types) ++ List.wrap(type.members))
+    |> Enum.map(fn %{name: name, type: child} -> {name, child} end)
+    |> walk_untyped_segments(lookups, visited)
+  end
+
+  defp walk_untyped_resource(_module, nil, _lookups, visited), do: {:ok, visited}
+
+  defp walk_untyped_resource(module, %Ash.Info.Manifest.Resource{} = resource, lookups, visited) do
+    if MapSet.member?(visited, {:resource, module}) do
+      {:ok, visited}
+    else
+      visited = MapSet.put(visited, {:resource, module})
+
+      field_steps =
+        resource.fields
+        |> Enum.sort_by(fn {name, _field} -> name end)
+        |> Enum.flat_map(fn {name, field} -> field_untyped_steps(name, field) end)
+
+      relationship_steps =
+        resource.relationships
+        |> Enum.sort_by(fn {name, _rel} -> name end)
+        |> Enum.filter(fn {_name, rel} -> exposed_destination?(rel, lookups) end)
+        |> Enum.map(fn {name, rel} ->
+          {name,
+           %Ash.Info.Manifest.Type{
+             kind: :resource,
+             module: rel.destination,
+             resource_module: rel.destination
+           }}
+        end)
+
+      walk_untyped_segments(field_steps ++ relationship_steps, lookups, visited)
+    end
+  end
+
+  defp field_untyped_steps(name, field) do
+    arguments =
+      field
+      |> Map.get(:arguments)
+      |> List.wrap()
+      |> Enum.map(fn %{name: arg_name, type: arg_type} -> {[name, arg_name], arg_type} end)
+
+    [{name, field.type} | arguments]
+  end
+
+  defp exposed_destination?(%{destination: destination}, lookups) do
+    lookups.resource_lookup
+    |> Map.get(destination)
+    |> AshRpc.Manifest.Custom.exposed?()
+  end
+
+  # Each step is `{segment, type}`; a segment that is a list of names is
+  # spliced into the path (a calculation argument's `[field, argument]`).
+  defp walk_untyped_segments(steps, lookups, visited) do
+    Enum.reduce_while(steps, {:ok, visited}, fn {segment, child}, {:ok, visited} ->
+      case walk_untyped(child, lookups, visited) do
+        {:found, path, found} -> {:halt, {:found, path_prefix(segment) ++ path, found}}
+        {:ok, visited} -> {:cont, {:ok, visited}}
+      end
+    end)
+  end
+
+  defp path_prefix([]), do: [[]]
+  defp path_prefix(names) when is_list(names), do: names
+  defp path_prefix(name), do: [name]
+
   @doc """
   Looks up an action in the runtime's action lookup and raises on miss.
 
@@ -352,6 +558,29 @@ defmodule AshRpc.Introspection do
     AshRpc.Manifest.Custom.action_return_classification(action) ||
       compute_return_classification(action, type_lookup)
   end
+
+  @doc """
+  True when `type` declares no shape, so its values are untyped data: an
+  unconstrained `:map` (no `fields`, or an empty list), `Ash.Type.Term`, an
+  array of either, or a named type defined as an unconstrained map. Untyped
+  data is sent exactly as the action produced it. Other `:term`-kind types
+  (`Ash.Type.Vector`, a NewType over `:term`, …) are typed: the manifest gives
+  their module, not their subtype.
+  """
+  @spec untyped_data_type?(Ash.Info.Manifest.Type.t() | nil, map()) :: boolean()
+  def untyped_data_type?(%Ash.Info.Manifest.Type{kind: :array, item_type: item}, type_lookup),
+    do: untyped_data_type?(item, type_lookup)
+
+  def untyped_data_type?(%Ash.Info.Manifest.Type{kind: :type_ref, module: module}, type_lookup),
+    do: untyped_data_type?(named_type_definition(type_lookup, module), type_lookup)
+
+  def untyped_data_type?(%Ash.Info.Manifest.Type{kind: :map} = type, _type_lookup),
+    do: Ash.Info.Manifest.Type.get_fields(type) == []
+
+  def untyped_data_type?(%Ash.Info.Manifest.Type{kind: :term, module: Ash.Type.Term}, _),
+    do: true
+
+  def untyped_data_type?(_type, _type_lookup), do: false
 
   @doc """
   Resolves a named type's full definition: from the type lookup first, then

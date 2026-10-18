@@ -64,4 +64,242 @@ defmodule AshRpc.IntrospectionTest do
     refute Introspection.ash_resource?(String)
     refute Introspection.ash_resource?(nil)
   end
+
+  describe "untyped structs" do
+    alias Ash.Info.Manifest.{Argument, Field, Relationship, Resource, Type}
+
+    @plain %Type{
+      kind: :struct,
+      name: "PlainSession",
+      module: Ash.Type.Struct,
+      instance_of: AshRpc.Test.PlainSession
+    }
+    @bare %Type{kind: :struct, name: "Struct", module: Ash.Type.Struct}
+    @string %Type{kind: :string, name: "String", module: Ash.Type.String}
+    @none %{resource_lookup: %{}, type_lookup: %{}}
+
+    defp resource(module, fields, rels \\ %{}, exposed? \\ true),
+      do: %Resource{
+        module: module,
+        fields: fields,
+        relationships: rels,
+        custom: %{ash_rpc: %{exposed: exposed?}}
+      }
+
+    defp attr(name, type), do: %Field{name: name, kind: :attribute, type: type}
+
+    test "untyped_struct?/1" do
+      assert Introspection.untyped_struct?(@plain)
+      assert Introspection.untyped_struct?(@bare)
+      # An empty field list types only an Ash type (an empty TypedStruct): without
+      # `instance_of`, or with a plain struct module, a returned struct's fields would leak.
+      assert Introspection.untyped_struct?(%Type{@bare | fields: []})
+      assert Introspection.untyped_struct?(%Type{@plain | fields: []})
+
+      refute Introspection.untyped_struct?(%Type{
+               @bare
+               | fields: [],
+                 instance_of: AshRpc.Test.EmptyStats
+             })
+
+      refute Introspection.untyped_struct?(%Type{
+               @bare
+               | fields: [],
+                 instance_of: AshRpc.Test.Post
+             })
+
+      refute Introspection.untyped_struct?(%Type{@bare | fields: [%{name: :a, type: @string}]})
+      refute Introspection.untyped_struct?(%Type{@plain | instance_of: AshRpc.Test.Post})
+      refute Introspection.untyped_struct?(%Type{kind: :map, module: Ash.Type.Map})
+      refute Introspection.untyped_struct?(%Type{kind: :term, module: Ash.Type.Term})
+      refute Introspection.untyped_struct?(nil)
+    end
+
+    test "a :struct whose instance_of is an Ash type is untyped and keeps instance_of" do
+      typed = %Type{@bare | name: "TaskStats", instance_of: AshRpc.Test.TaskStats}
+
+      assert Introspection.untyped_struct?(typed)
+
+      assert {[], %Type{instance_of: AshRpc.Test.TaskStats}} =
+               Introspection.find_untyped_struct(typed, @none)
+    end
+
+    test "find_untyped_root/2 returns the first root that reaches one, root prefixed" do
+      roots = [
+        {"argument :name", @string, "accepts"},
+        {"argument :sessions", %Type{kind: :array, item_type: @plain}, "accepts"},
+        {"returns", @bare, "returns"}
+      ]
+
+      assert Introspection.find_untyped_root(roots, @none) ==
+               {["argument :sessions", []], @plain, "accepts"}
+
+      assert Introspection.find_untyped_root([{"returns", nil, "returns"}], @none) == nil
+    end
+
+    test "the node itself, array items, typed fields, tuple elements and union members" do
+      assert Introspection.find_untyped_struct(@plain, @none) == {[], @plain}
+
+      assert Introspection.find_untyped_struct(%Type{kind: :array, item_type: @plain}, @none) ==
+               {[[]], @plain}
+
+      map = %Type{
+        kind: :map,
+        module: Ash.Type.Map,
+        fields: [%{name: :label, type: @string}, %{name: :session, type: @plain}]
+      }
+
+      assert Introspection.find_untyped_struct(map, @none) == {[:session], @plain}
+
+      tuple = %Type{
+        kind: :tuple,
+        module: Ash.Type.Tuple,
+        element_types: [%{name: :s, type: @bare}]
+      }
+
+      assert Introspection.find_untyped_struct(tuple, @none) == {[:s], @bare}
+
+      union = %Type{
+        kind: :union,
+        module: Ash.Type.Union,
+        members: [%{name: :label, type: @string}, %{name: :session, type: @plain}]
+      }
+
+      assert Introspection.find_untyped_struct(union, @none) == {[:session], @plain}
+
+      clean = %Type{kind: :array, item_type: %Type{map | fields: [%{name: :l, type: @string}]}}
+      assert Introspection.find_untyped_struct(clean, @none) == nil
+    end
+
+    test "named types, and recursive named types terminate" do
+      named = %Type{@plain | module: MyApp.SessionType}
+      lookups = %{@none | type_lookup: %{MyApp.SessionType => named}}
+      ref = %Type{kind: :type_ref, module: MyApp.SessionType}
+      assert Introspection.find_untyped_struct(ref, lookups) == {[], named}
+
+      tree_ref = %Type{kind: :type_ref, module: MyApp.Tree}
+
+      tree = %Type{
+        kind: :map,
+        module: MyApp.Tree,
+        fields: [
+          %{name: :label, type: @string},
+          %{name: :children, type: %Type{kind: :array, item_type: tree_ref}}
+        ]
+      }
+
+      tree_lookups = %{@none | type_lookup: %{MyApp.Tree => tree}}
+      assert Introspection.find_untyped_struct(tree_ref, tree_lookups) == nil
+    end
+
+    test "resource fields, calculation arguments, exposed relationships, cycles" do
+      calc = %Field{
+        name: :score,
+        kind: :calculation,
+        type: @string,
+        arguments: [%Argument{name: :token, type: @plain}]
+      }
+
+      a = resource(MyApp.A, %{score: calc})
+      node = %Type{kind: :resource, module: MyApp.A, resource_module: MyApp.A}
+
+      assert Introspection.find_untyped_struct(node, %{@none | resource_lookup: %{MyApp.A => a}}) ==
+               {[:score, :token], @plain}
+
+      b = resource(MyApp.B, %{session: attr(:session, @plain)})
+      rel = %Relationship{name: :bs, cardinality: :many, destination: MyApp.B}
+      a = resource(MyApp.A, %{}, %{bs: rel})
+      lookups = %{@none | resource_lookup: %{MyApp.A => a, MyApp.B => b}}
+      assert Introspection.find_untyped_struct(node, lookups) == {[:bs, :session], @plain}
+
+      unexposed = %{
+        lookups
+        | resource_lookup: %{MyApp.A => a, MyApp.B => resource(MyApp.B, b.fields, %{}, false)}
+      }
+
+      assert Introspection.find_untyped_struct(node, unexposed) == nil
+
+      back = %Relationship{name: :a, cardinality: :one, destination: MyApp.A}
+
+      cycle = %{
+        @none
+        | resource_lookup: %{MyApp.A => a, MyApp.B => resource(MyApp.B, %{}, %{a: back})}
+      }
+
+      assert Introspection.find_untyped_struct(node, cycle) == nil
+    end
+
+    test "fields are walked in name order" do
+      # More than 32 keys, so the map itself iterates in hash order.
+      names = for i <- 10..49, do: String.to_atom("f#{i}")
+      fields = Map.new(names, &{&1, attr(&1, @plain)})
+      lookups = %{@none | resource_lookup: %{MyApp.A => resource(MyApp.A, fields)}}
+      node = %Type{kind: :resource, module: MyApp.A, resource_module: MyApp.A}
+      assert Introspection.find_untyped_struct(node, lookups) == {[:f10], @plain}
+    end
+
+    test "embedded resource nodes, missing resources and nil field types" do
+      emb =
+        resource(MyApp.E, %{session: attr(:session, @plain), note: attr(:note, nil)}, %{}, false)
+
+      node = %Type{kind: :embedded_resource, module: MyApp.E, resource_module: MyApp.E}
+
+      assert Introspection.find_untyped_struct(node, %{@none | resource_lookup: %{MyApp.E => emb}}) ==
+               {[:session], @plain}
+
+      assert Introspection.find_untyped_struct(node, @none) == nil
+      assert Introspection.find_untyped_struct(nil, @none) == nil
+    end
+
+    test "a standalone embedded entry falls back to its own resource definition" do
+      emb = resource(MyApp.E, %{session: attr(:session, @plain)}, %{}, false)
+
+      node = %Type{
+        kind: :embedded_resource,
+        module: MyApp.E,
+        resource_module: MyApp.E,
+        resource: emb
+      }
+
+      assert Introspection.find_untyped_struct(node, @none) == {[:session], @plain}
+    end
+  end
+
+  describe "untyped data" do
+    alias Ash.Info.Manifest.Type
+
+    @map %Type{kind: :map, name: "Map", module: Ash.Type.Map}
+    @term %Type{kind: :term, name: "Term", module: Ash.Type.Term}
+    @str %Type{kind: :string, name: "String", module: Ash.Type.String}
+
+    test "untyped_data_type?/2: unconstrained maps, Ash.Type.Term, arrays and named types of them" do
+      shaped = %Type{@map | fields: [%{name: :a, type: @str}]}
+
+      lookup = %{
+        MyApp.Blob => %Type{@map | module: MyApp.Blob},
+        MyApp.Shaped => %Type{shaped | module: MyApp.Shaped}
+      }
+
+      for type <- [
+            @map,
+            %Type{@map | fields: []},
+            @term,
+            %Type{kind: :array, item_type: @map},
+            %Type{kind: :array, item_type: @term},
+            %Type{kind: :type_ref, module: MyApp.Blob}
+          ],
+          do: assert(Introspection.untyped_data_type?(type, lookup), inspect(type))
+
+      for type <- [
+            shaped,
+            %Type{kind: :type_ref, module: MyApp.Shaped},
+            %Type{kind: :term, name: "Vector", module: Ash.Type.Vector},
+            %Type{kind: :struct, name: "Struct", module: Ash.Type.Struct},
+            %Type{kind: :array, item_type: @str},
+            @str,
+            nil
+          ],
+          do: refute(Introspection.untyped_data_type?(type, lookup), inspect(type))
+    end
+  end
 end
