@@ -104,7 +104,7 @@ formatter.
 | **Behaviours** | `lib/ash_rpc/profile.ex`, `lib/ash_rpc/mapping_source.ex`, `lib/ash_rpc/error_handler.ex`, `lib/ash_rpc/default_error_handler.ex` (the default `error_handler/1` result) |
 | **Runtime / entrypoint / context / request** | `lib/ash_rpc/runtime.ex`, `entrypoint.ex`, `context.ex`, `request.ex` |
 | **Manifest decoration** | `lib/ash_rpc/manifest/decorator.ex` (pure: manifest in, manifest out) |
-| **`custom.ash_rpc` readers, lookups, `redecorate/2`** | `lib/ash_rpc/manifest.ex`, `lib/ash_rpc/manifest/custom.ex` |
+| **`custom.ash_rpc` readers, lookups, `redecorate/2`** | `lib/ash_rpc/manifest.ex`, `lib/ash_rpc/manifest/custom.ex` (reverse maps, plus the forward `field_names/1`, `type_field_names/1`, `type_member_names/1`, `entrypoint_metadata_field_names/1`) |
 | **Name collisions** | `lib/ash_rpc/manifest/name_collision_error.ex` |
 | **Pipeline orchestration** | `lib/ash_rpc/pipeline.ex` |
 | **Manifest introspection (`get_action!/3`)** | `lib/ash_rpc/introspection.ex` |
@@ -120,6 +120,7 @@ formatter.
 | **Load-restriction normalization** | `lib/ash_rpc/load_restrictions.ex` (`normalize/1` in `parse_request`, `check!/2` from the field selector) |
 | **Error protocol + impls** | `lib/ash_rpc/error.ex` |
 | **Error pipeline** | `lib/ash_rpc/errors.ex` (Ash errors), `error_builder.ex` (pipeline reasons), `error_formatter.ex` |
+| **Client names in error `path` / `fields`** | `lib/ash_rpc/client_path.ex` (walks a path through the decorated manifest) |
 | **Transports (optional deps)** | `lib/ash_rpc/plug.ex`, `lib/ash_rpc/channel.ex` |
 
 ### Test Fixtures (`test/support/`)

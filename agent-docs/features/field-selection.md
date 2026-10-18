@@ -74,6 +74,12 @@ Flow:
    | `{:other, %{kind: :any}}` (generic action without a typed return) | names passed through to the template |
    | anything else | primitive: any nested selection is `invalid_field_selection` |
 
+   A generic action's `return_classification`
+   (`Introspection.return_classification/2`, stored at decoration) agrees with
+   this dispatch: a `:struct` with `fields` and no `instance_of` classifies as
+   `:typed_map` / `:array_of_typed_map`, so it needs a `fields` selection like
+   a typed map (`test/generic_returns_test.exs`, `test/introspection_test.exs`).
+
    `:type_ref` types are resolved through `runtime.type_lookup` before
    dispatch. Resource fields are looked up in the manifest resource's `fields`
    map (attributes, calculations and aggregates share it), then in
