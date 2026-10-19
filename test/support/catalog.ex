@@ -320,6 +320,77 @@ defmodule AshRpc.Test.Catalog do
       run fn _input, _context -> {:ok, %{label: "root", children: []}} end
     end
 
+    # Composite custom types (see composite_types.ex). Not wire entrypoints:
+    # decoration rejects the first seven, and the rest only show what stays allowed
+    # (apart from `composite_new_type_plain_argument` and `composite_deepening`).
+    action :composite_plain_result, AshRpc.Test.PlainPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_typed_struct_instance_of, AshRpc.Test.TypedStructPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_storage_key, AshRpc.Test.StoredPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_plain_list, AshRpc.Test.PlainPoints do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_nested, AshRpc.Test.OuterPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_new_type, AshRpc.Test.PlainPointNewType do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_argument, :boolean do
+      argument :pair, AshRpc.Test.PlainPoint
+      run fn _input, _context -> {:ok, true} end
+    end
+
+    action :composite_typed_struct_entry, AshRpc.Test.TaskStatsPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :opaque_custom_result, AshRpc.Test.Palette do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_disabled, AshRpc.Test.DisabledPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :typed_struct_fields_custom, AshRpc.Test.TypedStructFieldsPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_recursive, AshRpc.Test.RecursivePoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :composite_new_type_plain_argument, :boolean do
+      argument :p, AshRpc.Test.ConstrainedPointNewType, constraints: [plain?: true]
+      run fn _input, _context -> {:ok, true} end
+    end
+
+    action :composite_new_type_clean_argument, :boolean do
+      argument :p, AshRpc.Test.ConstrainedPointNewType, constraints: [plain?: false]
+      run fn _input, _context -> {:ok, true} end
+    end
+
+    action :composite_new_type_default_argument, :boolean do
+      argument :p, AshRpc.Test.ConstrainedPointNewType
+      run fn _input, _context -> {:ok, true} end
+    end
+
+    action :composite_deepening, AshRpc.Test.DeepeningPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
     # A read whose metadata is an untyped struct.
     read :read_with_session_meta do
       metadata :session, :struct, constraints: [instance_of: PlainSession]

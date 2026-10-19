@@ -15,6 +15,7 @@ defmodule AshRpc.Test.Domain do
     resource AshRpc.Test.Ledger
     resource AshRpc.Test.Note
     resource AshRpc.Test.Place
+    resource AshRpc.Test.PointLog
     resource AshRpc.Test.NoteReply
     resource AshRpc.Test.Post
     resource AshRpc.Test.PostTag

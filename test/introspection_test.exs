@@ -263,6 +263,141 @@ defmodule AshRpc.IntrospectionTest do
 
       assert Introspection.find_untyped_struct(node, @none) == {[:session], @plain}
     end
+
+    defp custom(module, constraints \\ []),
+      do: %Type{kind: :unknown, name: inspect(module), module: module, constraints: constraints}
+
+    test "composite custom types: entries by name, storage keys, arrays, nested custom types" do
+      assert {[:point], %Type{instance_of: AshRpc.Test.PlainSession}} =
+               Introspection.find_untyped_struct(custom(AshRpc.Test.PlainPoint), @none)
+
+      assert {[:point], _} =
+               Introspection.find_untyped_struct(custom(AshRpc.Test.StoredPoint), @none)
+
+      assert {[:points, []], _} =
+               Introspection.find_untyped_struct(custom(AshRpc.Test.PlainPoints), @none)
+
+      assert {[:outer, :point], _} =
+               Introspection.find_untyped_struct(custom(AshRpc.Test.OuterPoint), @none)
+
+      assert {[:point], %Type{instance_of: AshRpc.Test.TaskStats}} =
+               Introspection.find_untyped_struct(custom(AshRpc.Test.TypedStructPoint), @none)
+
+      wrapped = %Type{
+        kind: :map,
+        name: "Map",
+        module: Ash.Type.Map,
+        fields: [%{name: :wrap, type: custom(AshRpc.Test.PlainPoint)}]
+      }
+
+      assert {[:wrap, :point], _} = Introspection.find_untyped_struct(wrapped, @none)
+    end
+
+    test "a NewType over a composite custom type, through :type_ref" do
+      ref = %Type{
+        kind: :type_ref,
+        name: "PlainPointNewType",
+        module: AshRpc.Test.PlainPointNewType
+      }
+
+      assert {[:point], %Type{instance_of: AshRpc.Test.PlainSession}} =
+               Introspection.find_untyped_struct(ref, @none)
+    end
+
+    test "a NewType over a composite custom type uses the constraints of its :type_ref" do
+      ref = fn constraints ->
+        %Type{
+          kind: :type_ref,
+          name: "ConstrainedPointNewType",
+          module: AshRpc.Test.ConstrainedPointNewType,
+          constraints: constraints
+        }
+      end
+
+      assert {[:point], %Type{instance_of: AshRpc.Test.PlainSession}} =
+               Introspection.find_untyped_struct(ref.(plain?: true), @none)
+
+      assert Introspection.find_untyped_struct(ref.(plain?: false), @none) == nil
+      assert Introspection.find_untyped_struct(ref.([]), @none) == nil
+
+      # A second use of the same NewType with other constraints is still walked.
+      pair = %Type{
+        kind: :map,
+        name: "Map",
+        module: Ash.Type.Map,
+        fields: [
+          %{name: :clean, type: ref.(plain?: false)},
+          %{name: :plain, type: ref.(plain?: true)}
+        ]
+      }
+
+      assert {[:plain, :point], _} = Introspection.find_untyped_struct(pair, @none)
+    end
+
+    @tag timeout: 10_000
+    test "a custom type that nests itself with changing constraints raises" do
+      assert_raise ArgumentError,
+                   "AshRpc.Test.DeepeningPoint nests itself more than 32 levels deep with " <>
+                     "changing constraints, so its composite_types/1 entries can't be walked " <>
+                     "to an end",
+                   fn ->
+                     Introspection.find_untyped_struct(custom(AshRpc.Test.DeepeningPoint), @none)
+                   end
+    end
+
+    test "the nesting limit counts along the path, not across siblings" do
+      siblings = %Type{
+        kind: :map,
+        name: "Map",
+        module: Ash.Type.Map,
+        fields:
+          for i <- 1..40 do
+            %{name: :"p#{i}", type: custom(AshRpc.Test.ConstrainedPoint, plain?: false, tag: i)}
+          end
+      }
+
+      assert Introspection.find_untyped_struct(siblings, @none) == nil
+    end
+
+    test "custom types that aren't composite, aren't Ash types or can't be loaded are opaque" do
+      for type <- [
+            custom(AshRpc.Test.TaskStatsPoint),
+            custom(AshRpc.Test.Palette),
+            custom(AshRpc.Test.DisabledPoint),
+            custom(AshRpc.Test.TypedStructFieldsPoint),
+            custom(String),
+            custom(AshRpc.Test.NoSuchType),
+            %Type{kind: :unknown, name: "Unknown", module: nil}
+          ],
+          do: assert(Introspection.find_untyped_struct(type, @none) == nil, inspect(type))
+    end
+
+    @tag timeout: 10_000
+    test "the custom-type visited key includes constraints; recursive custom types terminate" do
+      # Same module twice: a key without constraints would skip the second entry.
+      pair = %Type{
+        kind: :map,
+        name: "Map",
+        module: Ash.Type.Map,
+        fields: [
+          %{name: :clean, type: custom(AshRpc.Test.ConstrainedPoint, plain?: false)},
+          %{name: :plain, type: custom(AshRpc.Test.ConstrainedPoint, plain?: true)}
+        ]
+      }
+
+      assert {[:plain, :point], %Type{instance_of: AshRpc.Test.PlainSession}} =
+               Introspection.find_untyped_struct(pair, @none)
+
+      assert Introspection.find_untyped_struct(custom(AshRpc.Test.RecursivePoint), @none) == nil
+    end
+
+    test "malformed composite entries are skipped; a raising callback raises" do
+      assert Introspection.find_untyped_struct(custom(AshRpc.Test.MalformedPoint), @none) == nil
+
+      assert_raise ArgumentError, "composite?/1 raised", fn ->
+        Introspection.find_untyped_struct(custom(AshRpc.Test.RaisingPoint), @none)
+      end
+    end
   end
 
   describe "untyped data" do

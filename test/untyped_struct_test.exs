@@ -240,6 +240,81 @@ defmodule AshRpc.UntypedStructTest do
                |> ManifestBuilder.generate!()
                |> Decorator.decorate(MappingSource)
     end
+
+    test "a composite custom type's entry that is a plain struct" do
+      error = assert_raise UntypedStructError, fn -> decorate([:composite_plain_result]) end
+
+      assert error.message =~
+               ~s(Entrypoint "composite_plain_result" \(AshRpc.Test.Catalog, action :composite_plain_result\) ) <>
+                 "returns an untyped struct, AshRpc.Test.PlainSession, at returns → point.\n"
+
+      assert error.path == ["returns", :point]
+      assert error.struct_module == AshRpc.Test.PlainSession
+    end
+
+    test "a composite entry with `instance_of` a TypedStruct" do
+      error =
+        assert_raise UntypedStructError, fn -> decorate([:composite_typed_struct_instance_of]) end
+
+      assert error.message =~
+               "returns an untyped struct, AshRpc.Test.TaskStats, at returns → point.\n"
+
+      assert error.message =~ "AshRpc.Test.TaskStats is an Ash type: use it as the type instead"
+    end
+
+    test "a composite entry with a storage key is named by its name" do
+      error = assert_raise UntypedStructError, fn -> decorate([:composite_storage_key]) end
+      assert error.path == ["returns", :point]
+      refute error.message =~ "point_key"
+    end
+
+    test "an array of plain structs in a composite entry" do
+      error = assert_raise UntypedStructError, fn -> decorate([:composite_plain_list]) end
+      assert error.path == ["returns", :points, []]
+      assert error.message =~ "at returns → points → []."
+    end
+
+    test "a composite custom type inside a composite custom type" do
+      error = assert_raise UntypedStructError, fn -> decorate([:composite_nested]) end
+      assert error.path == ["returns", :outer, :point]
+    end
+
+    test "a NewType over a composite custom type, through :type_ref" do
+      error = assert_raise UntypedStructError, fn -> decorate([:composite_new_type]) end
+      assert error.path == ["returns", :point]
+      # The offending struct is named, not the custom type around it.
+      assert error.message =~
+               "returns an untyped struct, AshRpc.Test.PlainSession, at returns → point.\n"
+    end
+
+    test "a NewType over a composite custom type, with constraints where it's used" do
+      error =
+        assert_raise UntypedStructError, fn -> decorate([:composite_new_type_plain_argument]) end
+
+      assert error.path == ["argument :p", :point]
+
+      assert error.message =~
+               "accepts an untyped struct, AshRpc.Test.PlainSession, at argument :p → point."
+    end
+
+    test "a composite custom type as an argument" do
+      error = assert_raise UntypedStructError, fn -> decorate([:composite_argument]) end
+
+      assert error.message =~
+               "accepts an untyped struct, AshRpc.Test.PlainSession, at argument :pair → point."
+
+      assert error.path == ["argument :pair", :point]
+    end
+
+    test "a composite attribute of the records of a read" do
+      error =
+        assert_raise UntypedStructError, fn ->
+          decorate_rows([{AshRpc.Test.PointLog, :read, []}])
+        end
+
+      assert error.path == ["AshRpc.Test.PointLog records", :location, :point]
+      assert error.message =~ "at AshRpc.Test.PointLog records → location → point."
+    end
   end
 
   describe "check_untyped_structs!/3" do
@@ -400,6 +475,40 @@ defmodule AshRpc.UntypedStructTest do
 
     test "a recursive named type terminates" do
       assert %Ash.Info.Manifest{} = decorate([:tree_result])
+    end
+
+    test "a composite entry typed as the TypedStruct itself" do
+      assert %Ash.Info.Manifest{} = decorate([:composite_typed_struct_entry])
+    end
+
+    test "a custom type without composite callbacks is opaque" do
+      assert %Ash.Info.Manifest{} = decorate([:opaque_custom_result])
+    end
+
+    test "composite_types/1 isn't read when composite?/1 is false" do
+      assert %Ash.Info.Manifest{} = decorate([:composite_disabled])
+    end
+
+    test "typed_struct_fields/0 isn't read" do
+      # Not an Ash callback: a custom type that describes itself only through it is opaque.
+      assert %Ash.Info.Manifest{} = decorate([:typed_struct_fields_custom])
+    end
+
+    @tag timeout: 10_000
+    test "a recursive composite custom type terminates" do
+      assert %Ash.Info.Manifest{} = decorate([:composite_recursive])
+    end
+
+    test "a NewType over a composite custom type whose constraints keep it typed" do
+      assert %Ash.Info.Manifest{} = decorate([:composite_new_type_clean_argument])
+      assert %Ash.Info.Manifest{} = decorate([:composite_new_type_default_argument])
+    end
+
+    @tag timeout: 10_000
+    test "a custom type that nests itself with changing constraints raises" do
+      assert_raise ArgumentError, ~r/AshRpc.Test.DeepeningPoint nests itself more than 32/, fn ->
+        decorate([:composite_deepening])
+      end
     end
   end
 

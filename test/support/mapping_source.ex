@@ -21,6 +21,7 @@ defmodule AshRpc.Test.MappingSource do
     AshRpc.Test.Note,
     AshRpc.Test.NoteReply,
     AshRpc.Test.Place,
+    AshRpc.Test.PointLog,
     AshRpc.Test.Post,
     AshRpc.Test.PostSettings,
     AshRpc.Test.PostTag,
