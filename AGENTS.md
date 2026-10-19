@@ -198,6 +198,8 @@ from an existing file of the same kind. Formats without comment syntax need a
   with no field types: `fields: nil`, or `fields: []` without an `instance_of`
   that is an Ash type or resource (none, or a plain `defstruct`). Only an
   empty TypedStruct (or another Ash type) passes with `fields: []`.
+  Composite custom types (`composite?/1` true) are walked through their
+  `composite_types/1` entries. Other custom types are opaque.
   Extensions check entrypoints they serve themselves with
   `Decorator.check_untyped_structs!/3`, and their own types with
   `AshRpc.Introspection.find_untyped_struct/2` (or `find_untyped_root/2` over
@@ -256,7 +258,7 @@ stacktrace and returned as `unknown_error`.
 |-------|-------|----------|
 | "has no custom.ash_rpc decoration" `ArgumentError` | Raw `Ash.Info.Manifest` passed to the runtime | Decorate with `AshRpc.Manifest.Decorator.decorate/3` (or use the fixture `ManifestBuilder`) |
 | `AshRpc.Manifest.NameCollisionError` | Two fields/args map to the same client name | Fix `field_names` / `argument_names` overrides |
-| `AshRpc.Manifest.UntypedStructError` | A wire entrypoint accepts or returns a `:struct` without `fields` (a plain `defstruct` `instance_of`, `instance_of` an Ash type, or no constraints), or with `fields: []` and no Ash-type `instance_of` (none, or a plain one), anywhere in its exposed graph | Use an `Ash.TypedStruct`, a NewType over `:struct` with `fields`, `instance_of` a resource, or an unconstrained `:map` built in the action. For an Ash-type `instance_of`, use the type itself |
+| `AshRpc.Manifest.UntypedStructError` | A wire entrypoint accepts or returns a `:struct` without `fields` (a plain `defstruct` `instance_of`, `instance_of` an Ash type, or no constraints), or with `fields: []` and no Ash-type `instance_of` (none, or a plain one), anywhere in its exposed graph, including a composite custom type's `composite_types/1` entries | Use an `Ash.TypedStruct`, a NewType over `:struct` with `fields`, `instance_of` a resource, or an unconstrained `:map` built in the action. For an Ash-type `instance_of`, use the type itself; in a composite type, change the entry |
 | `Protocol.UndefinedError` "Jason.Encoder not implemented for X" (a 500 from `AshRpc.Plug`) | Untyped data (an unconstrained `:map` / `:term` return, attribute or field) holds a struct, tuple, keyword list, `Duration` or `ForbiddenField`; it is sent as produced | Convert it in the action, or declare the type (the resource, an `Ash.TypedStruct`, a typed map). The error message `inspect`s the value, so mark secret attributes `sensitive?: true` |
 | Formatter change in a test has no effect | The output formatter is fixed at decoration time | `ManifestBuilder.build(output_formatter: …)` or `AshRpc.Manifest.redecorate/2`, then pass `manifest:` |
 | Test sees unexpected data/state | `ManifestBuilder.manifest/0` is cached in `:persistent_term` | Use `build/1` for a variant manifest. Don't mutate the cached one |

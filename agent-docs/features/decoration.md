@@ -265,6 +265,8 @@ type (an empty TypedStruct). In the manifest that is:
 - `:struct` with `instance_of` an Ash type (a TypedStruct or NewType):
   `:struct` doesn't take fields from it, so the manifest has none
 - a NewType over any of these
+- any of these as an entry of a composite custom type's `composite_types/1`
+  (a `use Ash.Type` module whose `composite?/1` is true), at any depth
 
 `:struct` with `instance_of` a resource is a `:resource` node, and `:struct`
 with non-empty `fields` (with or without `instance_of`) is a typed container;
@@ -278,8 +280,22 @@ nodes: their fields (attributes, calculations, aggregates, then each
 calculation's arguments) in name order, then their relationships in name
 order. A relationship is followed only to an exposed destination, since one
 to an unexposed resource is `unknown_field`; resource nodes reached by type
-are walked whatever their exposure. Each named type and resource is visited
-once, so recursive types terminate. `lookups` needs `:resource_lookup` and
+are walked whatever their exposure. A custom `use Ash.Type` node
+(`kind: :unknown` with a module) is walked only when its
+`composite?(constraints)` is true: each `composite_types(constraints)` entry
+is resolved with `Ash.Info.Manifest.Generator.TypeResolver.resolve/2` and
+walked under its name, not its storage key (`returns → point`). Named types an
+entry references resolve from the type lookup, or from the module when the
+manifest doesn't carry them. Custom types that aren't composite are opaque,
+like `:term`. That includes types that describe their fields only through a
+non-Ash function, so a plain struct such a type returns isn't detected. The
+callbacks aren't rescued: one that raises fails decoration. A `:type_ref` to a
+NewType over a custom type calls the NewType's callbacks with the constraints
+on the ref, the ones given where it's used, as Ash does. Each named type and
+resource is visited once, and each custom type once per constraints, so
+recursive types terminate. A custom type that keeps nesting itself with new
+constraints raises `ArgumentError` once it is 32 levels deep in itself along
+one path. `lookups` needs `:resource_lookup` and
 `:type_lookup` from a decorated manifest (an `%AshRpc.Runtime{}` works).
 `find_untyped_root(roots, lookups)` runs it over `{root, type, tag}` roots in
 order and returns `{[root | path], node, tag}` for the first hit; the
