@@ -46,7 +46,7 @@ use, so selection, extraction and formatting recurse the same way.
 | `{:union, type}` | `kind: :union` | Member-specific; see [Union input](#union-input) |
 | `{:typed_struct, type}` | `:struct`/`:map`/`:tuple`/`:keyword` with type field-name overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: the type's `custom.ash_rpc` override pair, falling back to `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the mapping source's `type_field_names/1`) |
 | `{:fields, type}` | `:struct`/`:map`/`:tuple`/`:keyword` without overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: the formatter. A type with no `fields` (an unconstrained map) passes through untouched |
-| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats) and non-builtin custom types with `:map` storage, which declare no field names: their keys go out as strings, unformatted, and come in as sent (`test/typed_field_selection_test.exs` "a custom map-storage value round-trips its keys verbatim") |
+| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats) and undeclared non-builtin custom types with `:map` storage: their keys go out as strings, unformatted, and come in as sent. A custom type with declared fields is a `:type_ref` to a typed map instead (see [decoration](decoration.md#declared-custom-types)) |
 
 Also handled before classification:
 

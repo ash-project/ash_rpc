@@ -63,6 +63,8 @@ defmodule MyExt.MappingSource do
   def field_names(_resource), do: %{}          # overrides only
   def argument_names(_resource, _action), do: %{}
   def type_field_names(_type), do: nil
+  def custom_type_fields(_type), do: nil       # optional: field specs for a custom type
+  def custom_type_fields_hint(_type), do: nil  # optional: text for the undeclared-type error
   def entrypoint(%Ash.Info.Manifest.Entrypoint{} = e),
     do: %AshRpc.Entrypoint{name: "...", resource: e.resource, action: e.action.name}
 end
@@ -104,6 +106,7 @@ formatter.
 | **Behaviours** | `lib/ash_rpc/profile.ex`, `lib/ash_rpc/mapping_source.ex`, `lib/ash_rpc/error_handler.ex`, `lib/ash_rpc/default_error_handler.ex` (the default `error_handler/1` result) |
 | **Runtime / entrypoint / context / request** | `lib/ash_rpc/runtime.ex`, `entrypoint.ex`, `context.ex`, `request.ex` |
 | **Manifest decoration** | `lib/ash_rpc/manifest/decorator.ex` (pure: manifest in, manifest out) |
+| **Declared custom types (decoration pass)** | `lib/ash_rpc/manifest/custom_types.ex` (collect, definitions, fixpoint, staging; called from `decorate/3`) |
 | **`custom.ash_rpc` readers, lookups, `redecorate/2`** | `lib/ash_rpc/manifest.ex`, `lib/ash_rpc/manifest/custom.ex` (reverse maps, plus the forward `field_names/1`, `type_field_names/1`, `type_member_names/1`, `entrypoint_metadata_field_names/1`) |
 | **Name collisions / untyped structs** | `lib/ash_rpc/manifest/name_collision_error.ex`, `lib/ash_rpc/manifest/untyped_struct_error.ex` |
 | **Pipeline orchestration** | `lib/ash_rpc/pipeline.ex` |
@@ -188,6 +191,12 @@ from an existing file of the same kind. Formats without comment syntax need a
   per request. The runtime never calls the mapping source. The one exception is
   `type_field_names/1`, the fallback for types missing from the type lookup
   or carrying no decorated overrides.
+- Declared custom types: a custom `use Ash.Type` module for which
+  `custom_type_fields/1` (or `decorate/3`'s `custom_type_fields:` option)
+  returns field specs gets a named `kind: :map` definition in
+  `manifest.types` (`custom.ash_rpc.custom_type: true`), and every use becomes
+  a `:type_ref` to it. Fields are per module; the runtime treats it as a typed
+  map. `:extra_types` declares types used only outside the manifest.
 - Client names are resolved only by exact lookup (`AshRpc.ClientNames`);
   nothing parses a client string with a formatter. Extensions decorate types
   that never enter the manifest with `Decorator.decorate_type/3`.

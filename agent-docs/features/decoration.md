@@ -42,6 +42,16 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 | `argument_names/2` | `%{atom() => String.t()}` | Per-action argument overrides `(resource, action)` |
 | `type_field_names/1` | map or `nil` | Field overrides for a type module; `nil` = none |
 | `entrypoint/1` | `%AshRpc.Entrypoint{}` or `nil` | Turns an `%Ash.Info.Manifest.Entrypoint{}` into a wire action; `nil` keeps it off the wire |
+| `custom_type_fields/1` (optional) | `[field_spec()]` or `nil` | Fields for a custom `use Ash.Type` module (a `kind: :unknown` node); see [Declared Custom Types](#declared-custom-types) |
+| `custom_type_fields_hint/1` (optional) | `String.t()` or `nil` | Extra text for the error about a map-like custom type without fields |
+
+A `field_spec()` is `{name, opts}` in the format of a typed map's `fields`
+constraint: `type:` (required), `constraints:`, `allow_nil?:` (default
+`true`), `description:`, plus `client_name:`, the field's client name, which
+wins over `type_field_names/1` and the formatter. `decorate/3`'s
+`custom_type_fields:` option (a function of the module) replaces the callback,
+for an extension whose declarations need state the bare mapping source can't
+reach. Without either, nothing is declared.
 
 `formatter()` is `:camel_case | :snake_case | :pascal_case | {module, fun} |
 {module, fun, extra_args}` (`@type formatter` in `mapping_source.ex`). A custom
@@ -108,6 +118,7 @@ default for undecorated structs):
 | Unexposed domain resource taken as a struct input (an entrypoint action input of `kind: :resource`, directly, in an array, or nested in a typed container, union or named type) | The same formatter-only names and `exposed: false` as an unexposed embedded resource | As above |
 | Many-cardinality relationship to an exposed destination | `pagination` (`:offset`, `:keyset`, `:mixed`, `:none`) and `read_action` (the relationship's, else the destination's primary read) | `relationship_pagination/1`, `relationship_read_action/1` |
 | Type with named fields (typed map, keyword, tuple, TypedStruct), in `manifest.types` or inline on a field, argument, input, return or metadata | `field_names` and their reverse `client_field_names`; plus the overrides and their reverse when `type_field_names/1` maps the module | `type_field_names/1`, `type_client_field_names/1`, `type_field_name_overrides/1`, `type_field_name_overrides_pair/1` |
+| Declared custom type's definition in `manifest.types` (see [Declared Custom Types](#declared-custom-types)) | The typed-map names above, plus `custom_type: true`; `client_name:` values from the field specs are its `field_name_overrides` | `custom_type?/1`, plus the type accessors above |
 | Union type | `client_member_names` (`%{client => member}`) | `type_client_member_names/1`; `type_member_names/1` is the forward map (`%{member => client}`) |
 | Every entrypoint action | `expected_input_keys` (client key → input name), `input_field_types`, `return_classification` | `action_expected_input_keys/1`, `action_input_field_types/1`, `action_return_classification/1` |
 | Wire entrypoint (`%AshRpc.Entrypoint{}`) | `client_metadata_field_names` (`%{client => field}`) | `entrypoint_metadata_field_names/1` (the forward map, `%{field => client}`) |
@@ -243,6 +254,53 @@ the manifest build"). The `list_posts_allow_author` row is
   `ArgumentError` naming the formatter and field
   (`test/manifest/decorator_test.exs` "a formatter returning a non-string raises
   naming formatter and field").
+
+## Declared Custom Types
+
+A custom `use Ash.Type` module is a `kind: :unknown` node in the manifest, with
+no fields. When the mapping source's `custom_type_fields/1` (or `decorate/3`'s
+`custom_type_fields:` option) returns field specs for it, decoration
+(`AshRpc.Manifest.CustomTypes`, called from `decorate/3`) makes it a typed
+map:
+
+- **One definition per module.** `manifest.types` gets a named
+  `%Ash.Info.Manifest.Type{kind: :map, name: <last module segment>, module: Mod,
+  instance_of: nil, constraints: <Ash.Type.init(Mod, []) or []>, fields: [...]}`,
+  marked `custom.ash_rpc.custom_type: true` (`AshRpc.Manifest.Custom.custom_type?/1`).
+  Each spec resolves as Ash resolves a typed map's `fields`. It is decorated
+  like any named type, so it gets `field_names` and `client_field_names`.
+- **Uses become `:type_ref`s** to it, keeping the use's constraints and
+  `allow_nil?`. Everything downstream (field selection, input keys,
+  extraction, return classification) is typed-map machinery: a bare selection
+  is `requires_field_selection`, and an undeclared input key is
+  `unknown_input`.
+- **Fields are per module.** A use-site constraint never changes the
+  definition. An extension that derives fields from `composite_types/1` calls
+  it with the default constraints (the test mapping source does).
+- **A NewType over a custom type** already has a `manifest.types` entry
+  `kind: :unknown` (its uses are already `:type_ref`s). Decoration asks about
+  the NewType module and, when it declares fields, replaces that entry in
+  place. Any other existing entry for a declared module raises
+  `ArgumentError` ("already has a manifest.types entry").
+- **Inside declared fields**, custom types are asked about in turn (a type
+  that nests itself is one recursive named type), named types the manifest
+  lacks are resolved and added (`AshRpc.Test.AmountBreakdown` is reached only
+  through `Amount`), and resources must already be in the manifest
+  (`ArgumentError` naming the custom type, the field and the resource).
+- **`:extra_types`** (a list of `%Ash.Info.Manifest.Type{}`) declares custom
+  types used only outside the manifest, so their definitions land in
+  `manifest.types`. `decorate_type/4` rewrites a declared use with the same
+  `custom_type_fields:` option or callback; its caller puts the definition in
+  the manifest through `:extra_types`.
+- **Re-decorating** (`AshRpc.Manifest.redecorate/2`, or `decorate/3` on a
+  decorated manifest) keeps the definitions, the marker and the spec client
+  names: uses are already `:type_ref`s, so nothing is asked again.
+- An empty or malformed spec list, or a `client_name:` collision, raises
+  (`ArgumentError` naming the module, `NameCollisionError`).
+
+Tests: `test/manifest/custom_types_test.exs` (decoration),
+`test/custom_type_fields_test.exs` (the wire), and the custom-type tests in
+`test/typed_field_selection_test.exs`.
 
 ## Untyped Structs Are Rejected
 

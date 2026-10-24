@@ -253,6 +253,14 @@ Typed values need an explicit selection:
   `%{"wordCount1" => 3}`.
 - Typed map without overrides (the `totals` action) and tuple (`location`) use
   the type's decorated client names (`ClientNames.type_field/3`).
+- Declared custom type (a custom `use Ash.Type` with fields from the mapping
+  source, see [decoration](decoration.md#declared-custom-types)): a typed map
+  through its `:type_ref`. `%{"palette" => ["primary", "accentColor"]}` on
+  `Project.palette` returns those keys under client names; a bare `"palette"`
+  is `requires_field_selection`, and an unknown sub-field is
+  `unknown_map_field` (`test/typed_field_selection_test.exs` "custom types",
+  `test/custom_type_fields_test.exs`, which also covers arrays, union members,
+  calculations and `first` aggregates of one).
 - Templates key nested typed fields by internal name (the `payload` union's
   `stats` member → `[stats: [:word_count_1]]`; tuple `location` → `[lat: []]`).
 - An empty selection on a typed return is `requires_field_selection` from
