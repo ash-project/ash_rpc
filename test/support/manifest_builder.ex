@@ -57,6 +57,8 @@ defmodule AshRpc.Test.ManifestBuilder do
      exposed_metadata_fields: [:total_score, :meta_1], metadata_field_names: %{meta_1: "meta1"}},
     {"read_posts_without_metadata", AshRpc.Test.Post, :read_with_metadata,
      exposed_metadata_fields: []},
+    {"read_posts_with_amount_meta", AshRpc.Test.Post, :read_with_amount_meta,
+     exposed_metadata_fields: [:amount]},
     {"create_post_with_metadata", AshRpc.Test.Post, :create_with_metadata,
      exposed_metadata_fields: [:total_score, :meta_1, :is_cached?, :breakdown, :extra],
      metadata_field_names: %{meta_1: "meta1", is_cached?: "isCached"}},

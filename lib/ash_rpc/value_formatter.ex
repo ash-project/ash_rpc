@@ -377,15 +377,8 @@ defmodule AshRpc.ValueFormatter do
   defp format_typed_struct(value, type_info, formatter, :input, rt) when is_map(value),
     do: typed_input(value, type_info, formatter, rt)
 
-  defp format_typed_struct(value, type_info, formatter, :output, rt) when is_map(value) do
-    field_names = typed_struct_output_names(type_info, rt)
-
-    Enum.into(value, %{}, fn {key, field_value} ->
-      sub_type = Type.find_field_type(type_info, key)
-      formatted_value = do_format(field_value, sub_type, [], formatter, :output, rt)
-      {get_typed_struct_output_key(key, field_names, formatter), formatted_value}
-    end)
-  end
+  defp format_typed_struct(value, type_info, formatter, :output, rt) when is_map(value),
+    do: declared_output(value, type_info, formatter, rt)
 
   defp format_typed_struct(value, _type_info, _formatter, _direction, _rt),
     do: value
@@ -403,12 +396,34 @@ defmodule AshRpc.ValueFormatter do
     )
   end
 
-  defp get_typed_struct_output_key(internal_key, field_names, formatter) do
-    case Map.get(field_names, internal_key) do
-      nil -> FieldFormatter.format_field_name(internal_key, formatter)
-      client_name -> client_name
+  # Output of a typed struct, typed map, keyword or tuple: only the value's
+  # entries whose key is a declared field (the atom or its string form) come
+  # out, each formatted with that field's type. Everything else is dropped, so
+  # a struct's undeclared keys never reach a client. Names come from
+  # decoration (the override pair, then the decorated names). Only a container
+  # no decoration reached falls back to the formatter, over the declared
+  # field's name, never over a value key.
+  defp declared_output(value, type_info, formatter, rt) do
+    map = if is_struct(value), do: Map.from_struct(value), else: value
+    fields = Type.get_fields(type_info)
+    overrides = typed_struct_output_names(type_info, rt)
+    names = type_info |> ClientPath.decorated_type(rt) |> Custom.type_field_names()
+
+    for {key, field_value} <- map, field = declared_field(fields, key), into: %{} do
+      name =
+        Map.get(overrides, field.name) || Map.get(names, field.name) ||
+          FieldFormatter.format_field_name(field.name, formatter)
+
+      {name, do_format(field_value, field.type, [], formatter, :output, rt)}
     end
   end
+
+  defp declared_field(fields, key) when is_atom(key), do: Enum.find(fields, &(&1.name == key))
+
+  defp declared_field(fields, key) when is_binary(key),
+    do: Enum.find(fields, &(Atom.to_string(&1.name) == key))
+
+  defp declared_field(_fields, _key), do: nil
 
   # Returns the forward client field-name overrides for a typed struct,
   # preferring the decoration on the struct in hand. Undecorated types (e.g. some
@@ -435,12 +450,7 @@ defmodule AshRpc.ValueFormatter do
         typed_input(value, type_info, formatter, rt)
 
       true ->
-        Enum.into(value, %{}, fn {key, field_value} ->
-          sub_type = Type.find_field_type(type_info, key)
-
-          {FieldFormatter.format_field_name(key, formatter),
-           do_format(field_value, sub_type, [], formatter, :output, rt)}
-        end)
+        declared_output(value, type_info, formatter, rt)
     end
   end
 

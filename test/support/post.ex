@@ -169,6 +169,13 @@ defmodule AshRpc.Test.Post do
       prepare Changes.PutMetadataOnRead
     end
 
+    # A composite custom type as metadata: its struct value is formatted
+    # without extraction, so only declared fields may come out.
+    read :read_with_amount_meta do
+      metadata :amount, AshRpc.Test.Amount
+      prepare Changes.PutAmountMetadata
+    end
+
     create :create_with_metadata do
       accept [:title, :view_count]
       metadata :total_score, :integer, allow_nil?: false, default: 0
