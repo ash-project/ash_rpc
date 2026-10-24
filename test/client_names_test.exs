@@ -94,19 +94,6 @@ defmodule AshRpc.ClientNamesTest do
     assert ClientNames.type_field(rt, ref, "wordCount1") == {:ok, :word_count_1}
   end
 
-  test "unknown client strings never create atoms", %{rt: rts} do
-    rt = rts[:camel_case]
-    names = for i <- 1..200, do: "neverSeenName#{i}_#{System.unique_integer([:positive])}"
-    before = :erlang.system_info(:atom_count)
-
-    for name <- names do
-      assert ClientNames.resource_field(rt, Post, name) == :error
-      assert ClientNames.vocabulary(rt, :filter_ops, name) == :error
-    end
-
-    assert :erlang.system_info(:atom_count) == before
-  end
-
   describe "named predicates" do
     test "decorated resources and types are named; others are not", %{rt: rts} do
       rt = rts[:camel_case]
@@ -122,5 +109,27 @@ defmodule AshRpc.ClientNamesTest do
       refute ClientNames.type_named?(rt, raw)
       refute ClientNames.type_named?(rt, nil)
     end
+  end
+end
+
+defmodule AshRpc.ClientNamesAtomTest do
+  # The atom table is VM-wide: any test that loads a module or creates an atom
+  # concurrently changes the count, so this runs alone.
+  use ExUnit.Case, async: false
+
+  alias AshRpc.ClientNames
+  alias AshRpc.Test.Post
+
+  test "unknown client strings never create atoms" do
+    rt = AshRpc.Runtime.new(AshRpc.Test.Profile)
+    names = for i <- 1..200, do: "neverSeenName#{i}_#{System.unique_integer([:positive])}"
+    before = :erlang.system_info(:atom_count)
+
+    for name <- names do
+      assert ClientNames.resource_field(rt, Post, name) == :error
+      assert ClientNames.vocabulary(rt, :filter_ops, name) == :error
+    end
+
+    assert :erlang.system_info(:atom_count) == before
   end
 end
