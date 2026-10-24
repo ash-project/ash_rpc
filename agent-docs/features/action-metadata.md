@@ -145,6 +145,7 @@ since the values are already formatted.
 |---|---|
 | A typed map (`breakdown`, `:map` with `fields`) gets its nested keys formatted: `%{"topScore" => 9, "tagNames" => ["a", "b"]}` | "typed-map metadata has its nested keys formatted" |
 | An unconstrained map (`extra`) passes through verbatim, keeping keys like `"_id"` and `"snake_key"` | "unconstrained-map metadata passes through verbatim on read", "… on create" |
+| A declared custom type with a struct value (`amount` on `read_with_amount_meta`, an `AshRpc.Test.Amount`) emits only its declared fields; the struct's `internal` key is dropped ([declared-only output](formatting.md#declared-only-output)) | `test/declared_output_test.exs` "action metadata with a struct value emits declared fields only" |
 
 ## Related
 

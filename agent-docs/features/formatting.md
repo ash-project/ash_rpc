@@ -44,8 +44,8 @@ use, so selection, extraction and formatting recurse the same way.
 | `{:array, item_type}` | `kind: :array` | Each element formatted with `item_type`; a non-list value passes through |
 | `{:resource, module}` | Resources, embedded resources, and `:struct`/`:map` types whose effective module is an Ash resource | Input: `AshRpc.ClientNames.resource_field/3`. Output: `FieldFormatter.format_field_for_client/3`; a string key (a read action's metadata override) goes out as-is. Each value recurses with the manifest field or relationship type |
 | `{:union, type}` | `kind: :union` | Member-specific; see [Union input](#union-input) |
-| `{:typed_struct, type}` | `:struct`/`:map`/`:tuple`/`:keyword` with type field-name overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: the type's `custom.ash_rpc` override pair, falling back to `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the mapping source's `type_field_names/1`) |
-| `{:fields, type}` | `:struct`/`:map`/`:tuple`/`:keyword` without overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: the formatter. A type with no `fields` (an unconstrained map) passes through untouched |
+| `{:typed_struct, type}` | `:struct`/`:map`/`:tuple`/`:keyword` with type field-name overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: [declared fields only](#declared-only-output), named by the type's `custom.ash_rpc` override pair, falling back to `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the mapping source's `type_field_names/1`) |
+| `{:fields, type}` | `:struct`/`:map`/`:tuple`/`:keyword` without overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: [declared fields only](#declared-only-output), named by decoration. A type with no `fields` (an unconstrained map) passes through untouched |
 | `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats) and undeclared non-builtin custom types with `:map` storage: their keys go out as strings, unformatted, and come in as sent. A custom type with declared fields is a `:type_ref` to a typed map instead (see [decoration](decoration.md#declared-custom-types)) |
 
 Also handled before classification:
@@ -63,6 +63,31 @@ Handled during or after classification:
 - Tuples and keyword lists match on `kind: :tuple | :keyword` after
   classification, become maps keyed by field name, then go through
   typed-struct or typed-map formatting.
+- `:map_with_tag` union output renames a tag field the member type doesn't
+  declare under the formatter's name before the member is formatted. An
+  untyped (unconstrained map) member keeps it; a typed-map member drops it,
+  as extraction already does, since the tag isn't one of its declared fields.
+
+### Declared-only output
+
+On output, a typed struct, typed map, keyword or tuple emits only the value's
+entries whose key is a declared field: the field's atom name, or its string
+form. Each kept value is formatted with that field's type, and everything else
+is dropped. Undeclared keys never reach a client, and a client-cased string key
+(`"themeName"`) is not a declared field either. A struct value goes through
+`Map.from_struct/1` first, so it no longer raises. The output doesn't add
+declared fields the value lacks: an extracted value carries only the selected
+fields, and the others don't appear as `nil`.
+
+This holds on every output path, including those that format without
+extraction: action metadata, unselected union members, and values an
+extension formats itself with `format/5` (typed route results, channel
+payloads). Names come from decoration: the type's override pair (or
+`AshRpc.Introspection.type_field_name_overrides/2`), then
+`AshRpc.Manifest.Custom.type_field_names/1` of the node or its type-lookup
+entry. Only a container no decoration reached (a type missing from the type
+lookup) falls back to the formatter, and it runs over the declared field's
+name, never over a value key. Asserted by `test/declared_output_test.exs`.
 
 ### Deep nesting example
 
@@ -215,7 +240,8 @@ Arrays of unions wrap each element the same way.
 decoration, overrides included and used as written, so it matches the
 member's other keys: `IntakeStatus` maps `status_type` to `"statusKind"`, and
 the output is `"statusKind"` under every formatter. Only a tag field the member
-type doesn't declare is named by the output formatter
+type doesn't declare is named by the output formatter, and only an untyped
+member keeps it (see [declared-only output](#declared-only-output))
 (`test/complex_input_test.exs` "a :map_with_tag tag key is output under the
 member's client name", `test/value_formatter_test.exs` "the tag key uses the
 member's decorated name, not re-formatted").
