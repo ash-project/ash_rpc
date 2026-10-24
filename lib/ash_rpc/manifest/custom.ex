@@ -93,6 +93,15 @@ defmodule AshRpc.Manifest.Custom do
   def relationship_read_action(_), do: nil
 
   # Types
+  @doc """
+  True for the definition of a custom type with declared fields
+  (`c:AshRpc.MappingSource.custom_type_fields/1`), which decoration marks with
+  `custom.ash_rpc.custom_type: true`.
+  """
+  @spec custom_type?(Manifest.Type.t() | nil) :: boolean()
+  def custom_type?(%Manifest.Type{custom: %{ash_rpc: %{custom_type: true}}}), do: true
+  def custom_type?(_), do: false
+
   def type_client_field_names(%Manifest.Type{custom: %{ash_rpc: %{client_field_names: m}}}),
     do: m
 

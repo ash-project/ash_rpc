@@ -133,7 +133,7 @@ defmodule AshRpc.FieldNameTranslationTest do
                    "priority",
                    "isLate",
                    "daysLeft",
-                   "palette",
+                   %{"palette" => ["primary", "secondary"]},
                    %{"metadata" => ["category", "deadline"]}
                  ]
                })

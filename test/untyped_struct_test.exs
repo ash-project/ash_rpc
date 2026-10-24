@@ -241,7 +241,7 @@ defmodule AshRpc.UntypedStructTest do
                |> Decorator.decorate(MappingSource)
     end
 
-    test "a composite custom type's entry that is a plain struct" do
+    test "an untyped struct inside declared fields is found at the field path" do
       error = assert_raise UntypedStructError, fn -> decorate([:composite_plain_result]) end
 
       assert error.message =~
@@ -285,16 +285,6 @@ defmodule AshRpc.UntypedStructTest do
       # The offending struct is named, not the custom type around it.
       assert error.message =~
                "returns an untyped struct, AshRpc.Test.PlainSession, at returns → point.\n"
-    end
-
-    test "a NewType over a composite custom type, with constraints where it's used" do
-      error =
-        assert_raise UntypedStructError, fn -> decorate([:composite_new_type_plain_argument]) end
-
-      assert error.path == ["argument :p", :point]
-
-      assert error.message =~
-               "accepts an untyped struct, AshRpc.Test.PlainSession, at argument :p → point."
     end
 
     test "a composite custom type as an argument" do
@@ -504,11 +494,15 @@ defmodule AshRpc.UntypedStructTest do
       assert %Ash.Info.Manifest{} = decorate([:composite_new_type_default_argument])
     end
 
+    test "fields are per module: a use-site constraint doesn't change a declared composite type" do
+      # `plain?: true` at the use would make its entry a plain struct, but the
+      # declared fields come from the default constraints.
+      assert %Ash.Info.Manifest{} = decorate([:composite_new_type_plain_argument])
+    end
+
     @tag timeout: 10_000
-    test "a custom type that nests itself with changing constraints raises" do
-      assert_raise ArgumentError, ~r/AshRpc.Test.DeepeningPoint nests itself more than 32/, fn ->
-        decorate([:composite_deepening])
-      end
+    test "a type that nests itself with changing constraints is one recursive named type" do
+      assert %Ash.Info.Manifest{} = decorate([:composite_deepening])
     end
   end
 

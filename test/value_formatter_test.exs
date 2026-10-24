@@ -78,12 +78,17 @@ defmodule AshRpc.ValueFormatterTest do
              ) == value
     end
 
-    test "custom map-storage input is verbatim", %{rt: rt} do
+    test "declared custom-type input maps client names to atoms", %{rt: rt} do
       palette =
         Ash.Info.Manifest.get_field(rt.resource_lookup, AshRpc.Test.Project, :palette).type
 
       value = %{"primary" => "a", "secondary" => "b", "accentColor" => "c"}
-      assert ValueFormatter.format(value, palette, [], :input, rt) == value
+
+      assert ValueFormatter.format(value, palette, [], :input, rt) ==
+               %{primary: "a", secondary: "b", accent_color: "c"}
+
+      assert catch_throw(ValueFormatter.format(%{"accent_color" => "c"}, palette, [], :input, rt)) ==
+               {:unknown_nested_input, [{:unknown_input, "accent_color", []}]}
     end
   end
 

@@ -280,14 +280,16 @@ end
 defmodule AshRpc.Test.ConstrainedPointNewType do
   @moduledoc false
   # A NewType over `ConstrainedPoint`: the `plain?` constraint given where it
-  # is used decides its entries.
+  # is used decides its entries for the untyped walk. Declared fields come
+  # from the default constraints.
   use Ash.Type.NewType, subtype_of: AshRpc.Test.ConstrainedPoint
 end
 
 defmodule AshRpc.Test.DeepeningPoint do
   @moduledoc false
   # A composite type that lists itself with a deeper `depth` each time: every
-  # level has new constraints, so only a nesting limit stops the walk.
+  # level has new constraints, so only a nesting limit stops the untyped walk.
+  # Declared, it is one recursive named type.
   use Ash.Type
 
   @impl true

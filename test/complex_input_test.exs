@@ -259,8 +259,19 @@ defmodule AshRpc.ComplexInputTest do
       assert Ash.read!(Intake) |> length() == before
     end
 
-    test "unconstrained and custom map-storage values keep any key" do
-      assert %{"success" => true} =
+    test "a declared custom type's input keys are client names" do
+      assert %{"success" => true, "data" => %{"palette" => %{"accentColor" => "b"}}} =
+               run(%{
+                 "action" => "create_project",
+                 "input" => %{
+                   "palette" => %{"primary" => "red", "secondary" => "x", "accentColor" => "b"}
+                 },
+                 "fields" => [%{"palette" => ["accentColor"]}]
+               })
+    end
+
+    test "an undeclared key of a declared custom type is unknown_input with its path" do
+      assert %{"success" => false, "errors" => [error]} =
                run(%{
                  "action" => "create_project",
                  "input" => %{
@@ -268,6 +279,9 @@ defmodule AshRpc.ComplexInputTest do
                  },
                  "fields" => ["id"]
                })
+
+      assert %{"type" => "unknown_input", "fields" => ["accent_color"], "path" => ["palette"]} =
+               error
     end
 
     test "internal names are client names under snake_case" do

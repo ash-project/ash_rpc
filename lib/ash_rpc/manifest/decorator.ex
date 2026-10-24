@@ -17,8 +17,11 @@ defmodule AshRpc.Manifest.Decorator do
       `exposed: false`. Unexposed domain resources stay undecorated, unless an
       entrypoint takes them as a struct input; those get formatter-only names
       and `exposed: false` too
+    * custom `use Ash.Type` modules with declared fields — named `kind: :map`
+      definitions in `manifest.types`, every use a `:type_ref` (see
+      `decorate/3`)
     * every type tree, inline types included — forward and reverse client
-      names (`decorate_type/3`)
+      names (`decorate_type/4`)
     * every entrypoint action — expected input keys, input field types,
       return classification
 
@@ -32,7 +35,7 @@ defmodule AshRpc.Manifest.Decorator do
 
   alias Ash.Info.Manifest
   alias AshRpc.{FieldFormatter, Introspection}
-  alias AshRpc.Manifest.{NameCollisionError, UntypedStructError}
+  alias AshRpc.Manifest.{CustomTypes, NameCollisionError, UntypedStructError}
 
   @vocabulary %{
     params: [:action, :fields, :get_by, :filter, :sort, :page, :tenant, :metadata_fields],
@@ -44,16 +47,52 @@ defmodule AshRpc.Manifest.Decorator do
   # filter_input tests assert each one is accepted.
   @filter_operator_aliases [:equals, :not_equals, :gt, :lt, :gte, :lte]
 
+  @doc """
+  Decorates `manifest` with `mapping_source`'s client names (see the module
+  doc).
+
+  Options:
+
+    * `:output_formatter` — replaces `mapping_source.output_formatter/0`.
+    * `:custom_type_fields` — a `(module() -> [AshRpc.MappingSource.field_spec()] | nil)`
+      function that replaces the mapping source's optional
+      `custom_type_fields/1` callback, for extensions whose declarations need
+      state.
+    * `:extra_types` — `%Ash.Info.Manifest.Type{}` trees used only outside the
+      manifest (default `[]`). Custom types in them are declared like the
+      manifest's own, so their definitions land in `manifest.types`.
+
+  Each custom `use Ash.Type` module (a `kind: :unknown` node) with declared
+  fields becomes a named `kind: :map` definition in `manifest.types`, marked
+  `custom.ash_rpc.custom_type: true` (`AshRpc.Manifest.Custom.custom_type?/1`),
+  and each use becomes a `:type_ref` to it, keeping the use's constraints and
+  `allow_nil?`. Fields are per module: `composite_types/1`-derived fields use
+  the module's default constraints, whatever the use gives. A `manifest.types`
+  entry `kind: :unknown` for a declared module (a NewType over a custom type)
+  is replaced in place. Named types inside declared fields that the manifest
+  lacks are added; resources inside them must already be in the manifest
+  (`ArgumentError` otherwise). An empty or malformed field list raises
+  `ArgumentError` naming the module.
+  """
   @spec decorate(Manifest.t(), module(), keyword()) :: Manifest.t()
   def decorate(%Manifest{} = manifest, mapping_source, opts \\ []) when is_atom(mapping_source) do
     output_formatter =
       Keyword.get_lazy(opts, :output_formatter, &mapping_source.output_formatter/0)
 
+    {types, declared} =
+      CustomTypes.declare(
+        manifest,
+        custom_type_fields_fun(mapping_source, opts),
+        Keyword.get(opts, :extra_types, [])
+      )
+
+    manifest = %Manifest{manifest | types: types}
     exposed = exposed_modules(manifest, mapping_source)
 
     ctx = %{
       source: mapping_source,
       formatter: output_formatter,
+      declared?: &MapSet.member?(declared, &1),
       exposed: exposed,
       struct_inputs: struct_input_resources(manifest, exposed),
       actions_by_resource: Enum.group_by(manifest.entrypoints, & &1.resource, & &1.action.name)
@@ -288,8 +327,7 @@ defmodule AshRpc.Manifest.Decorator do
     %Manifest.Type{type | resource: decorate_resource(r, ctx)}
   end
 
-  defp decorate_type(%Manifest.Type{} = type, ctx),
-    do: decorate_type(type, ctx.formatter, ctx.source)
+  defp decorate_type(%Manifest.Type{} = type, ctx), do: decorate_type_tree(type, ctx)
 
   @doc """
   Decorates one `%Ash.Info.Manifest.Type{}` tree with client names, bottom-up:
@@ -299,25 +337,61 @@ defmodule AshRpc.Manifest.Decorator do
   get `client_member_names`. Resource and named-reference nodes are left
   alone; their names live on the resource or the named type.
 
+  A custom type with declared fields (`opts[:custom_type_fields]`, else the
+  mapping source's optional `custom_type_fields/1`) becomes a `:type_ref` to
+  its definition. The caller must have put that definition in the manifest
+  (`decorate/3`'s `:extra_types`).
+
   Decoration calls this for every type in the manifest. Extensions call it
   for types that never pass through the manifest, so `AshRpc.ClientNames`
   can resolve their input keys.
   """
-  @spec decorate_type(Manifest.Type.t(), AshRpc.MappingSource.formatter(), module()) ::
+  @spec decorate_type(Manifest.Type.t(), AshRpc.MappingSource.formatter(), module(), keyword()) ::
           Manifest.Type.t()
-  def decorate_type(%Manifest.Type{kind: kind} = type, _formatter, _source)
-      when kind in [:type_ref, :resource, :embedded_resource],
-      do: type
+  def decorate_type(%Manifest.Type{} = type, formatter, source, opts \\ []) do
+    fields_fun = custom_type_fields_fun(source, opts)
+    ctx = %{formatter: formatter, source: source, declared?: &(fields_fun.(&1) != nil)}
+    decorate_type_tree(type, ctx)
+  end
 
-  def decorate_type(%Manifest.Type{} = type, formatter, source) do
-    ctx = %{formatter: formatter, source: source}
-    type |> decorate_children(ctx) |> put_type_names(ctx)
+  defp decorate_type_tree(%Manifest.Type{kind: :unknown, module: m} = type, ctx)
+       when is_atom(m) and not is_nil(m) do
+    if ctx.declared?.(m) do
+      %Manifest.Type{
+        kind: :type_ref,
+        name: CustomTypes.type_name(m),
+        module: m,
+        constraints: type.constraints,
+        allow_nil?: type.allow_nil?
+      }
+    else
+      type |> decorate_children(ctx) |> put_type_names(ctx)
+    end
+  end
+
+  defp decorate_type_tree(%Manifest.Type{kind: kind} = type, _ctx)
+       when kind in [:type_ref, :resource, :embedded_resource],
+       do: type
+
+  defp decorate_type_tree(%Manifest.Type{} = type, ctx),
+    do: type |> decorate_children(ctx) |> put_type_names(ctx)
+
+  defp custom_type_fields_fun(source, opts) do
+    case Keyword.fetch(opts, :custom_type_fields) do
+      {:ok, fun} when is_function(fun, 1) ->
+        fun
+
+      :error ->
+        if Code.ensure_loaded?(source) and function_exported?(source, :custom_type_fields, 1),
+          do: &source.custom_type_fields/1,
+          else: fn _module -> nil end
+    end
   end
 
   defp decorate_children(%Manifest.Type{} = type, ctx) do
     %Manifest.Type{
       type
-      | item_type: type.item_type && decorate_type(type.item_type, ctx.formatter, ctx.source),
+      | item_type: type.item_type && decorate_type_tree(type.item_type, ctx),
         fields: decorate_entries(type.fields, ctx),
         element_types: decorate_entries(type.element_types, ctx),
         members: decorate_entries(type.members, ctx)
@@ -327,7 +401,7 @@ defmodule AshRpc.Manifest.Decorator do
   defp decorate_entries(entries, ctx) when is_list(entries) do
     Enum.map(entries, fn
       %{type: %Manifest.Type{} = t} = entry ->
-        %{entry | type: decorate_type(t, ctx.formatter, ctx.source)}
+        %{entry | type: decorate_type_tree(t, ctx)}
 
       entry ->
         entry
@@ -336,12 +410,16 @@ defmodule AshRpc.Manifest.Decorator do
 
   defp decorate_entries(other, _ctx), do: other
 
+  # Everything under `custom.ash_rpc` is recomputed except the custom-type
+  # marker.
   defp put_type_names(%Manifest.Type{} = type, ctx) do
-    overrides = type_overrides(type, ctx.source)
+    existing = type.custom[:ash_rpc] || %{}
+    overrides = overrides_for(type, existing, ctx.source)
     where = "type #{inspect(type.name)} (#{inspect(type.module)})"
 
     payload =
-      %{}
+      existing
+      |> Map.take([:custom_type])
       |> put_overrides(overrides)
       |> put_field_names(Manifest.Type.get_fields(type), overrides || %{}, ctx.formatter, where)
       |> put_member_names(type, ctx.formatter, where)
@@ -350,6 +428,17 @@ defmodule AshRpc.Manifest.Decorator do
       do: type,
       else: %Manifest.Type{type | custom: Map.put(type.custom, :ash_rpc, payload)}
   end
+
+  # A declared custom type's spec client names win over the mapping source's
+  # overrides; they live on the definition, so re-decorating keeps them.
+  defp overrides_for(type, %{custom_type: true} = existing, source) do
+    case Map.merge(type_overrides(type, source) || %{}, existing[:field_name_overrides] || %{}) do
+      empty when map_size(empty) == 0 -> nil
+      overrides -> overrides
+    end
+  end
+
+  defp overrides_for(type, _existing, source), do: type_overrides(type, source)
 
   defp type_overrides(type, source) do
     module = Manifest.Type.effective_module(type)

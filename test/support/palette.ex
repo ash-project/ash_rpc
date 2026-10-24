@@ -4,8 +4,8 @@
 
 defmodule AshRpc.Test.Palette do
   @moduledoc false
-  # A hand-rolled type with map storage: the runtime must treat it as a
-  # primitive, not as a typed map it can select fields from.
+  # A hand-rolled type with map storage. The test mapping source declares its
+  # fields, so it is selected by sub-field like a typed map.
   use Ash.Type
 
   @impl true

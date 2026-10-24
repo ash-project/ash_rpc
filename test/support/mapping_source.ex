@@ -30,6 +30,8 @@ defmodule AshRpc.Test.MappingSource do
     AshRpc.Test.ProjectMetaDetail,
     AshRpc.Test.ProjectNote,
     AshRpc.Test.SessionLog,
+    AshRpc.Test.Swatch,
+    AshRpc.Test.SwatchBox,
     AshRpc.Test.Tag,
     AshRpc.Test.TextBlock,
     AshRpc.Test.Widget
@@ -98,6 +100,37 @@ defmodule AshRpc.Test.MappingSource do
   def type_field_names(AshRpc.Test.IntakeInput), do: %{is_valid?: "isValid"}
 
   def type_field_names(_type), do: nil
+
+  @impl true
+  def custom_type_fields(AshRpc.Test.Palette),
+    do: [
+      primary: [type: :string, allow_nil?: false],
+      secondary: [type: :string, allow_nil?: false],
+      accent_color: [type: :string]
+    ]
+
+  # Composite types: fields from composite_types/1 at default constraints,
+  # non-null, as an extension would derive them. Malformed entries are skipped.
+  def custom_type_fields(module) do
+    with true <- Code.ensure_loaded?(module) and function_exported?(module, :composite?, 1),
+         {:ok, constraints} <- Ash.Type.init(module, []),
+         true <- module.composite?(constraints) do
+      for entry <- module.composite_types(constraints), spec = composite_spec(entry), do: spec
+    else
+      _ -> nil
+    end
+  end
+
+  @impl true
+  def custom_type_fields_hint(_module), do: "Declare its fields in the mapping source."
+
+  defp composite_spec({name, type, constraints}) when is_atom(name) and is_list(constraints),
+    do: {name, [type: type, constraints: constraints, allow_nil?: false]}
+
+  defp composite_spec({name, _storage_key, type, constraints}),
+    do: composite_spec({name, type, constraints})
+
+  defp composite_spec(_entry), do: nil
 
   # Row opts from `ManifestBuilder` set non-default entrypoint fields; struct!/2
   # raises KeyError on a typo so a bad row fails the manifest build.

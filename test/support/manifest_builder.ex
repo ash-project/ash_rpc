@@ -128,6 +128,12 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"catalog_redeem_voucher", AshRpc.Test.Catalog, :redeem_voucher},
     {"catalog_struct_summary", AshRpc.Test.Catalog, :struct_summary},
     {"catalog_struct_summaries", AshRpc.Test.Catalog, :struct_summaries},
+    # Declared custom types
+    {"catalog_amount_result", AshRpc.Test.Catalog, :amount_result},
+    {"create_swatch", AshRpc.Test.Swatch, :create},
+    {"list_swatches", AshRpc.Test.Swatch, :read},
+    {"create_swatch_box", AshRpc.Test.SwatchBox, :create},
+    {"list_swatch_boxes", AshRpc.Test.SwatchBox, :read},
     # Untyped data, sent as produced
     {"catalog_untyped_records_map", AshRpc.Test.Catalog, :untyped_records_map},
     {"catalog_untyped_records_term", AshRpc.Test.Catalog, :untyped_records_term},

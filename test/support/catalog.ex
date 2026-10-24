@@ -181,6 +181,20 @@ defmodule AshRpc.Test.Catalog do
       end
     end
 
+    # A declared composite custom type whose value is a plain struct with an
+    # undeclared `internal` key.
+    action :amount_result, AshRpc.Test.Amount do
+      run fn _input, _context ->
+        {:ok,
+         %AshRpc.Test.AmountValue{
+           currency: "EUR",
+           value: Decimal.new("1.50"),
+           breakdown: %{net: Decimal.new("1.20"), tax_rate: Decimal.new("0.25")},
+           internal: :secret
+         }}
+      end
+    end
+
     # Untyped data (unconstrained :map, :term): sent exactly as produced. Resource
     # and TypedStruct structs have no Jason encoder, so encoding fails.
     action :untyped_records_map, :map do
@@ -320,9 +334,9 @@ defmodule AshRpc.Test.Catalog do
       run fn _input, _context -> {:ok, %{label: "root", children: []}} end
     end
 
-    # Composite custom types (see composite_types.ex). Not wire entrypoints:
-    # decoration rejects the first seven, and the rest only show what stays allowed
-    # (apart from `composite_new_type_plain_argument` and `composite_deepening`).
+    # Composite custom types (see composite_types.ex), declared by the test
+    # mapping source from composite_types/1. Not wire entrypoints: decoration
+    # rejects the first seven, and the rest only show what stays allowed.
     action :composite_plain_result, AshRpc.Test.PlainPoint do
       run fn _input, _context -> {:ok, nil} end
     end

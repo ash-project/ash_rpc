@@ -24,6 +24,8 @@ defmodule AshRpc.Test.Domain do
     resource AshRpc.Test.Secret
     resource AshRpc.Test.SessionLog
     resource AshRpc.Test.SessionOwner
+    resource AshRpc.Test.Swatch
+    resource AshRpc.Test.SwatchBox
     resource AshRpc.Test.Tag
     resource AshRpc.Test.Voucher
     resource AshRpc.Test.Widget

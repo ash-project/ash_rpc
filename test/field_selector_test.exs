@@ -165,6 +165,38 @@ defmodule AshRpc.FieldSelectorTest do
            } = single_error(run("list_posts", [%{"title" => ["invalid"]}]))
   end
 
+  test "field_does_not_support_nesting through relationships reports the relationship path" do
+    fields = [%{"notes" => ["id", %{"project" => ["id", %{"dueDate" => ["invalid"]}]}]}]
+
+    assert {:error, {:field_does_not_support_nesting, :due_date, [:notes, :project]}} =
+             process(AshRpc.Test.Project, fields)
+
+    assert %{
+             "type" => "field_does_not_support_nesting",
+             "fields" => ["notes.project.dueDate"],
+             "path" => ["notes", "project"],
+             "vars" => %{"field" => "notes.project.dueDate"}
+           } = single_error(run("list_projects", fields))
+  end
+
+  test "field_does_not_support_nesting inside a calculation's fields reports the calculation path" do
+    fields = [
+      %{
+        "self" => %{"args" => %{"prefix" => "x"}, "fields" => ["id", %{"dueDate" => ["invalid"]}]}
+      }
+    ]
+
+    assert {:error, {:field_does_not_support_nesting, :due_date, [:self]}} =
+             process(AshRpc.Test.Project, fields)
+
+    assert %{
+             "type" => "field_does_not_support_nesting",
+             "fields" => ["self.dueDate"],
+             "path" => ["self"],
+             "vars" => %{"field" => "self.dueDate"}
+           } = single_error(run("list_projects", fields))
+  end
+
   describe "deeply nested relationships" do
     setup do
       seed_graph()
