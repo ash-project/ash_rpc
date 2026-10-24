@@ -179,11 +179,11 @@ defmodule AshRpc.ValueFormatter do
         format_keyword(value, type, formatter, direction, rt)
 
       {:typed_struct, type} ->
-        format_typed_struct(value, type, formatter, direction, rt)
+        format_typed_fields(value, type, formatter, direction, rt)
 
       {:fields, type} ->
         if Type.has_fields?(type),
-          do: format_typed_map(value, type, formatter, direction, rt),
+          do: format_typed_fields(value, type, formatter, direction, rt),
           else: value
 
       {:other, nil} ->
@@ -371,17 +371,16 @@ defmodule AshRpc.ValueFormatter do
   end
 
   # ---------------------------------------------------------------------------
-  # TypedStruct Handler — struct types with field constraints
+  # Typed Fields Handler — typed structs, typed maps, keywords and tuples
   # ---------------------------------------------------------------------------
 
-  defp format_typed_struct(value, type_info, formatter, :input, rt) when is_map(value),
+  defp format_typed_fields(value, type_info, formatter, :input, rt) when is_map(value),
     do: typed_input(value, type_info, formatter, rt)
 
-  defp format_typed_struct(value, type_info, formatter, :output, rt) when is_map(value),
+  defp format_typed_fields(value, type_info, formatter, :output, rt) when is_map(value),
     do: declared_output(value, type_info, formatter, rt)
 
-  defp format_typed_struct(value, _type_info, _formatter, _direction, _rt),
-    do: value
+  defp format_typed_fields(value, _type_info, _formatter, _direction, _rt), do: value
 
   # Typed structs, typed maps, keywords and tuples share strict key input.
   defp typed_input(value, type_info, formatter, rt) do
@@ -406,7 +405,7 @@ defmodule AshRpc.ValueFormatter do
   defp declared_output(value, type_info, formatter, rt) do
     map = if is_struct(value), do: Map.from_struct(value), else: value
     fields = Type.get_fields(type_info)
-    overrides = typed_struct_output_names(type_info, rt)
+    overrides = name_overrides(type_info, rt)
     names = type_info |> ClientPath.decorated_type(rt) |> Custom.type_field_names()
 
     for {key, field_value} <- map, field = declared_field(fields, key), into: %{} do
@@ -425,36 +424,16 @@ defmodule AshRpc.ValueFormatter do
 
   defp declared_field(_fields, _key), do: nil
 
-  # Returns the forward client field-name overrides for a typed struct,
+  # Returns the forward client field-name overrides for a typed container,
   # preferring the decoration on the struct in hand. Undecorated types (e.g. some
   # `action.returns` structs) resolve through the type lookup and then the
   # mapping source (`AshRpc.Introspection.type_field_name_overrides/2`).
-  defp typed_struct_output_names(type_info, rt) do
+  defp name_overrides(type_info, rt) do
     case Custom.type_field_name_overrides_pair(type_info) do
       nil -> Introspection.type_field_name_overrides(rt, Type.effective_module(type_info)) || %{}
       {forward, _reverse} -> forward
     end
   end
-
-  # ---------------------------------------------------------------------------
-  # Typed Map Handler — types with field constraints but no field name mapping
-  # ---------------------------------------------------------------------------
-
-  defp format_typed_map(value, type_info, formatter, direction, rt)
-       when is_map(value) do
-    cond do
-      Type.get_fields(type_info) == [] ->
-        value
-
-      direction == :input ->
-        typed_input(value, type_info, formatter, rt)
-
-      true ->
-        declared_output(value, type_info, formatter, rt)
-    end
-  end
-
-  defp format_typed_map(value, _type_info, _formatter, _direction, _rt), do: value
 
   # ---------------------------------------------------------------------------
   # Tuple Handler
@@ -478,12 +457,12 @@ defmodule AshRpc.ValueFormatter do
           %{}
       end
 
-    dispatch_struct_or_map(map_value, type_info, formatter, direction, rt)
+    format_container(map_value, type_info, formatter, direction, rt)
   end
 
   defp format_tuple(value, type_info, formatter, direction, rt)
        when is_map(value) do
-    dispatch_struct_or_map(value, type_info, formatter, direction, rt)
+    format_container(value, type_info, formatter, direction, rt)
   end
 
   defp format_tuple(value, _type_info, _formatter, _direction, _rt), do: value
@@ -495,25 +474,22 @@ defmodule AshRpc.ValueFormatter do
   defp format_keyword(value, type_info, formatter, direction, rt)
        when is_list(value) do
     map_value = Enum.into(value, %{})
-    dispatch_struct_or_map(map_value, type_info, formatter, direction, rt)
+    format_container(map_value, type_info, formatter, direction, rt)
   end
 
   defp format_keyword(value, type_info, formatter, direction, rt)
        when is_map(value) do
-    dispatch_struct_or_map(value, type_info, formatter, direction, rt)
+    format_container(value, type_info, formatter, direction, rt)
   end
 
   defp format_keyword(value, _type_info, _formatter, _direction, _rt), do: value
 
-  # Shared: dispatch to typed_struct (if has field name mapping) or typed_map
-  defp dispatch_struct_or_map(map_value, type_info, formatter, direction, rt) do
-    inst = Type.effective_module(type_info)
-
-    if Introspection.has_field_name_overrides?(rt, inst) do
-      format_typed_struct(map_value, type_info, formatter, direction, rt)
-    else
-      format_typed_map(map_value, type_info, formatter, direction, rt)
-    end
+  # A keyword or tuple (as a map) with fields is formatted like any typed map;
+  # without fields it passes through like an unconstrained map.
+  defp format_container(map_value, type_info, formatter, direction, rt) do
+    if Type.has_fields?(type_info),
+      do: format_typed_fields(map_value, type_info, formatter, direction, rt),
+      else: map_value
   end
 
   # ---------------------------------------------------------------------------
