@@ -99,9 +99,10 @@ defmodule AshRpc.ErrorBuilder do
 
   Fallbacks:
 
-  - `internal_error`: a reason no clause recognises. The client gets only a
-    generic message and `errorId`; the term is logged server-side under that
-    id, never sent.
+  - `internal_error`: a non-map reason no clause recognises. The client gets
+    only a generic message and `errorId`; the term is logged server-side under
+    that id, never sent. A map or struct goes through
+    `AshRpc.Errors.to_errors/6` like an exception.
 
   Exceptions and Ash errors are not pipeline reasons. They go through
   `AshRpc.Errors.to_errors/6`, and their `type` comes from the `AshRpc.Error`

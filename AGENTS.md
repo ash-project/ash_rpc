@@ -247,9 +247,10 @@ and applies the `AshRpc.Error` protocol. It then applies `show_raised_errors?/1`
 and policy breakdowns (`show_policy_breakdowns?/0`), the resource-level handler,
 and finally the profile's `error_handler/1` for the domain. A handler that returns
 `nil` drops the error. Pipeline reasons such as
-`{:action_not_found, …}` become error maps in `ErrorBuilder`; a reason with no
-`ErrorBuilder` clause becomes `internal_error` with an `errorId`, the term only
-logged server-side. Request errors that
+`{:action_not_found, …}` become error maps in `ErrorBuilder`; a non-map reason
+with no `ErrorBuilder` clause becomes `internal_error` with an `errorId`, the
+term only logged server-side (a map or struct becomes `unknown_error`, equally
+without the term). Request errors that
 a stale client could cause carry `details.hint` from the profile's `stale_client_hint/0`,
 and `action_not_found` carries `details.suggestion` from `action_not_found_suggestion/0`.
 Exceptions raised during `run_action`/`validate_action` are logged with their
