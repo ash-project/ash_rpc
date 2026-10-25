@@ -143,6 +143,22 @@ defmodule AshRpc.TypedFieldSelectionTest do
       %{rt: AshRpc.Runtime.new(AshRpc.Test.Profile)}
     end
 
+    defp create_project_with_note! do
+      ok = fn action, input ->
+        assert %{"success" => true, "data" => data} =
+                 AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                   "action" => action,
+                   "input" => input,
+                   "fields" => ["id"]
+                 })
+
+        data["id"]
+      end
+
+      id = ok.("create_project", %{"palette" => %{"primary" => "red", "secondary" => "blue"}})
+      %{"id" => id, "note_id" => ok.("create_project_note", %{"projectId" => id})}
+    end
+
     test "a bare declared custom-type field is requires_field_selection" do
       assert %{
                "success" => false,
@@ -176,8 +192,15 @@ defmodule AshRpc.TypedFieldSelectionTest do
     end
 
     test "sub-field selection at the top level succeeds" do
-      assert %{"success" => true} =
-               run("list_projects", [%{"palette" => ["primary", "secondary"]}])
+      %{"id" => id} = create_project_with_note!()
+
+      assert %{"success" => true, "data" => projects} =
+               run("list_projects", ["id", %{"palette" => ["primary", "secondary"]}])
+
+      assert Enum.find(projects, &(&1["id"] == id)) == %{
+               "id" => id,
+               "palette" => %{"primary" => "red", "secondary" => "blue"}
+             }
     end
 
     test "nesting under a member is rejected as for typed maps" do
@@ -197,7 +220,12 @@ defmodule AshRpc.TypedFieldSelectionTest do
       assert {:ok, _} =
                AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Project, :read, fields)
 
-      assert %{"success" => true} = run("list_projects", fields)
+      %{"id" => id, "note_id" => note_id} = create_project_with_note!()
+      assert %{"success" => true, "data" => projects} = run("list_projects", ["id" | fields])
+
+      assert Enum.find(projects, &(&1["id"] == id))["notes"] == [
+               %{"id" => note_id, "project" => %{"id" => id, "palette" => %{"primary" => "red"}}}
+             ]
     end
 
     test "sub-field selection inside a calculation's fields succeeds", %{rt: rt} do
@@ -213,7 +241,13 @@ defmodule AshRpc.TypedFieldSelectionTest do
       assert {:ok, _} =
                AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Project, :read, fields)
 
-      assert %{"success" => true} = run("list_projects", fields)
+      %{"id" => id} = create_project_with_note!()
+      assert %{"success" => true, "data" => projects} = run("list_projects", ["id" | fields])
+
+      assert Enum.find(projects, &(&1["id"] == id))["self"] == %{
+               "id" => id,
+               "palette" => %{"primary" => "red"}
+             }
     end
 
     test "requesting a custom-type field twice is duplicate_field" do
