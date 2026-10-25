@@ -430,9 +430,13 @@ defmodule AshRpc.Introspection do
     * `:report`: a `:type_ref` to a named type that is being walked on the
       current branch (its own definition, directly or through other named
       types) ends the walk with `{:cycle, path, ref}`. A named type used on
-      two separate branches is not a cycle. Recursion through a resource
-      (a relationship back to it) is not reported: resources are skipped once
-      walked, as with `:skip`.
+      two separate branches is not a cycle. Resources are skipped once
+      walked, as with `:skip`, so recursion through a resource (named type
+      A, a resource whose fields reach A) depends on what the walk meets
+      first: entered at A, it is reported at the ref that closes it; entered
+      at the resource, it closes at the walked resource and is not, and A,
+      walked by then, is skipped wherever it is met later. A matcher that
+      matches resources stops at them and never meets such recursion.
 
   An unknown option, or another `cycles:` value, raises `ArgumentError`.
 

@@ -389,8 +389,11 @@ resource matcher finds the resource, not a union in its fields. It returns
 type already walked, as above; `cycles: :report` returns `{:cycle, path, ref}`
 for a `:type_ref` to a named type that is being walked on the current branch
 (`[:children, []]` for `AshRpc.Test.TreeNode`). A named type used on two
-separate branches is not a cycle, and recursion through a resource isn't
-reported (resources are walked once). `find_type_root(roots, lookups, match,
+separate branches is not a cycle. Resources are walked once, so recursion
+through a resource (named type A → resource → A) is reported only when the
+walk meets A first; a matcher that matches resources never meets it
+(`test/introspection_test.exs` "recursion through a resource is reported only
+when entered at the named type"). `find_type_root(roots, lookups, match,
 opts \\ [])` returns `{:match | :cycle, [root | path], node, tag}`.
 
 The decorator checks only wire entrypoints (those `entrypoint/1` returns a

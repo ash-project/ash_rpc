@@ -146,6 +146,7 @@ since the values are already formatted.
 | A typed map (`breakdown`, `:map` with `fields`) gets its nested keys formatted: `%{"topScore" => 9, "tagNames" => ["a", "b"]}` | "typed-map metadata has its nested keys formatted" |
 | An unconstrained map (`extra`) passes through verbatim, keeping keys like `"_id"` and `"snake_key"` | "unconstrained-map metadata passes through verbatim on read", "… on create" |
 | A declared custom type with a struct value (`amount` on `read_with_amount_meta`, an `AshRpc.Test.Amount`) emits only its declared fields; the struct's `internal` key is dropped ([declared-only output](formatting.md#declared-only-output)) | `test/declared_output_test.exs` "action metadata with a struct value emits declared fields only" |
+| A scalar struct at a typed scalar position comes back from `AshRpc.run_action/4` as its wire string, since metadata is formatted without extraction: a `:decimal` `Decimal.new("3")` → `"3"`, and likewise `Date`, `Time`, `DateTime`, `NaiveDateTime` (ISO 8601), `Duration` (`"PT1H"`) and `Ash.CiString`. JSON output is unchanged, except a `Duration`, which used to fail to encode ([values formatted without extraction](formatting.md#values-formatted-without-extraction)) | `test/declared_output_test.exs` "action metadata with a struct value emits declared fields only" (`value` is a `:decimal`) |
 
 ## Related
 

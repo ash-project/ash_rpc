@@ -538,6 +538,50 @@ defmodule AshRpc.IntrospectionTest do
                {:cycle, [:b, :a], a_ref}
     end
 
+    test "recursion through a resource is reported only when entered at the named type" do
+      # MyApp.A -> embedded MyApp.R -> MyApp.A
+      a_ref = %Type{kind: :type_ref, name: "A", module: MyApp.A}
+      r_node = %Type{kind: :embedded_resource, module: MyApp.R, resource_module: MyApp.R}
+
+      r = %Resource{
+        module: MyApp.R,
+        fields: %{a: %Field{name: :a, kind: :attribute, type: a_ref}},
+        relationships: %{},
+        custom: %{ash_rpc: %{exposed: false}}
+      }
+
+      lookups = %{
+        @none
+        | resource_lookup: %{MyApp.R => r},
+          type_lookup: %{
+            MyApp.A => %Type{kind: :map, module: MyApp.A, fields: [%{name: :r, type: r_node}]}
+          }
+      }
+
+      root = fn fields ->
+        %Type{
+          kind: :map,
+          module: Ash.Type.Map,
+          fields: Enum.map(fields, fn {name, type} -> %{name: name, type: type} end)
+        }
+      end
+
+      assert Introspection.find_type(root.(x: a_ref, y: r_node), lookups, &never/1,
+               cycles: :report
+             ) == {:cycle, [:x, :r, :a], a_ref}
+
+      # Entered at the resource, the cycle closes at the walked resource, and
+      # the named type, walked by then, is skipped where it is met again.
+      assert Introspection.find_type(root.(x: r_node, y: a_ref), lookups, &never/1,
+               cycles: :report
+             ) == nil
+
+      # A matcher for resources stops at the resource before the cycle closes.
+      assert Introspection.find_type(root.(x: a_ref, y: r_node), lookups, &Type.resource_kind?/1,
+               cycles: :report
+             ) == {:match, [:x, :r], r_node}
+    end
+
     test "a declared custom type is walked through its definition" do
       {lookups, action} = decorated_lookups([:string_keyed_palette_box])
       %Type{fields: [%{name: :palette, type: ref}]} = action.(:string_keyed_palette_box).returns
