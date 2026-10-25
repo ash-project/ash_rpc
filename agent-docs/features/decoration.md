@@ -43,7 +43,7 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 | `type_field_names/1` | map or `nil` | Field overrides for a type module; `nil` = none |
 | `entrypoint/1` | `%AshRpc.Entrypoint{}` or `nil` | Turns an `%Ash.Info.Manifest.Entrypoint{}` into a wire action; `nil` keeps it off the wire |
 | `custom_type_fields/1` (optional) | `[field_spec()]` or `nil` | Fields for a custom `use Ash.Type` module (a `kind: :unknown` node); see [Declared Custom Types](#declared-custom-types) |
-| `custom_type_fields_hint/1` (optional) | `String.t()` or `nil` | Extra text for the error about a map-like custom type without fields |
+| `custom_type_fields_hint/1` (optional) | `String.t()` or `nil` | Extra text for the error about a map-like custom type without fields, appended after a blank line |
 
 A `field_spec()` is `{name, opts}` in the format of a typed map's `fields`
 constraint: `type:` (required), `constraints:`, `allow_nil?:` (default
@@ -51,7 +51,9 @@ constraint: `type:` (required), `constraints:`, `allow_nil?:` (default
 wins over `type_field_names/1` and the formatter. `decorate/3`'s
 `custom_type_fields:` option (a function of the module) replaces the callback,
 for an extension whose declarations need state the bare mapping source can't
-reach. Without either, nothing is declared.
+reach; its `custom_type_fields_hint:` option replaces `custom_type_fields_hint/1`
+the same way. Without either, nothing is declared, and a wire use of a map-like
+custom type fails decoration ([Untyped Structs Are Rejected](#untyped-structs-are-rejected)).
 
 `formatter()` is `:camel_case | :snake_case | :pascal_case | {module, fun} |
 {module, fun, extra_args}` (`@type formatter` in `mapping_source.ex`). A custom
@@ -297,6 +299,10 @@ map:
   names: uses are already `:type_ref`s, so nothing is asked again.
 - An empty or malformed spec list, or a `client_name:` collision, raises
   (`ArgumentError` naming the module, `NameCollisionError`).
+- **Undeclared map-like types** (`storage_type :map` or composite where
+  used) that a wire entrypoint reaches fail decoration with
+  `UntypedStructError`; see [Untyped Structs Are Rejected](#untyped-structs-are-rejected).
+  Scalar custom types need no declaration.
 
 Tests: `test/manifest/custom_types_test.exs` (decoration),
 `test/custom_type_fields_test.exs` (the wire), and the custom-type tests in
@@ -306,7 +312,8 @@ Tests: `test/manifest/custom_types_test.exs` (decoration),
 
 A struct type the manifest has no field types for can't be selected, named or
 filtered, and every field would reach the client. `decorate/3` raises
-`AshRpc.Manifest.UntypedStructError` when a wire entrypoint can reach one.
+`AshRpc.Manifest.UntypedStructError` when a wire entrypoint can reach one, or
+an undeclared map-like custom type (below).
 `AshRpc.Introspection.untyped_struct?/1` is the definition: `kind: :struct`,
 `fields: nil`, and an `instance_of` that is nil or not an Ash resource; or
 `fields: []` with no `instance_of` or `instance_of` a plain module (not an Ash
@@ -323,12 +330,29 @@ type (an empty TypedStruct). In the manifest that is:
 - `:struct` with `instance_of` an Ash type (a TypedStruct or NewType):
   `:struct` doesn't take fields from it, so the manifest has none
 - a NewType over any of these
-- any of these as an entry of a composite custom type's `composite_types/1`
-  (a `use Ash.Type` module whose `composite?/1` is true), at any depth
+- any of these inside a declared custom type's fields, at any depth (the path
+  names the field: `returns → point`)
 
 `:struct` with `instance_of` a resource is a `:resource` node, and `:struct`
 with non-empty `fields` (with or without `instance_of`) is a typed container;
 both pass.
+
+**Undeclared map-like custom types.** A custom `use Ash.Type` node that is
+still `kind: :unknown` after decoration (no declared fields) is rejected when
+its module is map-like at that use:
+`AshRpc.Introspection.map_like_custom_type?(module, constraints)` (`@doc
+false`) is true for a loadable Ash type whose
+`Ash.Type.storage_type(module, constraints)` is `:map`, or whose
+`composite?(constraints)` is true. Storage is checked first, and neither
+callback is rescued. The constraints are the node's, the ones given where it
+is used, so a type whose storage depends on a constraint
+(`AshRpc.Test.StorageSwitch`) is rejected only where it is map-like. Other
+custom types (scalar storage, not composite, or not loadable Ash types) are
+opaque, like `:term`. `composite_types/1` is never walked: a composite type
+is either declared (and then a `:type_ref`, walked through its definition) or
+rejected. A type that describes its fields only through a non-Ash function
+(`typed_struct_fields/0`) or lists entries with `composite?/1` false is
+undeclared, and rejected when its storage is `:map`.
 
 `AshRpc.Introspection.find_untyped_struct(type, lookups)` returns
 `{path, node}` for the first hit or `nil`. It follows array items (segment
@@ -338,22 +362,12 @@ nodes: their fields (attributes, calculations, aggregates, then each
 calculation's arguments) in name order, then their relationships in name
 order. A relationship is followed only to an exposed destination, since one
 to an unexposed resource is `unknown_field`; resource nodes reached by type
-are walked whatever their exposure. A custom `use Ash.Type` node
-(`kind: :unknown` with a module) is walked only when its
-`composite?(constraints)` is true: each `composite_types(constraints)` entry
-is resolved with `Ash.Info.Manifest.Generator.TypeResolver.resolve/2` and
-walked under its name, not its storage key (`returns → point`). Named types an
-entry references resolve from the type lookup, or from the module when the
-manifest doesn't carry them. Custom types that aren't composite are opaque,
-like `:term`. That includes types that describe their fields only through a
-non-Ash function, so a plain struct such a type returns isn't detected. The
-callbacks aren't rescued: one that raises fails decoration. A `:type_ref` to a
-NewType over a custom type calls the NewType's callbacks with the constraints
-on the ref, the ones given where it's used, as Ash does. Each named type and
-resource is visited once, and each custom type once per constraints, so
-recursive types terminate. A custom type that keeps nesting itself with new
-constraints raises `ArgumentError` once it is 32 levels deep in itself along
-one path. `lookups` needs `:resource_lookup` and
+are walked whatever their exposure. A `kind: :unknown` node is the hit itself
+(path `[]` below its parent) when it is map-like, and opaque otherwise. A
+`:type_ref` to a NewType over a custom type (an `:unknown` definition) is
+checked with the constraints on the ref, the ones given where it's used, as
+Ash calls the callbacks. Each named type and resource is visited once, so
+recursive types terminate. `lookups` needs `:resource_lookup` and
 `:type_lookup` from a decorated manifest (an `%AshRpc.Runtime{}` works).
 `find_untyped_root(roots, lookups)` runs it over `{root, type, tag}` roots in
 order and returns `{[root | path], node, tag}` for the first hit; the
@@ -362,10 +376,15 @@ decorator and extensions build their roots and errors on it.
 The decorator checks only wire entrypoints (those `entrypoint/1` returns a
 struct for), root by root, inputs first, through the public
 `Decorator.check_untyped_structs!(manifest_entrypoint, %AshRpc.Entrypoint{},
-lookups)`. It returns `:ok` or raises the error, and an extension calls it
-for entrypoints it serves off the wire (ones `entrypoint/1` returns `nil`
-for), with `lookups` from the decorated manifest
-(`AshRpc.Manifest.resource_lookup/1`, `type_lookup/1`). The roots:
+lookups, opts \\ [])`. It returns `:ok` or raises the error, and an extension
+calls it for entrypoints it serves off the wire (ones `entrypoint/1` returns
+`nil` for), with `lookups` from the decorated manifest
+(`AshRpc.Manifest.resource_lookup/1`, `type_lookup/1`). Its `hint:` option is
+extra text for an undeclared custom type: a string, or a function of the
+module returning a string or `nil`. `decorate/3` passes its
+`custom_type_fields_hint:` option, else the mapping source's
+`custom_type_fields_hint/1` when the source exports it, and no hint
+otherwise. The roots:
 
 | Root | Checked when |
 |---|---|
@@ -380,11 +399,21 @@ without constraints", plus the NewType it came through) and the path joined
 with ` → ` (`returns → session`). Then it lists the alternatives: an
 `Ash.TypedStruct`, a NewType over `:struct` with `fields`, `instance_of` an
 Ash resource, or an unconstrained `:map` converted in the action. An Ash-type
-`instance_of` gets "use it as the type" first. Extensions word their own
-errors with `UntypedStructError.details/2`.
+`instance_of` gets "use it as the type" first.
+
+For an undeclared custom type the message reads "returns an undeclared custom
+type, `Mod`, at `returns`.", says that its values are maps or structs but no
+fields are declared for it, so their keys have no client names, and ends with
+the hint after a blank line when there is one. No alternatives are listed,
+and `struct_module` is `nil` (the message and `path` name the module). A hint
+applies only to this branch.
+
+Extensions word their own errors with `UntypedStructError.details/3`
+(`details(type, path, hint: hint)`; `details/2` is the same without a hint).
 
 Tests: `test/untyped_struct_test.exs` "decoration rejects untyped structs",
-"check_untyped_structs!/3", "UntypedStructError", "typed and explicitly
+"decoration rejects undeclared map-like custom types",
+"check_untyped_structs!/4", "UntypedStructError", "typed and explicitly
 untyped shapes stay allowed";
 `test/introspection_test.exs` "untyped structs".
 

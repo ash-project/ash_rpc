@@ -110,7 +110,8 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   source doesn't expose is strict too, under formatter-only names
   (`test/unexposed_embedded_test.exs`). A node without decorated names (a type
   that never went through the decorator) keeps its keys as sent, and
-  unconstrained and custom map-storage values are verbatim.
+  unconstrained maps and undeclared scalar custom types are verbatim (an
+  undeclared map-like custom type can't be on the wire).
 - `AshRpc.FilterInput` reports a filter or sort name that isn't a client name
   of the resource as Ash's `NoSuchField` (path `["filter"]` / `["sort"]`) and an
   unknown filter operator as `NoSuchFilterPredicate`. They become

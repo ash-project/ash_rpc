@@ -88,15 +88,17 @@ it to `@exposed` in `test/support/mapping_source.ex` (never `Secret`).
 ### `requires_field_selection`
 
 **Cause:** the field returns something with its own fields (an embedded
-resource, a typed map or struct, a union, or a resource-returning calculation)
-and was requested by bare name. `vars.fieldType` names the kind.
+resource, a typed map or struct, a declared custom type, a union, or a
+resource-returning calculation) and was requested by bare name.
+`vars.fieldType` names the kind.
 
 **Fix:** pass a nested selection: `%{"selfPost" => ["id"]}`, or for a
 calculation with arguments `%{"scoredStats" => %{"args" => …, "fields" => […]}}`.
 An empty `fields` list counts as missing. Unions select members by name
 (`%{"count" => ["number", "label"]}`). Tests: `test/calculations_test.exs`
 "requires_field_selection" describe, `test/typed_field_selection_test.exs`
-"requires_field_selection on typed values", `test/union_input_test.exs`
+"requires_field_selection on typed values" (a bare declared custom-type field
+too), `test/union_input_test.exs`
 "output selection must name members".
 
 ### Calculation argument errors
@@ -222,6 +224,7 @@ See [action metadata](features/action-metadata.md).
 | `missing_required_parameter` | No `action` param and no `entrypoint:` option | Send `action`, or pass `entrypoint:` |
 | A test sees stale or unexpected config | It mutated, or expected a change in, the cached `ManifestBuilder.manifest/0` | Build a fresh one with `build/1` |
 | `internal_error` or `unknown_error` with `path: ["load"]` | Ash rejected the load built from the selection | Reproduce with the field-selection view above and check the calculation's arguments |
-| `AshRpc.Manifest.UntypedStructError` while building the manifest | A wire entrypoint reaches a `:struct` with no field types; the message's path (`returns → session`, `argument :session`, `<Resource> records → session`, or `returns → point` for an entry of a composite custom type) says where | Use one of the alternatives in the message, or keep the action out of the wire entrypoints (see [decoration](features/decoration.md#untyped-structs-are-rejected)) |
+| `AshRpc.Manifest.UntypedStructError` while building the manifest | A wire entrypoint reaches a `:struct` with no field types; the message's path (`returns → session`, `argument :session`, `<Resource> records → session`, or `returns → point` for a declared custom type's field) says where | Use one of the alternatives in the message, or keep the action out of the wire entrypoints (see [decoration](features/decoration.md#untyped-structs-are-rejected)) |
+| `UntypedStructError` "an undeclared custom type, `Mod`, at …" | A wire entrypoint reaches a map-like custom type (`storage_type :map`, or `composite?/1` true, with the constraints where it is used) that the mapping source declares no fields for; the hint after the explanation is the source's `custom_type_fields_hint/1` | Declare its fields (`custom_type_fields/1` or `decorate/3`'s `custom_type_fields:`), or keep the action off the wire. `test/untyped_struct_test.exs` "decoration rejects undeclared map-like custom types" |
 | `Protocol.UndefinedError` "Jason.Encoder not implemented for X" when the response is encoded (a 500) | An untyped value (unconstrained `:map` / `:term`) holds something Jason can't encode; it is sent as the action produced it | Convert it in the action or declare the type; see [field selection](features/field-selection.md#untyped-data-output) |
 | Any other wire error | Look up the `type` in [`AGENTS.md`](../AGENTS.md#common-errors) Common Errors, then the `type`'s `build/2` clause in `lib/ash_rpc/error_builder.ex` | See [errors](features/errors.md) |

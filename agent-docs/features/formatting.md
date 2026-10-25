@@ -46,7 +46,7 @@ use, so selection, extraction and formatting recurse the same way.
 | `{:union, type}` | `kind: :union` | Member-specific; see [Union input](#union-input) |
 | `{:typed_struct, type}` | `:struct`/`:map`/`:tuple`/`:keyword` with type field-name overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: [declared fields only](#declared-only-output), named by the type's `custom.ash_rpc` override pair, falling back to `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the mapping source's `type_field_names/1`) |
 | `{:fields, type}` | `:struct`/`:map`/`:tuple`/`:keyword` without overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: [declared fields only](#declared-only-output), named by decoration. A type with no `fields` (an unconstrained map) passes through untouched |
-| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats) and undeclared non-builtin custom types with `:map` storage: their keys go out as strings, unformatted, and come in as sent. A custom type with declared fields is a `:type_ref` to a typed map instead (see [decoration](decoration.md#declared-custom-types)) |
+| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats). A custom type still `kind: :unknown` at runtime isn't map-like (decoration rejects undeclared map-like types on the wire), so its value passes through as produced (after `normalize_primitive/2` on extraction paths). A custom type with declared fields is a `:type_ref` to a typed map instead (see [decoration](decoration.md#declared-custom-types)) |
 
 Also handled before classification:
 
