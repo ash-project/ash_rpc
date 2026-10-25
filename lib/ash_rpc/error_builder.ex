@@ -99,8 +99,9 @@ defmodule AshRpc.ErrorBuilder do
 
   Fallbacks:
 
-  - `field_validation_error` *(hint)*: any other `{atom, term}` reason.
-  - `unknown_error`: a reason no clause recognises.
+  - `internal_error`: a reason no clause recognises. The client gets only a
+    generic message and `errorId`; the term is logged server-side under that
+    id, never sent.
 
   Exceptions and Ash errors are not pipeline reasons. They go through
   `AshRpc.Errors.to_errors/6`, and their `type` comes from the `AshRpc.Error`
@@ -855,17 +856,6 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
-  defp build({field_error_type, _} = error, ctx) when is_atom(field_error_type) do
-    drift(
-      ctx,
-      "field_validation_error",
-      "Field validation error: %{error_type}",
-      "Field validation error",
-      vars: %{error_type: to_string(field_error_type)},
-      details: %{error: inspect(error)}
-    )
-  end
-
   # === LISTS, REACTOR AND ASH ERRORS ===
 
   # e.g. the errors of an Ash.BulkResult
@@ -892,11 +882,8 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
-  defp build(other, _ctx) do
-    malformed("unknown_error", "An unexpected error occurred", "Unknown error",
-      details: %{error: inspect(other)}
-    )
-  end
+  # Anything else is an internal term: logged server-side, the client gets only an error id.
+  defp build(other, _ctx), do: Errors.unhandled_error(other)
 
   defp action_not_found_suggestion(%{profile: nil}),
     do: AshRpc.Profile.default_action_not_found_suggestion()
@@ -913,8 +900,8 @@ defmodule AshRpc.ErrorBuilder do
 
   defp format_field_type(:primitive_type), do: "primitive type"
   defp format_field_type(%Ash.Info.Manifest.Type{name: name}) when is_binary(name), do: name
-  defp format_field_type({:ash_type, type, _}), do: inspect(type)
-  defp format_field_type(other), do: inspect(other)
+  defp format_field_type(other) when is_atom(other) or is_binary(other), do: inspect(other)
+  defp format_field_type(_), do: "unknown"
 
   # Fixed-vocabulary paths (`getBy`, `identity`, `metadataFields`, `page`).
   defp format_path(path, formatter) when is_list(path) do

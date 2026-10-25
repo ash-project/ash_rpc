@@ -180,15 +180,15 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
       ],
       "success" => false
     },
-    "unknown_error" => %{
+    "unrecognised_term" => %{
       "errors" => [
         %{
-          "details" => %{"error" => "\"boom\""},
+          "errorId" => "<error-id>",
           "fields" => [],
-          "message" => "An unexpected error occurred",
+          "message" => "Something went wrong. Unique error id: <error-id>",
           "path" => [],
-          "shortMessage" => "Unknown error",
-          "type" => "unknown_error",
+          "shortMessage" => "Internal error",
+          "type" => "internal_error",
           "vars" => %{}
         }
       ],
@@ -827,20 +827,16 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
       ],
       "success" => false
     },
-    "field_validation_error" => %{
+    "unrecognised_tagged_tuple" => %{
       "errors" => [
         %{
-          "details" => %{
-            "error" => "{:some_validation_failure, :x}",
-            "hint" =>
-              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes."
-          },
+          "errorId" => "<error-id>",
           "fields" => [],
-          "message" => "Field validation error: %{errorType}",
+          "message" => "Something went wrong. Unique error id: <error-id>",
           "path" => [],
-          "shortMessage" => "Field validation error",
-          "type" => "field_validation_error",
-          "vars" => %{"errorType" => "some_validation_failure"}
+          "shortMessage" => "Internal error",
+          "type" => "internal_error",
+          "vars" => %{}
         }
       ],
       "success" => false
@@ -1026,7 +1022,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
       for {_label, reason} <- ErrorCases.cases(),
           not is_exception(reason) and not is_list(reason),
           into: MapSet.new(),
-          do: AshRpc.ErrorBuilder.build_error_response(runtime, reason).type
+          do: quietly(fn -> AshRpc.ErrorBuilder.build_error_response(runtime, reason).type end)
 
     {:docs_v1, _, _, _, %{"en" => moduledoc}, _, _} = Code.fetch_docs(AshRpc.ErrorBuilder)
     [_, section] = String.split(moduledoc, "## Error types")
@@ -1044,8 +1040,29 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
     test "wire output for #{label} is unchanged" do
       {_, reason} = List.keyfind(ErrorCases.cases(), unquote(label), 0)
 
-      assert AshRpc.error_response(AshRpc.Test.Profile, reason) ==
-               Map.fetch!(@golden, unquote(label))
+      response = quietly(fn -> AshRpc.error_response(AshRpc.Test.Profile, reason) end)
+
+      assert normalize_error_ids(response) == Map.fetch!(@golden, unquote(label))
     end
   end
+
+  # Unrecognised reasons log a warning with the term; keep it out of the test output.
+  defp quietly(fun) do
+    {result, _log} = ExUnit.CaptureLog.with_log(fun)
+    result
+  end
+
+  # internal_error carries a fresh id per call; the snapshot pins its shape.
+  defp normalize_error_ids(%{"errors" => errors} = response),
+    do: %{response | "errors" => Enum.map(errors, &normalize_error_id/1)}
+
+  defp normalize_error_id(%{"errorId" => id} = error) do
+    %{
+      error
+      | "errorId" => "<error-id>",
+        "message" => String.replace(error["message"], id, "<error-id>")
+    }
+  end
+
+  defp normalize_error_id(error), do: error
 end

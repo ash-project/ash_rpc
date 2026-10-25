@@ -176,7 +176,7 @@ from an existing file of the same kind. Formats without comment syntax need a
 | **Field selection, calculations, aggregates, nested query options, unions, load restrictions** | [features/field-selection.md](agent-docs/features/field-selection.md) | `test/field_selector_test.exs`, `test/untyped_struct_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
 | **Value/input formatting, declared-only output, union input, unconstrained maps, name mapping, client-name resolution** | [features/formatting.md](agent-docs/features/formatting.md) | `test/value_formatter_test.exs`, `test/declared_output_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs`, `test/client_names_test.exs`, `test/filter_input_test.exs` |
 | **Action metadata** | [features/action-metadata.md](agent-docs/features/action-metadata.md) | `test/action_metadata_test.exs` |
-| **Errors, handlers, wire error shape** | [features/errors.md](agent-docs/features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
+| **Errors, handlers, wire error shape** | [features/errors.md](agent-docs/features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs`, `test/error_redaction_test.exs` |
 
 ## Key Architecture Concepts
 
@@ -247,7 +247,9 @@ and applies the `AshRpc.Error` protocol. It then applies `show_raised_errors?/1`
 and policy breakdowns (`show_policy_breakdowns?/0`), the resource-level handler,
 and finally the profile's `error_handler/1` for the domain. A handler that returns
 `nil` drops the error. Pipeline reasons such as
-`{:action_not_found, …}` become error maps in `ErrorBuilder`. Request errors that
+`{:action_not_found, …}` become error maps in `ErrorBuilder`; a reason with no
+`ErrorBuilder` clause becomes `internal_error` with an `errorId`, the term only
+logged server-side. Request errors that
 a stale client could cause carry `details.hint` from the profile's `stale_client_hint/0`,
 and `action_not_found` carries `details.suggestion` from `action_not_found_suggestion/0`.
 Exceptions raised during `run_action`/`validate_action` are logged with their

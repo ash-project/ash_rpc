@@ -88,7 +88,8 @@ Then add a row to the fixtures table in [testing.md](testing.md).
    `test/error_builder_golden_test.exs`. The snapshot is a hand-maintained
    map: "the snapshot covers every case" fails until the label exists, and
    "wire output for <label> is unchanged" compares
-   `AshRpc.error_response(AshRpc.Test.Profile, reason)` with it.
+   `AshRpc.error_response(AshRpc.Test.Profile, reason)` with it (an
+   `internal_error`'s `errorId` normalized to `"<error-id>"`).
 
 Edit an existing `@golden` entry only for an intentional wire change; any
 diff there is a change every client sees. See [errors](features/errors.md).

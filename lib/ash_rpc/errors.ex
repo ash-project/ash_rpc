@@ -47,6 +47,12 @@ defmodule AshRpc.Errors do
     |> Enum.map(&format_error_field_names(&1, resource, action, runtime))
   end
 
+  @doc false
+  # A term no clause recognises: logged under a fresh error id, and the client
+  # only gets that id (`internal_error`), never the term.
+  @spec unhandled_error(term()) :: map()
+  def unhandled_error(error), do: handle_unimplemented_error(error)
+
   @doc """
   Unwraps nested error structures from Ash error classes.
   """
@@ -269,7 +275,7 @@ defmodule AshRpc.Errors do
     uuid = Ash.UUID.generate()
 
     Logger.warning("""
-    Unhandled non-exception error in RPC.
+    Unrecognised error term in RPC.
     Error ID: #{uuid}
     Error: #{inspect(error)}
     """)

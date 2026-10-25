@@ -167,6 +167,12 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
 - `Ash.Error.to_error_class/1` wraps non-exception terms, so a non-exception
   struct becomes `unknown_error` and never reaches an impl ("non-exception
   structs are wrapped as unknown errors and never reach an impl").
+- An unrecognised pipeline reason (any term without an `ErrorBuilder` clause,
+  including a bare `{atom, term}` tuple, a binary, or each element of a
+  keyword list) becomes `internal_error` with a fresh `errorId`. The term is
+  logged server-side under that id and never inspected into the response
+  (`test/error_redaction_test.exs`). A return type without a name is reported
+  as `"unknown"` in `invalid_field_selection`'s `vars.returnType`.
 - The `Forbidden.Policy` impl always says `"forbidden"`; it never leaks a
   breakdown (`test/errors_test.exs` "the protocol impl itself never leaks a
   breakdown").

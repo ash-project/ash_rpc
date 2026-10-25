@@ -22,7 +22,7 @@ Documentation Index in `AGENTS.md`.
 | [field selection](features/field-selection.md) | `test/field_selector_test.exs`, `test/untyped_struct_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
 | [formatting](features/formatting.md) | `test/value_formatter_test.exs`, `test/declared_output_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs`, `test/client_names_test.exs`, `test/filter_input_test.exs` |
 | [action metadata](features/action-metadata.md) | `test/action_metadata_test.exs` |
-| [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs` |
+| [errors](features/errors.md) | `test/errors_test.exs`, `test/error_protocol_test.exs`, `test/error_builder_golden_test.exs`, `test/error_formatter_test.exs`, `test/error_redaction_test.exs` |
 
 Five files belong to no feature doc:
 
@@ -207,6 +207,8 @@ assert %{"success" => true, "data" => [%{"title" => "one"}]} =
 **Error golden test.** `test/error_builder_golden_test.exs` renders every reason
 in `AshRpc.Test.ErrorCases.cases/0` and compares it with the inline `@golden`
 map. "the snapshot covers every case" fails if a case has no snapshot entry.
+An `internal_error`'s fresh `errorId` (and its copy in `message`) is replaced
+by `"<error-id>"` before comparing.
 Update `@golden` only for an intentional wire change; add a case to
 `test/support/error_cases.ex` when you add an `ErrorBuilder` clause (see
 [errors](features/errors.md)).
