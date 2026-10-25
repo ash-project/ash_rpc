@@ -348,6 +348,11 @@ no normalization, no extraction and no output formatting.
 - `false` values survive extraction against a field template under atom or
   string keys (the `regression:` cases in the "ResultProcessor.extract_value/5
   on plain maps with a field template" describe).
+- Typed maps, typed structs and declared custom types read each field by its
+  atom key, else by its string form, so a stored value with string keys is
+  extracted too, both by sub-field and as a bare typed field
+  (`test/custom_type_fields_test.exs` "a declared type's value with string
+  keys").
 
 ## Load Restrictions
 

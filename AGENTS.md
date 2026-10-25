@@ -171,7 +171,7 @@ from an existing file of the same kind. Formats without comment syntax need a
 
 | Working On | See Documentation | Test Files |
 |------------|-------------------|------------|
-| **MappingSource, decoration, entrypoints, client names, formatters** | [features/decoration.md](agent-docs/features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/redecorate_test.exs`, `test/untyped_struct_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
+| **MappingSource, decoration, entrypoints, client names, formatters** | [features/decoration.md](agent-docs/features/decoration.md) | `test/manifest/decorator_test.exs`, `test/manifest/custom_test.exs`, `test/manifest/custom_types_test.exs`, `test/custom_type_fields_test.exs`, `test/manifest/redecorate_test.exs`, `test/untyped_struct_test.exs`, `test/entrypoint_test.exs`, `test/runtime_test.exs`, `test/profile_test.exs` |
 | **Pipeline stages, validation, transports, tenant, filter/sort/page, get actions** | [features/pipeline.md](agent-docs/features/pipeline.md) | `test/run_action_test.exs`, `test/validation_test.exs`, `test/context_test.exs`, `test/plug_test.exs`, `test/channel_test.exs`, `test/multitenancy_test.exs`, `test/filter_sort_test.exs`, `test/get_actions_test.exs` |
 | **Field selection, calculations, aggregates, nested query options, unions, load restrictions** | [features/field-selection.md](agent-docs/features/field-selection.md) | `test/field_selector_test.exs`, `test/untyped_struct_test.exs`, `test/typed_field_selection_test.exs`, `test/calculations_test.exs`, `test/aggregates_test.exs`, `test/nested_query_opts_test.exs`, `test/load_restrictions_test.exs`, `test/result_output_test.exs`, `test/result_processor_test.exs`, `test/type_classification_test.exs`, `test/union_output_test.exs`, `test/keyword_tuple_test.exs`, `test/typed_struct_test.exs`, `test/generic_returns_test.exs`, `test/embedded_resources_test.exs` |
 | **Value/input formatting, declared-only output, union input, unconstrained maps, name mapping, client-name resolution** | [features/formatting.md](agent-docs/features/formatting.md) | `test/value_formatter_test.exs`, `test/declared_output_test.exs`, `test/field_formatter_test.exs`, `test/field_name_translation_test.exs`, `test/union_input_test.exs`, `test/unconstrained_map_test.exs`, `test/complex_input_test.exs`, `test/client_names_test.exs`, `test/filter_input_test.exs` |
@@ -199,7 +199,8 @@ from an existing file of the same kind. Formats without comment syntax need a
   map. `:extra_types` declares types used only outside the manifest.
 - Client names are resolved only by exact lookup (`AshRpc.ClientNames`);
   nothing parses a client string with a formatter. Extensions decorate types
-  that never enter the manifest with `Decorator.decorate_type/3`.
+  that never enter the manifest with `Decorator.decorate_type/4` (passing
+  the same `custom_type_fields:` option as `decorate/3`).
 - `Runtime.new/2` raises `ArgumentError` ("has no custom.ash_rpc decoration")
   when it gets an undecorated manifest.
 - Decoration raises `AshRpc.Manifest.UntypedStructError` when a wire
@@ -210,13 +211,15 @@ from an existing file of the same kind. Formats without comment syntax need a
   It raises the same error for a map-like custom type (`storage_type :map`
   or `composite?/1` true, with the constraints where it is used) that has no
   declared fields; the mapping source's optional `custom_type_fields_hint/1`
-  (or `decorate/3`'s `custom_type_fields_hint:` option) is appended to the
+  (or `decorate/3`'s `custom_type_fields_hint:` option: a string, or a
+  function of the module returning a string or `nil`) is appended to the
   message. Declared custom types are walked through their
   definitions. Other custom types are opaque.
   Extensions check entrypoints they serve themselves with
-  `Decorator.check_untyped_structs!/4` (`hint:` option), and their own types with
-  `AshRpc.Introspection.find_untyped_struct/2` (or `find_untyped_root/2` over
-  labelled roots).
+  `Decorator.check_untyped_structs!/4` (`hint:` option, same types), and their
+  own types with `AshRpc.Introspection.find_untyped_struct/2` (or
+  `find_untyped_root/2` over labelled roots). `map_like_custom_type?/2` is
+  the walk's test for a `kind: :unknown` node, for extensions' own checks.
 
 ### RPC Pipeline (Four Stages)
 Entry points are `AshRpc.run_action/4` and `AshRpc.validate_action/4` (profile, conn/socket/`%AshRpc.Context{}`, params, opts).

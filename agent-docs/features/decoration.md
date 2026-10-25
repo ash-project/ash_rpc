@@ -47,12 +47,15 @@ AshRpc.Manifest.Decorator.decorate(manifest, mapping_source, opts \\ [])
 
 A `field_spec()` is `{name, opts}` in the format of a typed map's `fields`
 constraint: `type:` (required), `constraints:`, `allow_nil?:` (default
-`true`), `description:`, plus `client_name:`, the field's client name, which
-wins over `type_field_names/1` and the formatter. `decorate/3`'s
+`true`), `description:`, plus `client_name:`, the field's client name. A
+declared type is named by its specs alone: a field without `client_name:` gets
+the formatter's name, and `type_field_names/1` isn't read for the type, at
+decoration or at runtime. `decorate/3`'s
 `custom_type_fields:` option (a function of the module) replaces the callback,
 for an extension whose declarations need state the bare mapping source can't
-reach; its `custom_type_fields_hint:` option replaces `custom_type_fields_hint/1`
-the same way. Without either, nothing is declared, and a wire use of a map-like
+reach; its `custom_type_fields_hint:` option (a string, or a function of the
+module returning a string or `nil`) replaces `custom_type_fields_hint/1` the
+same way. Without either, nothing is declared, and a wire use of a map-like
 custom type fails decoration ([Untyped Structs Are Rejected](#untyped-structs-are-rejected)).
 
 `formatter()` is `:camel_case | :snake_case | :pascal_case | {module, fun} |
@@ -237,12 +240,13 @@ the manifest build"). The `list_posts_allow_author` row is
   resource's `field_names/1` override, arguments the `argument_names/2`
   override; otherwise the output formatter (`test/manifest/redecorate_test.exs` "expected input keys
   follow the new output formatter").
-- Every type tree is walked bottom-up (`Decorator.decorate_type/3`, public):
+- Every type tree is walked bottom-up (`Decorator.decorate_type/4`, public):
   `manifest.types`, exposed resource fields and calculation arguments, and
   each entrypoint action's inputs, returns and metadata. Resource and
   named-reference nodes are skipped; their names live on the resource or the
-  named type. Extensions call `decorate_type/3` for types that never enter
-  the manifest; an undecorated type resolves no names, and its input keys
+  named type. Extensions call `decorate_type/4` (with the same
+  `custom_type_fields:` option they pass `decorate/3`) for types that never
+  enter the manifest; an undecorated type resolves no names, and its input keys
   pass as sent instead of being checked (`test/manifest/decorator_test.exs`
   "type names").
 - At runtime client names are resolved by exact lookup in these reverse maps
@@ -296,9 +300,12 @@ map:
   the manifest through `:extra_types`.
 - **Re-decorating** (`AshRpc.Manifest.redecorate/2`, or `decorate/3` on a
   decorated manifest) keeps the definitions, the marker and the spec client
-  names: uses are already `:type_ref`s, so nothing is asked again.
-- An empty or malformed spec list, or a `client_name:` collision, raises
-  (`ArgumentError` naming the module, `NameCollisionError`).
+  names: uses are already `:type_ref`s, so nothing is asked again, and an
+  existing definition stays as it is even when an unexposed resource's
+  `:unknown` use makes the module be asked about again.
+- An empty or malformed spec list, a field name declared twice, or a
+  `client_name:` collision, raises (`ArgumentError` naming the module,
+  `NameCollisionError`).
 - **Undeclared map-like types** (`storage_type :map` or composite where
   used) that a wire entrypoint reaches fail decoration with
   `UntypedStructError`; see [Untyped Structs Are Rejected](#untyped-structs-are-rejected).
