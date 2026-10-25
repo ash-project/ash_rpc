@@ -155,9 +155,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
           select_primitive(type, requested_fields, path)
         end
 
-      {:other, %Type{kind: :any}} ->
-        select_generic_fields(requested_fields, ctx)
-
       {:other, type} ->
         select_primitive(type, requested_fields, path)
     end
@@ -1181,21 +1178,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   defp normalize_union_fields(%{} = map) when map_size(map) > 0, do: [map]
   defp normalize_union_fields(fields) when is_list(fields), do: fields
   defp normalize_union_fields(fields), do: fields
-
-  # ---------------------------------------------------------------------------
-  # Generic Field Selection (for :any return type)
-  # ---------------------------------------------------------------------------
-
-  # An `:any` return declares no names to look up, so selections stay as sent.
-  defp select_generic_fields(requested_fields, _ctx) do
-    template =
-      Enum.map(requested_fields, fn
-        field_name when is_atom(field_name) or is_binary(field_name) -> field_name
-        %{} = field_map -> Map.to_list(field_map)
-      end)
-
-    {[], [], List.flatten(template)}
-  end
 
   # ---------------------------------------------------------------------------
   # Helper Functions

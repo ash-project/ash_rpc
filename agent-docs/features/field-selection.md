@@ -55,13 +55,16 @@ Flow:
    nested `filter`/`sort` through `AshRpc.FilterInput`. A miss stays the
    client's string and fails as `unknown_field` (or the type's variant) with
    the name as sent: under `:camel_case`, `"view_count"` is unknown
-   (`test/field_selector_test.exs` "strict field names"). Selections on a
-   generic `:any` return have no names to look up and stay as sent.
+   (`test/field_selector_test.exs` "strict field names").
    Type-driven recursion on `AshRpc.Introspection.classify_type/2`, the same
    dispatch `ValueFormatter` and `ResultProcessor` use (see
    [formatting](formatting.md)). The selection is applied to the action's return
    type: an array of the resource for a list read, the resource for a get or a
-   mutation, `action.returns` for a generic action.
+   mutation, `action.returns` for a generic action. A generic action without
+   `returns` gets a synthetic `kind: :any` type that dispatches as a
+   primitive: it takes no field selection, and any non-empty `fields` is
+   `invalid_field_selection` (`test/typed_field_selection_test.exs` "an
+   action without a return value").
 
    | `classify_type/2` result | Handler |
    |---|---|
@@ -71,7 +74,6 @@ Flow:
    | `{:typed_struct, type}` (a type with field-name overrides) | `select_typed_struct_fields/4` |
    | `{:fields, type}` tuple | `select_tuple_fields/4` |
    | `{:fields, type}` map/keyword/struct with `fields` constraints | `select_typed_map_fields/5` |
-   | `{:other, %{kind: :any}}` (generic action without a typed return) | names passed through to the template |
    | anything else | primitive: any nested selection is `invalid_field_selection` |
 
    A generic action's `return_classification`

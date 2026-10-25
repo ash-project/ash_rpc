@@ -57,9 +57,37 @@ defmodule AshRpc.TypedFieldSelectionTest do
     assert Enum.sort(template) == [is_featured?: [], word_count_1: []]
   end
 
-  test "string fields on an action without a return value do not crash" do
-    # run_action rescues exceptions, so a crash shows up as unknown_error.
-    refute match?(%{"errors" => [%{"type" => "unknown_error"}]}, run("ping", ["anything"]))
+  describe "an action without a return value" do
+    test "runs without fields" do
+      assert %{"success" => true} =
+               AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{"action" => "ping"})
+
+      assert %{"success" => true} = run("ping", [])
+    end
+
+    for fields <- [["id"], [%{"user" => ["id"]}], [nil], [1]] do
+      @fields fields
+      test "rejects fields #{inspect(fields)} as invalid_field_selection" do
+        assert %{"success" => false, "errors" => [%{"type" => "invalid_field_selection"} = error]} =
+                 run("ping", @fields)
+
+        refute inspect(error) =~ "Ash.Info.Manifest"
+      end
+    end
+
+    test "the field processor rejects atoms and maps too" do
+      rt = AshRpc.Runtime.new(AshRpc.Test.Profile)
+
+      for fields <- [[:id], [%{user: [:id]}], ["id"], [nil]] do
+        assert {:error,
+                {:invalid_field_selection, :primitive_type, %Ash.Info.Manifest.Type{kind: :any},
+                 ^fields, []}} =
+                 AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Post, :ping, fields)
+      end
+
+      assert {:ok, {[], [], []}} =
+               AshRpc.RequestedFieldsProcessor.process(rt, AshRpc.Test.Post, :ping, [])
+    end
   end
 
   describe "templates key nested typed fields by internal name" do
