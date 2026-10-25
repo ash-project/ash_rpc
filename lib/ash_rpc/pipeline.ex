@@ -694,7 +694,7 @@ defmodule AshRpc.Pipeline do
 
       case Ash.read_one(query) do
         {:ok, nil} when not_found_error? ->
-          {:error, Ash.Error.Query.NotFound.exception(resource: request.resource)}
+          not_found(request)
 
         result ->
           result
@@ -728,7 +728,7 @@ defmodule AshRpc.Pipeline do
           {:ok, record}
 
         %Ash.BulkResult{status: :success, records: []} ->
-          {:error, Ash.Error.Query.NotFound.exception(resource: request.resource)}
+          not_found(request)
 
         result ->
           bulk_error(result)
@@ -740,7 +740,7 @@ defmodule AshRpc.Pipeline do
     with {:ok, query} <- bulk_target_query(request, opts) do
       case Ash.bulk_destroy(query, request.action.name, request.input, bulk_opts(request, opts)) do
         %Ash.BulkResult{status: :success, records: [record]} -> {:ok, record}
-        %Ash.BulkResult{status: :success, records: []} -> {:ok, %{}}
+        %Ash.BulkResult{status: :success, records: []} -> not_found(request)
         result -> bulk_error(result)
       end
     end
@@ -791,6 +791,10 @@ defmodule AshRpc.Pipeline do
     do: {:error, Enum.map(errors, &drop_batch_index/1)}
 
   defp bulk_error(other), do: {:error, other}
+
+  # A get, update or destroy whose target query matched no record.
+  defp not_found(%Request{} = request),
+    do: {:error, Ash.Error.Query.NotFound.exception(resource: request.resource)}
 
   # Ash prefixes bulk errors' paths with the record's index in the batch. The
   # bulk action here always targets one record, so the index means nothing to

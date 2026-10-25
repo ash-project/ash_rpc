@@ -145,7 +145,7 @@ raw Ash result (`{:ok, result}` or `{:error, error}`).
 | `:read`, `action.get?` | `Ash.read_one/1` with select/load and the `getBy` filter. A nil result is `Ash.Error.Query.NotFound` unless `entrypoint.not_found_error?` is false |
 | `:read` | `Ash.read/1` with select/load, `filter` (`Ash.Query.filter_input/2`), `sort` (`Ash.Query.sort_input/2`) and `page` |
 | `:create` | `Ash.Changeset.for_create/4` with select/load, `Ash.create/1` |
-| `:update` / `:destroy` | `Ash.bulk_update/4` / `Ash.bulk_destroy/4` over a query narrowed by the identity and limited to 1, with `read_action: entrypoint.read_action` when set. Zero matched records is `not_found` for update and empty data for destroy. Ash's batch-index prefix on bulk error paths (`[0]`) is dropped, so an update error has the same `path` as on `validate_action` |
+| `:update` / `:destroy` | `Ash.bulk_update/4` / `Ash.bulk_destroy/4` over a query narrowed by the identity and limited to 1, with `read_action: entrypoint.read_action` when set. Zero matched records is `not_found` for both. Ash's batch-index prefix on bulk error paths (`[0]`) is dropped, so an update error has the same `path` as on `validate_action` |
 | `:action` | `Ash.run_action/1`; a resource-returning action gets the requested loads applied with `Ash.load/3`; a bare `:ok` becomes `%{}` |
 
 Identity errors (`missing_identity`, `invalid_identity`) come from this stage,
@@ -392,7 +392,9 @@ AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
   `update_author_by_identity`, `[:_primary_key, :name_active]`): a map with
   client field names, e.g. `%{"name" => …, "isActive" => true}`. Extra keys
   are ignored.
-- A non-matching value is `not_found` and changes nothing.
+- A non-matching value is `not_found` and changes nothing, for update and
+  destroy alike ("destroying a missing record is not_found and destroys
+  nothing").
 - `invalid_identity`: a scalar when the primary key isn't allowed, keys that
   match no listed identity (with `details.providedKeys` / `expectedKeys` in
   client names), an empty map, or a non-scalar value.
@@ -400,6 +402,8 @@ AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
   `details.expectedKeys` lists every accepted key.
 - `identities: []` is actor-scoped: no identity is read, and the target comes
   from `read_action` (`update_me` / `destroy_me` with `read_action: :me`).
+  When `read_action` matches no record (an actor with no stored record), the
+  result is `not_found` too.
 
 ## Calling stages directly
 

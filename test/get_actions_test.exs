@@ -267,6 +267,25 @@ defmodule AshRpc.GetActionsTest do
       assert reload!(post).title == "Before"
     end
 
+    test "destroying a missing record is not_found and destroys nothing" do
+      post = post!(%{})
+
+      assert %{"success" => false, "errors" => [%{"type" => "not_found"}]} =
+               run(%{"action" => "destroy_post", "identity" => Ash.UUID.generate()})
+
+      assert reload!(post).id == post.id
+    end
+
+    test "updating a missing record is not_found" do
+      assert %{"success" => false, "errors" => [%{"type" => "not_found"}]} =
+               run(%{
+                 "action" => "update_post",
+                 "identity" => Ash.UUID.generate(),
+                 "input" => %{"title" => "x"},
+                 "fields" => ["id"]
+               })
+    end
+
     test "a scalar identity is invalid_identity when the primary key is not allowed" do
       assert %{
                "success" => false,
@@ -422,6 +441,17 @@ defmodule AshRpc.GetActionsTest do
 
       assert id == actor.id
       assert {:error, _} = Ash.get(Author, actor.id)
+      assert reload!(other).id == other.id
+    end
+
+    test "destroy_me without a matching actor record is not_found" do
+      other = author!()
+      # An actor struct for an author that was never created.
+      actor = %Author{id: Ash.UUID.generate(), name: unique("ghost")}
+
+      assert %{"success" => false, "errors" => [%{"type" => "not_found"}]} =
+               run(%{"action" => "destroy_me", "fields" => ["id"]}, %AshRpc.Context{actor: actor})
+
       assert reload!(other).id == other.id
     end
   end
