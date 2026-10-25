@@ -6,6 +6,7 @@ defmodule AshRpc.ResultProcessorTest do
   use ExUnit.Case, async: true
 
   alias AshRpc.{ResultProcessor, Runtime}
+  alias AshRpc.Test.UnlistedEmbed
 
   setup do
     %{runtime: Runtime.new(AshRpc.Test.Profile)}
@@ -125,6 +126,15 @@ defmodule AshRpc.ResultProcessorTest do
       refute Map.has_key?(result, :secret)
       refute Map.has_key?(result, :internal_notes)
       refute_leaked(result, ["secret_value", "internal_notes_value"])
+    end
+
+    test "a resource struct whose module is not in the manifest becomes an empty map",
+         %{runtime: rt} do
+      refute Map.has_key?(rt.resource_lookup, UnlistedEmbed)
+      value = %UnlistedEmbed{label: "l", hidden: "hidden_value"}
+
+      assert ResultProcessor.normalize_primitive(value, rt) == %{}
+      assert ResultProcessor.normalize_primitive(%{nested: [value]}, rt) == %{nested: [%{}]}
     end
 
     test "an extraction template on a resource struct keeps only the selected field",

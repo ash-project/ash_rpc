@@ -190,7 +190,7 @@ defmodule AshRpc.ValueFormatter do
         value
 
       {:other, type} ->
-        format_scalar(value, type, formatter, direction)
+        format_scalar(value, type, direction, rt)
     end
   end
 
@@ -211,13 +211,25 @@ defmodule AshRpc.ValueFormatter do
   defp do_format(value, _type, _constraints, _formatter, _direction, _rt), do: value
 
   # ---------------------------------------------------------------------------
-  # Scalar Handler — vectors
+  # Scalar Handler — vectors and scalar structs
   # ---------------------------------------------------------------------------
 
-  defp format_scalar(value, %Type{module: Ash.Type.Vector}, _formatter, _direction),
+  # Values formatted without extraction still hold Elixir scalar structs
+  # (result extraction normalizes them first). At a typed position they get
+  # the same wire shape as extracted output (a `Duration` has no
+  # `Jason.Encoder`). Untyped data is sent as produced.
+  @scalar_structs [DateTime, Date, Time, NaiveDateTime, Duration, Decimal, Ash.CiString]
+
+  defp format_scalar(value, %Type{module: Ash.Type.Vector}, _direction, _rt),
     do: format_vector(value)
 
-  defp format_scalar(value, _type, _formatter, _direction), do: value
+  defp format_scalar(%module{} = value, type, :output, rt) when module in @scalar_structs do
+    if Introspection.untyped_data_type?(type, rt.type_lookup),
+      do: value,
+      else: AshRpc.ResultProcessor.normalize_primitive(value, rt)
+  end
+
+  defp format_scalar(value, _type, _direction, _rt), do: value
 
   # `%Ash.Vector{}` keeps its floats in a packed binary, which is not
   # JSON-encodable, so the wire format has to be a plain list of numbers. Result extraction
@@ -271,7 +283,34 @@ defmodule AshRpc.ValueFormatter do
     end)
   end
 
+  # A resource struct (only values formatted without extraction hold one) keeps
+  # the fields and relationships its own module has in the manifest, with
+  # unloaded and forbidden values as `nil`, and is then formatted as a map. A
+  # resource the manifest doesn't carry has no known public fields: `%{}`.
+  defp format_resource(%module{} = value, _resource, formatter, :output, rt) do
+    if Introspection.ash_resource?(module),
+      do: format_resource(manifest_fields(value, module, rt), module, formatter, :output, rt),
+      else: value
+  end
+
   defp format_resource(value, _resource, _formatter, _direction, _rt), do: value
+
+  defp manifest_fields(struct, module, rt) do
+    case Map.get(rt.resource_lookup, module) do
+      %Ash.Info.Manifest.Resource{} = res ->
+        for {key, value} <- Map.from_struct(struct),
+            Ash.Info.Manifest.Resource.has_field?(res, key),
+            into: %{},
+            do: {key, available(value)}
+
+      nil ->
+        %{}
+    end
+  end
+
+  defp available(%Ash.NotLoaded{}), do: nil
+  defp available(%Ash.ForbiddenField{}), do: nil
+  defp available(value), do: value
 
   # Extracted records carry atom keys; a string key is already a client name
   # (a read action's metadata override) and goes out as-is.
@@ -505,6 +544,11 @@ defmodule AshRpc.ValueFormatter do
         throw(error)
     end
   end
+
+  # A raw union value (only values formatted without extraction hold one) gets
+  # the `%{member => value}` shape of extracted output.
+  defp format_union_output(%Ash.Union{type: type, value: value}, members, storage, formatter, rt),
+    do: format_union_output(%{type => value}, members, storage, formatter, rt)
 
   defp format_union_output(value, members, storage_type, formatter, rt) do
     case find_union_member_spec(value, members) do

@@ -10,7 +10,21 @@ defmodule AshRpc.DeclaredOutputTest do
 
   alias Ash.Info.Manifest
   alias AshRpc.{Introspection, Runtime, ValueFormatter}
-  alias AshRpc.Test.{AmountValue, Catalog, Intake, Place, TaskStats, Widget}
+
+  alias AshRpc.Test.{
+    AmountValue,
+    Catalog,
+    Intake,
+    Place,
+    Post,
+    Project,
+    ProjectMeta,
+    ProjectMetaDetail,
+    ProjectNote,
+    TaskStats,
+    UnlistedEmbed,
+    Widget
+  }
 
   setup do
     %{rt: Runtime.new(AshRpc.Test.Profile)}
@@ -35,8 +49,8 @@ defmodule AshRpc.DeclaredOutputTest do
 
     assert output(value, returns(rt, Catalog, :amount_result), rt) == %{
              "currency" => "EUR",
-             "value" => Decimal.new("1.50"),
-             "breakdown" => %{"net" => Decimal.new("1.20"), "taxRate" => Decimal.new("0.25")}
+             "value" => "1.50",
+             "breakdown" => %{"net" => "1.20", "taxRate" => "0.25"}
            }
   end
 
@@ -157,6 +171,142 @@ defmodule AshRpc.DeclaredOutputTest do
              })
 
     assert %{"amount" => amount} = Enum.find(records, &(&1["id"] == post.id))
-    assert amount == %{"currency" => "EUR", "value" => Decimal.new("3"), "breakdown" => nil}
+    assert amount == %{"currency" => "EUR", "value" => "3", "breakdown" => nil}
+  end
+
+  describe "values formatted without extraction" do
+    @secret "hidden-secret"
+
+    defp meta(overrides \\ []) do
+      struct(
+        %ProjectMeta{
+          category: "ops",
+          priority_score: 3,
+          is_urgent: true,
+          deadline: ~D[2026-02-01],
+          detail: %ProjectMetaDetail{note: "n", level: 1},
+          internal_notes: @secret
+        },
+        overrides
+      )
+    end
+
+    @meta_out %{
+      "category" => "ops",
+      "priorityScore" => 3,
+      "isUrgent" => true,
+      "deadline" => "2026-02-01",
+      "status" => nil,
+      "detail" => %{"note" => "n", "level" => 1},
+      "infoType" => nil,
+      "displayCategory" => nil,
+      "adjustedPriority" => nil
+    }
+
+    test "scalar structs at typed positions get the RPC wire shape", %{rt: rt} do
+      value = %{
+        estimate: Duration.new!(hour: 1),
+        breaks: [Duration.new!(minute: 5)],
+        due_date: ~D[2026-01-15],
+        started_at: ~U[2026-01-01 00:00:00Z]
+      }
+
+      out = output(value, Project, rt)
+
+      assert out == %{
+               "estimate" => "PT1H",
+               "breaks" => ["PT5M"],
+               "dueDate" => "2026-01-15",
+               "startedAt" => "2026-01-01T00:00:00Z"
+             }
+
+      assert Jason.encode!(out)
+    end
+
+    test "other structs at typed scalar positions are left to their encoder", %{rt: rt} do
+      uri = URI.parse("https://example.com")
+      assert output(uri, :string, rt) == uri
+    end
+
+    test "scalar structs in input are left to the input cast", %{rt: rt} do
+      assert ValueFormatter.format(~D[2026-01-15], :date, [], :input, rt) == ~D[2026-01-15]
+    end
+
+    test "an embedded resource struct keeps only its manifest fields", %{rt: rt} do
+      value =
+        meta(
+          category: %Ash.ForbiddenField{
+            field: :category,
+            type: :attribute,
+            original_value: @secret
+          },
+          display_category: %Ash.NotLoaded{field: :display_category, type: :calculation}
+        )
+
+      out = output(value, field_type(rt, Project, :metadata), rt)
+
+      assert out == %{@meta_out | "category" => nil}
+      refute inspect(out) =~ @secret
+    end
+
+    test "a resource struct drops its private keys and unloaded relationships are nil", %{
+      rt: rt
+    } do
+      post = %Post{id: Ash.UUID.generate(), title: "T"}
+      out = output(post, Post, rt)
+
+      assert %{"title" => "T", "author" => nil, "comments" => nil} = out
+
+      client_names =
+        rt.resource_lookup |> Map.fetch!(Post) |> AshRpc.Manifest.Custom.field_names()
+
+      assert Enum.sort(Map.keys(out)) == client_names |> Map.values() |> Enum.sort()
+    end
+
+    test "resource structs in arrays and typed map fields are reduced too", %{rt: rt} do
+      value = %{history: [meta()], report: %{rows: [meta()], total: 1}}
+
+      assert output(value, Project, rt) == %{
+               "history" => [@meta_out],
+               "report" => %{"rows" => [@meta_out], "total" => 1}
+             }
+    end
+
+    test "a raw union value gets the member shape", %{rt: rt} do
+      type = field_type(rt, ProjectNote, :author_info)
+
+      assert output(%Ash.Union{type: :anonymous, value: "anon"}, type, rt) ==
+               %{"anonymous" => "anon"}
+
+      assert output(%Ash.Union{type: :meta, value: meta(info_type: "meta")}, type, rt) ==
+               %{"meta" => %{@meta_out | "infoType" => "meta"}}
+
+      assert output(%{author_info: %Ash.Union{type: :anonymous, value: "a"}}, ProjectNote, rt) ==
+               %{"authorInfo" => %{"anonymous" => "a"}}
+    end
+
+    test "untyped data is sent as produced", %{rt: rt} do
+      term = returns(rt, Catalog, :untyped_records_term)
+      duration = Duration.new!(hour: 1)
+      struct = %AmountValue{currency: "EUR", internal: :secret}
+
+      assert output(duration, term, rt) == duration
+      assert output(struct, term, rt) == struct
+      assert output(meta(), term, rt) == meta()
+      assert output([duration], {:array, :term}, rt) == [duration]
+      assert output(%{data: %{d: duration}}, Post, rt) == %{"data" => %{d: duration}}
+    end
+
+    test "a struct that isn't a resource passes through at a resource position", %{rt: rt} do
+      struct = %AmountValue{currency: "EUR"}
+      assert output(struct, Post, rt) == struct
+    end
+
+    test "a resource struct whose module is not in the manifest emits an empty map", %{rt: rt} do
+      refute Map.has_key?(rt.resource_lookup, UnlistedEmbed)
+      type = %Manifest.Type{kind: :embedded_resource, module: UnlistedEmbed}
+
+      assert output(%UnlistedEmbed{label: "l", hidden: @secret}, type, rt) == %{}
+    end
   end
 end

@@ -335,6 +335,8 @@ no normalization, no extraction and no output formatting.
 - The exception: a typed resource selected whole has no per-field types, so
   its untyped attributes are still normalized (`test/untyped_struct_test.exs`
   "a typed resource selected whole normalizes its untyped attributes").
+  A resource struct normalized that way keeps its manifest fields; one whose
+  resource isn't in the manifest becomes `%{}`.
 - Jason encodes maps, lists, binaries, numbers, atoms,
   `DateTime`/`Date`/`Time`/`NaiveDateTime`, `Decimal`, `Ash.CiString` and
   `Ash.Union`, which encodes only its value (so the wire shape is `value`, not

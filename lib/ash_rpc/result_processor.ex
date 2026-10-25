@@ -451,12 +451,12 @@ defmodule AshRpc.ResultProcessor do
   @doc """
   Converts a value without a type into a JSON-encodable shape: keyword lists
   become maps, `Duration`s become ISO 8601 strings, resource structs are cut
-  to their public fields, other structs become maps, and forbidden fields are
-  redacted. Typed values fall back to this when a node carries no field
-  types. The pipeline doesn't apply it to untyped data (an unconstrained
-  `:map` or `Ash.Type.Term`), which is sent as the action produced it, except
-  the attributes of a typed resource selected whole. Call it to convert such
-  data yourself.
+  to their public fields (`%{}` for a resource the manifest doesn't carry),
+  other structs become maps, and forbidden fields are redacted. Typed values
+  fall back to this when a node carries no field types. The pipeline doesn't
+  apply it to untyped data (an unconstrained `:map` or `Ash.Type.Term`), which
+  is sent as the action produced it, except the attributes of a typed
+  resource selected whole. Call it to convert such data yourself.
   """
   @spec normalize_primitive(term(), AshRpc.Runtime.t()) :: term()
   def normalize_primitive(nil, _rt), do: nil
@@ -530,20 +530,18 @@ defmodule AshRpc.ResultProcessor do
   end
 
   # Resource structs keep only their public (manifest) fields; a resource the
-  # manifest doesn't carry keeps every field.
+  # manifest doesn't carry has no known public fields and becomes `%{}`.
   defp normalize_resource_struct(%resource{} = value, rt) do
-    map = Map.from_struct(value)
+    case Map.get(rt.resource_lookup, resource) do
+      %Ash.Info.Manifest.Resource{fields: fields} when is_map(fields) ->
+        value
+        |> Map.from_struct()
+        |> Map.take(Map.keys(fields))
+        |> Map.new(fn {key, val} -> {key, normalize_primitive(val, rt)} end)
 
-    map =
-      case Map.get(rt.resource_lookup, resource) do
-        %Ash.Info.Manifest.Resource{fields: fields} when is_map(fields) ->
-          Map.take(map, Map.keys(fields))
-
-        _ ->
-          map
-      end
-
-    Map.new(map, fn {key, val} -> {key, normalize_primitive(val, rt)} end)
+      _ ->
+        %{}
+    end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

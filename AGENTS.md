@@ -269,6 +269,7 @@ stacktrace and returned as `unknown_error`.
   an `Ash.Union` inside it encodes as its value instead of `{member: value}`,
   and `run_action/4` callers get raw structs
 - **Typed output**: typed maps and structs (keywords and tuples included) emit only their declared fields on every output path, under decorated names; undeclared keys are dropped and struct values go through `Map.from_struct/1`
+- **Values formatted without extraction** (`ValueFormatter.format/5` on `:output`): scalar structs (`DateTime`, `Duration`, `Decimal`, …) at typed scalar positions get the extracted wire shape, resource structs keep only their manifest fields (`nil` for unloaded and forbidden values, `%{}` for a resource not in the manifest), and a raw `%Ash.Union{}` becomes `{member: value}`. Untyped data is unchanged
 - **Tenant param**: a `tenant` request param overrides the transport tenant (`conn` or `socket.assigns[:ash_tenant]`)
 - **Optional transports**: `AshRpc.Plug` / `AshRpc.Channel` are wrapped in `Code.ensure_loaded?/1` and only exist when plug/phoenix are present. `AshRpc.Context.from_source/1` follows the same rule
 

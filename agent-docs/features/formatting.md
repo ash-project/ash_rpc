@@ -42,11 +42,11 @@ use, so selection, extraction and formatting recurse the same way.
 | `classify_type/2` result | Covers | Keys come from |
 |---|---|---|
 | `{:array, item_type}` | `kind: :array` | Each element formatted with `item_type`; a non-list value passes through |
-| `{:resource, module}` | Resources, embedded resources, and `:struct`/`:map` types whose effective module is an Ash resource | Input: `AshRpc.ClientNames.resource_field/3`. Output: `FieldFormatter.format_field_for_client/3`; a string key (a read action's metadata override) goes out as-is. Each value recurses with the manifest field or relationship type |
-| `{:union, type}` | `kind: :union` | Member-specific; see [Union input](#union-input) |
+| `{:resource, module}` | Resources, embedded resources, and `:struct`/`:map` types whose effective module is an Ash resource | Input: `AshRpc.ClientNames.resource_field/3`. Output: `FieldFormatter.format_field_for_client/3`; a string key (a read action's metadata override) goes out as-is. Each value recurses with the manifest field or relationship type. A resource struct on output is first cut to its manifest fields ([values formatted without extraction](#values-formatted-without-extraction)) |
+| `{:union, type}` | `kind: :union` | Member-specific; see [Union input](#union-input). A raw `%Ash.Union{}` on output becomes `{member: value}` |
 | `{:typed_struct, type}` | `:struct`/`:map`/`:tuple`/`:keyword` with type field-name overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: [declared fields only](#declared-only-output), named by the type's `custom.ash_rpc` override pair, falling back to `AshRpc.Introspection.type_field_name_overrides/2` (type lookup, then the mapping source's `type_field_names/1`, which a declared custom type never consults) |
 | `{:fields, type}` | `:struct`/`:map`/`:tuple`/`:keyword` without overrides | Input: `AshRpc.ClientNames.type_field/3`. Output: [declared fields only](#declared-only-output), named by decoration. A type with no `fields` (an unconstrained map) passes through untouched |
-| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats). A custom type still `kind: :unknown` at runtime isn't map-like (decoration rejects undeclared map-like types on the wire), so its value passes through as produced (after `normalize_primitive/2` on extraction paths). A custom type with declared fields is a `:type_ref` to a typed map instead (see [decoration](decoration.md#declared-custom-types)) |
+| `{:other, type}` | Everything else | Scalars pass through, except `Ash.Type.Vector` (packed binary → list of floats) and, on output at a typed position, the [scalar structs](#values-formatted-without-extraction). A custom type still `kind: :unknown` at runtime isn't map-like (decoration rejects undeclared map-like types on the wire), so its value passes through as produced (after `normalize_primitive/2` on extraction paths). A custom type with declared fields is a `:type_ref` to a typed map instead (see [decoration](decoration.md#declared-custom-types)) |
 
 Also handled before classification:
 
@@ -88,6 +88,34 @@ payloads). Names come from decoration: the type's override pair (or
 entry. Only a container no decoration reached (a type missing from the type
 lookup) falls back to the formatter, and it runs over the declared field's
 name, never over a value key. Asserted by `test/declared_output_test.exs`.
+
+### Values formatted without extraction
+
+Result extraction hands `format/5` plain maps and strings. Values formatted
+without it (action metadata, values an extension formats itself) can still
+hold Elixir structs, so `:output` formatting gives them the extracted wire
+shape:
+
+- At a typed scalar position, a `DateTime`, `Date`, `Time`, `NaiveDateTime`,
+  `Duration`, `Decimal` or `Ash.CiString` goes through
+  `ResultProcessor.normalize_primitive/2` (`"PT1H"`, `"1.50"`, ISO 8601
+  strings). Other structs there are left to their encoder, and `:input`
+  values are left to the cast.
+- A resource struct, at any resource position, keeps only the fields and
+  relationships its own module has in the manifest. `Ash.NotLoaded` and
+  `Ash.ForbiddenField` values become `nil`, and the rest is formatted as a
+  map (client names, nested types), so private attributes, `__meta__` and a
+  forbidden field's `original_value` never reach the serializer. A resource
+  the manifest doesn't carry becomes `%{}`, as in
+  `ResultProcessor.normalize_primitive/2`. A struct that isn't a resource
+  passes through.
+- A raw `%Ash.Union{}` at a union position becomes `%{member => value}`, with
+  the member's value formatted by its type.
+
+Untyped data (`AshRpc.Introspection.untyped_data_type?/2`) is unchanged: a
+`Duration`, struct or resource struct under `:term` or an unconstrained `:map`
+is sent as produced. Asserted by `test/declared_output_test.exs` "values
+formatted without extraction".
 
 ### Deep nesting example
 
