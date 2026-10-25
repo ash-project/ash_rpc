@@ -132,6 +132,8 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"catalog_struct_summaries", AshRpc.Test.Catalog, :struct_summaries},
     # Declared custom types
     {"catalog_amount_result", AshRpc.Test.Catalog, :amount_result},
+    {"catalog_string_keyed_palette", AshRpc.Test.Catalog, :string_keyed_palette},
+    {"catalog_string_keyed_palette_box", AshRpc.Test.Catalog, :string_keyed_palette_box},
     {"create_swatch", AshRpc.Test.Swatch, :create},
     {"list_swatches", AshRpc.Test.Swatch, :read},
     {"create_swatch_box", AshRpc.Test.SwatchBox, :create},

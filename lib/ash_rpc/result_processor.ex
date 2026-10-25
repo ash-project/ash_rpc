@@ -368,7 +368,7 @@ defmodule AshRpc.ResultProcessor do
 
       template == [] ->
         Enum.reduce(fields, %{}, fn field_desc, acc ->
-          field_value = Map.get(normalized, field_desc.name)
+          field_value = plain_map_field(normalized, field_desc.name)
           extracted = extract_value(field_value, field_desc.type, [], [], rt)
           Map.put(acc, field_desc.name, extracted)
         end)
@@ -388,7 +388,8 @@ defmodule AshRpc.ResultProcessor do
     do: normalize_primitive(value, rt)
 
   # Extracts each template entry of a typed struct/map/tuple from its normalized
-  # map form, typing values by the field descriptors.
+  # map form, typing values by the field descriptors. A field is read by its
+  # atom key, else by its string form (stored maps can have string keys).
   defp extract_template_fields(normalized, type_info, template, rt) do
     Enum.reduce(template, %{}, fn
       {field_atom, nested_template}, acc when is_atom(field_atom) ->
@@ -407,7 +408,8 @@ defmodule AshRpc.ResultProcessor do
 
   defp put_template_field(acc, normalized, type_info, field, template, rt) do
     sub_type = Type.find_field_type(type_info, field)
-    Map.put(acc, field, extract_value(Map.get(normalized, field), sub_type, [], template, rt))
+    value = plain_map_field(normalized, field)
+    Map.put(acc, field, extract_value(value, sub_type, [], template, rt))
   end
 
   defp extract_plain_map_value(value, template, rt) when is_map(value) do

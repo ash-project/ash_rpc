@@ -71,6 +71,30 @@ defmodule AshRpc.CustomTypeFieldsTest do
     end
   end
 
+  test "client-named nested input round-trips through the TypedStruct inside declared fields" do
+    assert %{"amount" => %{"currency" => "EUR", "breakdown" => %{"taxRate" => "0.1"}}} =
+             ok!(%{
+               "action" => "create_swatch",
+               "input" => %{
+                 "amount" => %{
+                   "currency" => "EUR",
+                   "value" => "2",
+                   "breakdown" => %{"net" => "1.9", "taxRate" => "0.1"}
+                 }
+               },
+               "fields" => [%{"amount" => ["currency", %{"breakdown" => ["taxRate"]}]}]
+             })
+  end
+
+  test "a non-map input reaches the type's own cast" do
+    assert %{"type" => "invalid_attribute", "fields" => ["palette"]} =
+             error!(%{
+               "action" => "create_project",
+               "input" => %{"palette" => "red"},
+               "fields" => ["id"]
+             })
+  end
+
   test "arrays, union members, calculations and first aggregates of a declared type" do
     %{"id" => box_id} = ok!(%{"action" => "create_swatch_box", "fields" => ["id"]})
 
@@ -155,6 +179,26 @@ defmodule AshRpc.CustomTypeFieldsTest do
                n.success => true,
                n.data => %{n.palette => %{n.accent_color => "teal"}}
              }
+    end
+  end
+
+  describe "a declared type's value with string keys" do
+    test "is extracted by sub-field" do
+      assert ok!(%{
+               "action" => "catalog_string_keyed_palette",
+               "fields" => ["primary", "accentColor"]
+             }) == %{"primary" => "red", "accentColor" => "teal"}
+    end
+
+    test "comes back whole as a bare field of a typed-map return" do
+      assert ok!(%{"action" => "catalog_string_keyed_palette_box", "fields" => ["palette"]}) ==
+               %{
+                 "palette" => %{
+                   "primary" => "red",
+                   "secondary" => "blue",
+                   "accentColor" => "teal"
+                 }
+               }
     end
   end
 

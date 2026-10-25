@@ -195,6 +195,22 @@ defmodule AshRpc.Test.Catalog do
       end
     end
 
+    # Declared custom-type values with string keys, as a stored map can have:
+    # returned directly, and as a bare field of a typed-map return.
+    action :string_keyed_palette, AshRpc.Test.Palette do
+      run fn _input, _context ->
+        {:ok, %{"primary" => "red", "secondary" => "blue", "accent_color" => "teal"}}
+      end
+    end
+
+    action :string_keyed_palette_box, :map do
+      constraints fields: [palette: [type: AshRpc.Test.Palette]]
+
+      run fn _input, _context ->
+        {:ok, %{palette: %{"primary" => "red", "secondary" => "blue", "accent_color" => "teal"}}}
+      end
+    end
+
     # Untyped data (unconstrained :map, :term): sent exactly as produced. Resource
     # and TypedStruct structs have no Jason encoder, so encoding fails.
     action :untyped_records_map, :map do
