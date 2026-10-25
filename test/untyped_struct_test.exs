@@ -616,6 +616,29 @@ defmodule AshRpc.UntypedStructTest do
       refute UntypedStructError.details(%Type{kind: :struct}, ["returns"], hint: "H") =~ "H"
     end
 
+    test "details/3 with allow_resource?: false drops the resource alternative" do
+      type = %Type{kind: :struct, module: Ash.Type.Struct, instance_of: AshRpc.Test.TaskStats}
+      default = UntypedStructError.details(type, ["returns"])
+      without = UntypedStructError.details(type, ["returns"], allow_resource?: false)
+
+      assert default =~ "  * `instance_of` an Ash resource\n"
+      assert UntypedStructError.details(type, ["returns"], allow_resource?: true) == default
+      assert without == String.replace(default, "  * `instance_of` an Ash resource\n", "")
+
+      for alt <- [
+            "AshRpc.Test.TaskStats is an Ash type",
+            "an Ash.TypedStruct",
+            "a NewType over :struct with `fields` constraints",
+            "`:map` with no constraints"
+          ],
+          do: assert(without =~ alt)
+
+      custom = %Type{kind: :unknown, module: AshRpc.Test.Palette}
+
+      assert UntypedStructError.details(custom, ["returns"], hint: "H", allow_resource?: false) ==
+               UntypedStructError.details(custom, ["returns"], hint: "H")
+    end
+
     test "details/2 formats path segments" do
       assert UntypedStructError.details(%Type{kind: :struct}, [
                "argument :session",

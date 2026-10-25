@@ -110,7 +110,7 @@ formatter.
 | **`custom.ash_rpc` readers, lookups, `redecorate/2`** | `lib/ash_rpc/manifest.ex`, `lib/ash_rpc/manifest/custom.ex` (reverse maps, plus the forward `field_names/1`, `type_field_names/1`, `type_member_names/1`, `entrypoint_metadata_field_names/1`) |
 | **Name collisions / untyped structs** | `lib/ash_rpc/manifest/name_collision_error.ex`, `lib/ash_rpc/manifest/untyped_struct_error.ex` |
 | **Pipeline orchestration** | `lib/ash_rpc/pipeline.ex` |
-| **Manifest introspection (`get_action!/3`, `find_untyped_struct/2`)** | `lib/ash_rpc/introspection.ex` |
+| **Manifest introspection (`get_action!/3`, `find_type/4`, `find_untyped_struct/2`)** | `lib/ash_rpc/introspection.ex` |
 | **Native validation (`validate_action`)** | `lib/ash_rpc/validation.ex` |
 | **Field processing (entry point)** | `lib/ash_rpc/requested_fields_processor.ex` (delegator) |
 | **Client name → atom** | `lib/ash_rpc/field_processing/atomizer.ex` |
@@ -220,6 +220,11 @@ from an existing file of the same kind. Formats without comment syntax need a
   own types with `AshRpc.Introspection.find_untyped_struct/2` (or
   `find_untyped_root/2` over labelled roots). `map_like_custom_type?/2` is
   the walk's test for a `kind: :unknown` node, for extensions' own checks.
+  Both delegate to the generic walk `find_type/4` / `find_type_root/4`
+  (a matcher tested before descending, the first match ends the walk;
+  `cycles: :report` returns recursive named types), which extensions use
+  for their own type rules. `UntypedStructError.details/3` takes
+  `allow_resource?: false` for places that don't accept resources.
 
 ### RPC Pipeline (Four Stages)
 Entry points are `AshRpc.run_action/4` and `AshRpc.validate_action/4` (profile, conn/socket/`%AshRpc.Context{}`, params, opts).

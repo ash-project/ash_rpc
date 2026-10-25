@@ -380,11 +380,29 @@ defmodule AshRpc.Introspection do
       module.ash_type?()
   end
 
+  @typedoc """
+  Lookups a type-tree walk reads: any map with `:resource_lookup` and
+  `:type_lookup` from a decorated manifest (an `%AshRpc.Runtime{}` qualifies).
+  """
+  @type type_lookups :: %{
+          required(:resource_lookup) => map(),
+          required(:type_lookup) => map(),
+          optional(atom()) => term()
+        }
+
+  @typedoc "What `find_type/4` returns: the first matching node or cycle and its path, or `nil`."
+  @type find_type_result ::
+          {:match | :cycle, [type_path_segment()], Ash.Info.Manifest.Type.t()} | nil
+
   @doc """
-  Walks a manifest type tree and returns `{path, type}` for the first untyped
-  struct (`untyped_struct?/1`) or undeclared map-like custom type, or `nil`
-  when there is none. `type` is the offending node as the manifest has it, so
-  its `instance_of` (or `module`) names the struct or custom type.
+  Walks a manifest type tree and returns the first node for which `match`
+  returns true, as `{:match, path, node}`, or `nil` when there is none. `path`
+  lists the segments from `type` to the node (`[]` for array items), and
+  `node` is the node as the manifest has it.
+
+  `match` is tested on every node before its children, the root included, so
+  the walk never descends into a matching node: a matcher for resources finds
+  a resource and not what its fields contain.
 
   The walk follows array items (path segment `[]`), the `fields` of maps,
   structs and keywords, tuple `element_types`, union `members`, named types
@@ -394,35 +412,100 @@ defmodule AshRpc.Introspection do
   and then its calculation arguments) in name order, then its relationships in
   name order. A relationship is followed only when its destination is exposed
   (`AshRpc.Manifest.Custom.exposed?/1`), because relationships to unexposed
-  resources can't be selected. Resource nodes reached by type are walked
-  whatever their exposure.
+  resources can't be selected; it is walked as a `kind: :resource` node, which
+  `match` sees too. Resource nodes reached by type are walked whatever their
+  exposure.
 
   A declared custom type is a `:type_ref` to a `kind: :map` definition, walked
-  like any named type. A `kind: :unknown` node is reported when its module is
-  map-like at that use (`map_like_custom_type?/2` with the node's constraints:
-  `storage_type :map`, or `composite?/1` true); other custom types are opaque,
-  like `:term`. A `:type_ref` to a NewType over a custom type is checked with
+  like any named type. Other custom types are `kind: :unknown` leaves. A
+  `:type_ref` to a NewType over a custom type is tested as its definition with
   the ref's constraints (those given where it is used), not the NewType's
   defaults.
 
-  Each named type and resource is visited once, so recursive types terminate.
+  Each named type and resource is walked once, so recursive types terminate.
+  `cycles:` decides what a recursive named type gives:
 
-  `lookups` is any map with `:resource_lookup` and `:type_lookup` (an
-  `%AshRpc.Runtime{}` qualifies). They must come from a decorated manifest, so
-  that relationship exposure is known and declared custom types are
-  `:type_ref`s. The walk reads those lookups, and loads custom type modules to
-  call their `storage_type/1` and `composite?/1` callbacks. It is meant for
-  decoration time: the decorator, and extensions' compile-time checks.
+    * `:skip` (the default): a `:type_ref` already walked is skipped, and the
+      walk goes on.
+    * `:report`: a `:type_ref` to a named type that is being walked on the
+      current branch (its own definition, directly or through other named
+      types) ends the walk with `{:cycle, path, ref}`. A named type used on
+      two separate branches is not a cycle. Recursion through a resource
+      (a relationship back to it) is not reported: resources are skipped once
+      walked, as with `:skip`.
+
+  An unknown option, or another `cycles:` value, raises `ArgumentError`.
+
+  `lookups` must come from a decorated manifest (`t:type_lookups/0`), so that
+  relationship exposure is known and declared custom types are `:type_ref`s.
+  The walk reads only those lookups and whatever `match` reads. It is meant
+  for decoration time: the decorator (`find_untyped_struct/2` is this walk),
+  and extensions' compile-time checks of their own type rules.
   """
-  @spec find_untyped_struct(Ash.Info.Manifest.Type.t() | nil, %{
-          required(:resource_lookup) => map(),
-          required(:type_lookup) => map(),
-          optional(atom()) => term()
-        }) :: {[type_path_segment()], Ash.Info.Manifest.Type.t()} | nil
-  def find_untyped_struct(type, %{resource_lookup: _, type_lookup: _} = lookups) do
-    case walk_untyped(type, lookups, MapSet.new()) do
-      {:found, path, found} -> {path, found}
+  @spec find_type(
+          Ash.Info.Manifest.Type.t() | nil,
+          type_lookups(),
+          (Ash.Info.Manifest.Type.t() -> boolean()),
+          keyword()
+        ) :: find_type_result()
+  def find_type(type, %{resource_lookup: _, type_lookup: _} = lookups, match, opts \\ [])
+      when is_function(match, 1) do
+    ctx = %{lookups: lookups, match: match, cycles: cycles_option(opts)}
+
+    case walk_type(type, ctx, MapSet.new(), []) do
+      {:found, reason, path, found} -> {reason, path, found}
       {:ok, _visited} -> nil
+    end
+  end
+
+  @doc """
+  Runs `find_type/4` over `{root, type, tag}` roots in order and returns
+  `{:match | :cycle, [root | path], node, tag}` for the first root that hits,
+  or `nil`. `root` labels the place (such as `"returns"` or
+  `"argument :session"`); `tag` is carried through for the caller. Each root
+  is walked on its own.
+  """
+  @spec find_type_root(
+          [{term(), Ash.Info.Manifest.Type.t() | nil, tag}],
+          type_lookups(),
+          (Ash.Info.Manifest.Type.t() -> boolean()),
+          keyword()
+        ) :: {:match | :cycle, list(), Ash.Info.Manifest.Type.t(), tag} | nil
+        when tag: term()
+  def find_type_root(roots, lookups, match, opts \\ []) do
+    Enum.find_value(roots, fn {root, type, tag} ->
+      case find_type(type, lookups, match, opts) do
+        nil -> nil
+        {reason, path, found} -> {reason, [root | path], found, tag}
+      end
+    end)
+  end
+
+  @doc """
+  Returns `{path, type}` for the first untyped struct (`untyped_struct?/1`) or
+  undeclared map-like custom type in a manifest type tree, or `nil` when there
+  is none. `type` is the offending node as the manifest has it, so its
+  `instance_of` (or `module`) names the struct or custom type.
+
+  This is `find_type/4` with that test as the matcher (and `cycles: :skip`),
+  so it walks what `find_type/4` walks. A `kind: :unknown` node is reported
+  when its module is map-like at that use (`map_like_custom_type?/2` with the
+  node's constraints: `storage_type :map`, or `composite?/1` true); other
+  custom types are opaque, like `:term`. A `:type_ref` to a NewType over a
+  custom type is checked with the ref's constraints.
+
+  `lookups` must come from a decorated manifest (`t:type_lookups/0`). The walk
+  reads those lookups, and loads custom type modules to call their
+  `storage_type/1` and `composite?/1` callbacks. It is meant for decoration
+  time: the decorator, and extensions' compile-time checks. For other type
+  rules, use `find_type/4` with your own matcher.
+  """
+  @spec find_untyped_struct(Ash.Info.Manifest.Type.t() | nil, type_lookups()) ::
+          {[type_path_segment()], Ash.Info.Manifest.Type.t()} | nil
+  def find_untyped_struct(type, %{resource_lookup: _, type_lookup: _} = lookups) do
+    case find_type(type, lookups, &untyped_node?/1) do
+      {:match, path, found} -> {path, found}
+      nil -> nil
     end
   end
 
@@ -433,16 +516,14 @@ defmodule AshRpc.Introspection do
   (such as `"returns"` or `"argument :session"`); `tag` is carried through for
   the caller, such as the verb for `AshRpc.Manifest.UntypedStructError`.
   """
-  @spec find_untyped_root([{term(), Ash.Info.Manifest.Type.t() | nil, tag}], map()) ::
+  @spec find_untyped_root([{term(), Ash.Info.Manifest.Type.t() | nil, tag}], type_lookups()) ::
           {list(), Ash.Info.Manifest.Type.t(), tag} | nil
         when tag: term()
   def find_untyped_root(roots, lookups) do
-    Enum.find_value(roots, fn {root, type, tag} ->
-      case find_untyped_struct(type, lookups) do
-        nil -> nil
-        {path, found} -> {[root | path], found, tag}
-      end
-    end)
+    case find_type_root(roots, lookups, &untyped_node?/1) do
+      {:match, path, found, tag} -> {path, found, tag}
+      nil -> nil
+    end
   end
 
   @doc """
@@ -466,66 +547,78 @@ defmodule AshRpc.Introspection do
 
   def map_like_custom_type?(_module, _constraints), do: false
 
-  defp walk_untyped(nil, _lookups, visited), do: {:ok, visited}
+  defp cycles_option(opts) do
+    case Keyword.validate!(opts, cycles: :skip)[:cycles] do
+      cycles when cycles in [:skip, :report] ->
+        cycles
 
-  defp walk_untyped(%Ash.Info.Manifest.Type{} = type, lookups, visited) do
-    cond do
-      untyped_struct?(type) -> {:found, [], type}
-      undeclared_custom_type?(type) -> {:found, [], type}
-      true -> walk_untyped_children(type, lookups, visited)
+      other ->
+        raise ArgumentError, "expected cycles: to be :skip or :report, got: #{inspect(other)}"
     end
   end
 
-  defp walk_untyped(_other, _lookups, visited), do: {:ok, visited}
+  defp untyped_node?(type), do: untyped_struct?(type) or undeclared_custom_type?(type)
 
   defp undeclared_custom_type?(%Ash.Info.Manifest.Type{kind: :unknown} = type),
     do: map_like_custom_type?(type.module, type.constraints)
 
   defp undeclared_custom_type?(_type), do: false
 
-  defp walk_untyped_children(
-         %Ash.Info.Manifest.Type{kind: :array, item_type: item},
-         lookups,
-         visited
-       ),
-       do: walk_untyped_segments([{[], item}], lookups, visited)
+  # `visited` (named types and resources walked so far) is threaded through
+  # the whole walk; `stack` (the named types on the current branch) is not.
+  defp walk_type(%Ash.Info.Manifest.Type{} = type, ctx, visited, stack) do
+    if ctx.match.(type),
+      do: {:found, :match, [], type},
+      else: walk_children(type, ctx, visited, stack)
+  end
 
-  defp walk_untyped_children(
+  defp walk_type(_nil_or_other, _ctx, visited, _stack), do: {:ok, visited}
+
+  defp walk_children(%Ash.Info.Manifest.Type{kind: :array, item_type: item}, ctx, visited, stack),
+    do: walk_segments([{[], item}], ctx, visited, stack)
+
+  defp walk_children(
          %Ash.Info.Manifest.Type{kind: :type_ref, module: module} = ref,
-         lookups,
-         visited
+         ctx,
+         visited,
+         stack
        ) do
-    case named_type_definition(lookups.type_lookup, module) do
+    case named_type_definition(ctx.lookups.type_lookup, module) do
       # A NewType over a custom type: map-likeness uses the constraints given
       # where it is used, as Ash calls the callbacks.
       %Ash.Info.Manifest.Type{kind: :unknown} = definition ->
-        walk_untyped(%{definition | constraints: ref.constraints}, lookups, visited)
+        walk_type(%{definition | constraints: ref.constraints}, ctx, visited, stack)
 
       definition ->
-        if MapSet.member?(visited, {:type, module}) do
-          {:ok, visited}
-        else
-          walk_untyped(definition, lookups, MapSet.put(visited, {:type, module}))
+        cond do
+          ctx.cycles == :report and module in stack ->
+            {:found, :cycle, [], ref}
+
+          MapSet.member?(visited, {:type, module}) ->
+            {:ok, visited}
+
+          true ->
+            walk_type(definition, ctx, MapSet.put(visited, {:type, module}), [module | stack])
         end
     end
   end
 
-  defp walk_untyped_children(%Ash.Info.Manifest.Type{kind: kind} = type, lookups, visited)
+  defp walk_children(%Ash.Info.Manifest.Type{kind: kind} = type, ctx, visited, stack)
        when kind in [:resource, :embedded_resource] do
     module = Ash.Info.Manifest.Type.effective_resource(type)
-    resource = Map.get(lookups.resource_lookup, module) || type.resource
-    walk_untyped_resource(module, resource, lookups, visited)
+    resource = Map.get(ctx.lookups.resource_lookup, module) || type.resource
+    walk_resource(module, resource, ctx, visited, stack)
   end
 
-  defp walk_untyped_children(%Ash.Info.Manifest.Type{} = type, lookups, visited) do
+  defp walk_children(%Ash.Info.Manifest.Type{} = type, ctx, visited, stack) do
     (List.wrap(type.fields) ++ List.wrap(type.element_types) ++ List.wrap(type.members))
     |> Enum.map(fn %{name: name, type: child} -> {name, child} end)
-    |> walk_untyped_segments(lookups, visited)
+    |> walk_segments(ctx, visited, stack)
   end
 
-  defp walk_untyped_resource(_module, nil, _lookups, visited), do: {:ok, visited}
+  defp walk_resource(_module, nil, _ctx, visited, _stack), do: {:ok, visited}
 
-  defp walk_untyped_resource(module, %Ash.Info.Manifest.Resource{} = resource, lookups, visited) do
+  defp walk_resource(module, %Ash.Info.Manifest.Resource{} = resource, ctx, visited, stack) do
     if MapSet.member?(visited, {:resource, module}) do
       {:ok, visited}
     else
@@ -534,12 +627,12 @@ defmodule AshRpc.Introspection do
       field_steps =
         resource.fields
         |> Enum.sort_by(fn {name, _field} -> name end)
-        |> Enum.flat_map(fn {name, field} -> field_untyped_steps(name, field) end)
+        |> Enum.flat_map(fn {name, field} -> field_steps(name, field) end)
 
       relationship_steps =
         resource.relationships
         |> Enum.sort_by(fn {name, _rel} -> name end)
-        |> Enum.filter(fn {_name, rel} -> exposed_destination?(rel, lookups) end)
+        |> Enum.filter(fn {_name, rel} -> exposed_destination?(rel, ctx.lookups) end)
         |> Enum.map(fn {name, rel} ->
           {name,
            %Ash.Info.Manifest.Type{
@@ -549,11 +642,11 @@ defmodule AshRpc.Introspection do
            }}
         end)
 
-      walk_untyped_segments(field_steps ++ relationship_steps, lookups, visited)
+      walk_segments(field_steps ++ relationship_steps, ctx, visited, stack)
     end
   end
 
-  defp field_untyped_steps(name, field) do
+  defp field_steps(name, field) do
     arguments =
       field
       |> Map.get(:arguments)
@@ -581,11 +674,14 @@ defmodule AshRpc.Introspection do
 
   # Each step is `{segment, type}`; a segment that is a list of names is
   # spliced into the path (a calculation argument's `[field, argument]`).
-  defp walk_untyped_segments(steps, lookups, visited) do
+  defp walk_segments(steps, ctx, visited, stack) do
     Enum.reduce_while(steps, {:ok, visited}, fn {segment, child}, {:ok, visited} ->
-      case walk_untyped(child, lookups, visited) do
-        {:found, path, found} -> {:halt, {:found, path_prefix(segment) ++ path, found}}
-        {:ok, visited} -> {:cont, {:ok, visited}}
+      case walk_type(child, ctx, visited, stack) do
+        {:found, reason, path, found} ->
+          {:halt, {:found, reason, path_prefix(segment) ++ path, found}}
+
+        {:ok, visited} ->
+          {:cont, {:ok, visited}}
       end
     end)
   end

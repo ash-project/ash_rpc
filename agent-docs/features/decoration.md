@@ -380,6 +380,19 @@ recursive types terminate. `lookups` needs `:resource_lookup` and
 order and returns `{[root | path], node, tag}` for the first hit; the
 decorator and extensions build their roots and errors on it.
 
+Both are the generic walk `find_type(type, lookups, match, opts \\ [])` with
+the untyped test as the matcher. Extensions use it for their own type rules.
+`match` is a function of the node, tested on every node (the root included)
+before its children, so the walk never descends into a matching node: a
+resource matcher finds the resource, not a union in its fields. It returns
+`{:match, path, node}` or `nil`. `cycles: :skip` (the default) skips a named
+type already walked, as above; `cycles: :report` returns `{:cycle, path, ref}`
+for a `:type_ref` to a named type that is being walked on the current branch
+(`[:children, []]` for `AshRpc.Test.TreeNode`). A named type used on two
+separate branches is not a cycle, and recursion through a resource isn't
+reported (resources are walked once). `find_type_root(roots, lookups, match,
+opts \\ [])` returns `{:match | :cycle, [root | path], node, tag}`.
+
 The decorator checks only wire entrypoints (those `entrypoint/1` returns a
 struct for), root by root, inputs first, through the public
 `Decorator.check_untyped_structs!(manifest_entrypoint, %AshRpc.Entrypoint{},
@@ -417,12 +430,14 @@ applies only to this branch.
 
 Extensions word their own errors with `UntypedStructError.details/3`
 (`details(type, path, hint: hint)`; `details/2` is the same without a hint).
+`allow_resource?: false` drops the "`instance_of` an Ash resource"
+alternative, for places that don't accept resources.
 
 Tests: `test/untyped_struct_test.exs` "decoration rejects untyped structs",
 "decoration rejects undeclared map-like custom types",
 "check_untyped_structs!/4", "UntypedStructError", "typed and explicitly
 untyped shapes stay allowed";
-`test/introspection_test.exs` "untyped structs".
+`test/introspection_test.exs` "untyped structs", "find_type/4".
 
 ## The Output Formatter Is Fixed at Decoration
 

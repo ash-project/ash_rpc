@@ -81,8 +81,10 @@ defmodule AshRpc.Manifest.UntypedStructError do
   rejected and the alternatives. `<struct>` is the `instance_of` module or
   "`:struct` without constraints" (or "`:struct` with no fields" for
   `fields: []`), plus the NewType it was reached through. `hint:` is ignored.
+  `allow_resource?: false` (default `true`) drops the "`instance_of` an Ash
+  resource" alternative, for places that don't accept resources.
   """
-  @spec details(Type.t(), list(), hint: hint()) :: String.t()
+  @spec details(Type.t(), list(), hint: hint(), allow_resource?: boolean()) :: String.t()
   def details(%Type{kind: :unknown, module: module}, path, opts) do
     text =
       "an undeclared custom type, #{inspect(module)}, at #{format_path(path)}.\n\n" <>
@@ -95,13 +97,13 @@ defmodule AshRpc.Manifest.UntypedStructError do
     end
   end
 
-  def details(%Type{} = type, path, _opts) do
+  def details(%Type{} = type, path, opts) do
     """
     an untyped struct, #{describe(type)}, at #{format_path(path)}.
 
     The manifest has no field types for it, so its fields can't be selected, \
     named or filtered, and every one of them would reach the client. Use one of:
-    #{alternatives(type)}\
+    #{alternatives(type, Keyword.get(opts, :allow_resource?, true))}\
     """
   end
 
@@ -128,7 +130,7 @@ defmodule AshRpc.Manifest.UntypedStructError do
     end)
   end
 
-  defp alternatives(%Type{instance_of: instance_of}) do
+  defp alternatives(%Type{instance_of: instance_of}, allow_resource?) do
     ash_type =
       if ash_type_module?(instance_of),
         do: [
@@ -137,11 +139,12 @@ defmodule AshRpc.Manifest.UntypedStructError do
         ],
         else: []
 
+    resource = if allow_resource?, do: ["`instance_of` an Ash resource"], else: []
+
     (ash_type ++
+       ["an Ash.TypedStruct", "a NewType over :struct with `fields` constraints"] ++
+       resource ++
        [
-         "an Ash.TypedStruct",
-         "a NewType over :struct with `fields` constraints",
-         "`instance_of` an Ash resource",
          "`:map` with no constraints, converting the struct in the action, " <>
            "for data that is deliberately untyped"
        ])
