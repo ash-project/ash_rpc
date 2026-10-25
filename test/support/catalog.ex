@@ -336,7 +336,8 @@ defmodule AshRpc.Test.Catalog do
 
     # Composite custom types (see composite_types.ex), declared by the test
     # mapping source from composite_types/1. Not wire entrypoints: decoration
-    # rejects the first seven, and the rest only show what stays allowed.
+    # rejects the first seven, `composite_disabled` and
+    # `typed_struct_fields_custom` (undeclared), and allows the rest.
     action :composite_plain_result, AshRpc.Test.PlainPoint do
       run fn _input, _context -> {:ok, nil} end
     end
@@ -403,6 +404,22 @@ defmodule AshRpc.Test.Catalog do
 
     action :composite_deepening, AshRpc.Test.DeepeningPoint do
       run fn _input, _context -> {:ok, nil} end
+    end
+
+    # Undeclared map-like custom types (see composite_types.ex). Not wire
+    # entrypoints: decoration rejects the first two.
+    action :undeclared_custom_result, AshRpc.Test.DisabledPoint do
+      run fn _input, _context -> {:ok, nil} end
+    end
+
+    action :switch_map_argument, :boolean do
+      argument :s, AshRpc.Test.StorageSwitchNewType, constraints: [as_map?: true]
+      run fn _input, _context -> {:ok, true} end
+    end
+
+    action :switch_string_argument, :boolean do
+      argument :s, AshRpc.Test.StorageSwitchNewType, constraints: [as_map?: false]
+      run fn _input, _context -> {:ok, true} end
     end
 
     # A read whose metadata is an untyped struct.

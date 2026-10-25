@@ -12,15 +12,46 @@ defmodule AshRpc.UntypedStructTest do
   alias AshRpc.ResultProcessor
   alias AshRpc.Test.{Catalog, ManifestBuilder, MappingSource}
 
+  defmodule NoHintSource do
+    @moduledoc false
+    # The test mapping source without `custom_type_fields_hint/1`.
+    @behaviour AshRpc.MappingSource
+    alias AshRpc.Test.MappingSource
+
+    defdelegate output_formatter, to: MappingSource
+    defdelegate exposed_resource?(resource), to: MappingSource
+    defdelegate field_names(resource), to: MappingSource
+    defdelegate argument_names(resource, action), to: MappingSource
+    defdelegate type_field_names(type), to: MappingSource
+    defdelegate custom_type_fields(module), to: MappingSource
+    defdelegate entrypoint(entrypoint), to: MappingSource
+  end
+
+  defmodule NoDeclarationsSource do
+    @moduledoc false
+    # The test mapping source with no declared custom types.
+    @behaviour AshRpc.MappingSource
+    alias AshRpc.Test.MappingSource
+
+    defdelegate output_formatter, to: MappingSource
+    defdelegate exposed_resource?(resource), to: MappingSource
+    defdelegate field_names(resource), to: MappingSource
+    defdelegate argument_names(resource, action), to: MappingSource
+    defdelegate type_field_names(type), to: MappingSource
+    defdelegate custom_type_fields_hint(module), to: MappingSource
+    defdelegate entrypoint(entrypoint), to: MappingSource
+    def custom_type_fields(_module), do: nil
+  end
+
   defp entrypoint(action) do
     %{resource: Catalog, action: action, config: %{ash_rpc_test: %{name: "#{action}", opts: []}}}
   end
 
-  defp decorate(actions) do
+  defp decorate(actions, source \\ MappingSource) do
     actions
     |> Enum.map(&entrypoint/1)
     |> ManifestBuilder.generate!()
-    |> Decorator.decorate(MappingSource)
+    |> Decorator.decorate(source)
   end
 
   # `{resource, action, entry_opts}` rows; entry opts set `%AshRpc.Entrypoint{}` fields.
@@ -307,7 +338,89 @@ defmodule AshRpc.UntypedStructTest do
     end
   end
 
-  describe "check_untyped_structs!/3" do
+  describe "decoration rejects undeclared map-like custom types" do
+    test "a wire use of an undeclared map-like custom type" do
+      error = assert_raise UntypedStructError, fn -> decorate([:undeclared_custom_result]) end
+
+      assert error.message =~
+               ~s(Entrypoint "undeclared_custom_result" \(AshRpc.Test.Catalog, action :undeclared_custom_result\) ) <>
+                 "returns an undeclared custom type, AshRpc.Test.DisabledPoint, at returns."
+
+      assert error.message =~ "no fields are declared for it"
+      assert error.message =~ "Declare its fields in the mapping source."
+      refute error.message =~ "Ash.TypedStruct"
+      assert error.path == ["returns"]
+      assert error.struct_module == nil
+    end
+
+    test "the custom-type branch for an argument with use-site constraints" do
+      error = assert_raise UntypedStructError, fn -> decorate([:switch_map_argument]) end
+
+      assert error.message =~
+               "accepts an undeclared custom type, AshRpc.Test.StorageSwitchNewType, " <>
+                 "at argument :s."
+
+      assert error.path == ["argument :s"]
+      assert %Ash.Info.Manifest{} = decorate([:switch_string_argument])
+    end
+
+    test "a source without the hint callback omits it" do
+      error =
+        assert_raise UntypedStructError, fn ->
+          decorate([:undeclared_custom_result], NoHintSource)
+        end
+
+      assert error.message =~ "so their keys have no client names."
+      refute error.message =~ "Declare its fields in the mapping source."
+    end
+
+    test "a custom_type_fields_hint: option replaces the hint callback" do
+      error =
+        assert_raise UntypedStructError, fn ->
+          [:undeclared_custom_result]
+          |> Enum.map(&entrypoint/1)
+          |> ManifestBuilder.generate!()
+          |> Decorator.decorate(MappingSource,
+            custom_type_fields_hint: &"No fields for #{inspect(&1)}."
+          )
+        end
+
+      assert error.message =~ "No fields for AshRpc.Test.DisabledPoint."
+      refute error.message =~ "Declare its fields in the mapping source."
+    end
+
+    test "composite_types/1 isn't read when composite?/1 is false" do
+      # The test source derives fields from composite_types/1 only when
+      # composite?/1 is true, so this map-storage type is undeclared.
+      error = assert_raise UntypedStructError, fn -> decorate([:composite_disabled]) end
+
+      assert error.message =~
+               "returns an undeclared custom type, AshRpc.Test.DisabledPoint, at returns."
+    end
+
+    test "typed_struct_fields/0 isn't read" do
+      # Not an Ash callback: a custom type that describes itself only through
+      # it declares nothing.
+      error = assert_raise UntypedStructError, fn -> decorate([:typed_struct_fields_custom]) end
+
+      assert error.message =~
+               "returns an undeclared custom type, AshRpc.Test.TypedStructFieldsPoint, at returns."
+    end
+
+    test "a declared map-storage custom type passes; the same type undeclared is rejected" do
+      assert %Ash.Info.Manifest{} = decorate([:opaque_custom_result])
+
+      error =
+        assert_raise UntypedStructError, fn ->
+          decorate([:opaque_custom_result], NoDeclarationsSource)
+        end
+
+      assert error.message =~
+               "returns an undeclared custom type, AshRpc.Test.Palette, at returns."
+    end
+  end
+
+  describe "check_untyped_structs!/4" do
     # Off-wire entrypoints (no `ash_rpc_test` config, so the mapping source
     # returns nil) decorate; an extension checks them itself.
     setup do
@@ -371,6 +484,40 @@ defmodule AshRpc.UntypedStructTest do
 
       assert error.message =~
                "returns an untyped struct, AshRpc.Test.PlainSession, at metadata :session."
+    end
+
+    test "takes a hint: function for an undeclared custom type" do
+      manifest =
+        [:undeclared_custom_result]
+        |> Enum.map(&%{resource: Catalog, action: &1, config: %{}})
+        |> ManifestBuilder.generate!()
+        |> Decorator.decorate(MappingSource)
+
+      lookups = %{
+        resource_lookup: AshRpc.Manifest.resource_lookup(manifest),
+        type_lookup: AshRpc.Manifest.type_lookup(manifest)
+      }
+
+      entrypoint = manifest_entrypoint(manifest, :undeclared_custom_result)
+
+      error =
+        assert_raise UntypedStructError, fn ->
+          Decorator.check_untyped_structs!(entrypoint, wire(:undeclared_custom_result), lookups,
+            hint: &"Hint for #{inspect(&1)}."
+          )
+        end
+
+      assert error.message =~
+               "returns an undeclared custom type, AshRpc.Test.DisabledPoint, at returns."
+
+      assert error.message =~ "Hint for AshRpc.Test.DisabledPoint."
+
+      error =
+        assert_raise UntypedStructError, fn ->
+          Decorator.check_untyped_structs!(entrypoint, wire(:undeclared_custom_result), lookups)
+        end
+
+      refute error.message =~ "Hint for"
     end
 
     test "returns :ok for a typed entrypoint", ctx do
@@ -442,6 +589,33 @@ defmodule AshRpc.UntypedStructTest do
                  "`:struct` with `instance_of`"
     end
 
+    test "details/3 describes an undeclared custom type and appends the hint" do
+      type = %Type{kind: :unknown, module: AshRpc.Test.Palette}
+      details = UntypedStructError.details(type, ["returns", :palette], hint: "H")
+
+      assert details =~ "an undeclared custom type, AshRpc.Test.Palette, at returns → palette."
+
+      assert details =~
+               "Its values are maps or structs (`storage_type :map` / composite), but no " <>
+                 "fields are declared for it, so their keys have no client names."
+
+      assert String.ends_with?(details, "\n\nH")
+      refute details =~ "Ash.TypedStruct"
+
+      assert UntypedStructError.details(type, ["returns"],
+               hint: fn AshRpc.Test.Palette -> "F" end
+             )
+             |> String.ends_with?("\n\nF")
+
+      for hint <- [nil, fn _ -> nil end] do
+        assert UntypedStructError.details(type, ["returns"], hint: hint)
+               |> String.ends_with?("so their keys have no client names.")
+      end
+
+      # The hint is about declaring fields: an untyped struct doesn't get it.
+      refute UntypedStructError.details(%Type{kind: :struct}, ["returns"], hint: "H") =~ "H"
+    end
+
     test "details/2 formats path segments" do
       assert UntypedStructError.details(%Type{kind: :struct}, [
                "argument :session",
@@ -469,19 +643,6 @@ defmodule AshRpc.UntypedStructTest do
 
     test "a composite entry typed as the TypedStruct itself" do
       assert %Ash.Info.Manifest{} = decorate([:composite_typed_struct_entry])
-    end
-
-    test "a custom type without composite callbacks is opaque" do
-      assert %Ash.Info.Manifest{} = decorate([:opaque_custom_result])
-    end
-
-    test "composite_types/1 isn't read when composite?/1 is false" do
-      assert %Ash.Info.Manifest{} = decorate([:composite_disabled])
-    end
-
-    test "typed_struct_fields/0 isn't read" do
-      # Not an Ash callback: a custom type that describes itself only through it is opaque.
-      assert %Ash.Info.Manifest{} = decorate([:typed_struct_fields_custom])
     end
 
     @tag timeout: 10_000

@@ -241,8 +241,9 @@ defmodule AshRpc.Manifest.CustomTypesTest do
       _ -> nil
     end
 
+    # `amount_result` off the wire: undeclared, Amount would be rejected there.
     m =
-      project_rows()
+      [hd(project_rows()), %{resource: Catalog, action: :amount_result, config: %{}}]
       |> ManifestBuilder.generate!()
       |> Decorator.decorate(MappingSource, custom_type_fields: fields)
 
@@ -297,7 +298,7 @@ defmodule AshRpc.Manifest.CustomTypesTest do
     # Names from a closure survive a redecorate, which has no closure.
     fields = fn
       Palette -> SpellingSource.custom_type_fields(Palette)
-      _ -> nil
+      other -> MappingSource.custom_type_fields(other)
     end
 
     spelled =

@@ -110,12 +110,14 @@ defmodule AshRpc.Test.MappingSource do
     ]
 
   # Composite types: fields from composite_types/1 at default constraints,
-  # non-null, as an extension would derive them. Malformed entries are skipped.
+  # non-null, as an extension would derive them. Malformed entries are
+  # skipped, and a type with no entries left declares nothing.
   def custom_type_fields(module) do
     with true <- Code.ensure_loaded?(module) and function_exported?(module, :composite?, 1),
          {:ok, constraints} <- Ash.Type.init(module, []),
-         true <- module.composite?(constraints) do
-      for entry <- module.composite_types(constraints), spec = composite_spec(entry), do: spec
+         true <- module.composite?(constraints),
+         [_ | _] = specs <- composite_specs(module.composite_types(constraints)) do
+      specs
     else
       _ -> nil
     end
@@ -123,6 +125,8 @@ defmodule AshRpc.Test.MappingSource do
 
   @impl true
   def custom_type_fields_hint(_module), do: "Declare its fields in the mapping source."
+
+  defp composite_specs(entries), do: for(entry <- entries, spec = composite_spec(entry), do: spec)
 
   defp composite_spec({name, type, constraints}) when is_atom(name) and is_list(constraints),
     do: {name, [type: type, constraints: constraints, allow_nil?: false]}

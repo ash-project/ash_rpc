@@ -127,7 +127,8 @@ end
 
 defmodule AshRpc.Test.DisabledPoint do
   @moduledoc false
-  # Declares a plain-struct entry but isn't composite: the entries aren't read.
+  # Lists a plain-struct entry but isn't composite: the entries aren't read,
+  # so the test mapping source declares nothing and decoration rejects it.
   use Ash.Type
 
   @impl true
@@ -195,7 +196,7 @@ end
 defmodule AshRpc.Test.TypedStructFieldsPoint do
   @moduledoc false
   # Describes a plain-struct field only through `typed_struct_fields/0`, which
-  # isn't an Ash callback: the type stays opaque.
+  # isn't an Ash callback: undeclared, so decoration rejects it.
   use Ash.Type
 
   @impl true
@@ -242,10 +243,11 @@ end
 defmodule AshRpc.Test.RaisingPoint do
   @moduledoc false
   # A custom type whose `composite?/1` raises: the walk doesn't rescue it.
+  # `:string` storage, so the map-like check reaches `composite?/1`.
   use Ash.Type
 
   @impl true
-  def storage_type(_), do: :map
+  def storage_type(_), do: :string
   @impl true
   def cast_input(value, _), do: {:ok, value}
   @impl true
@@ -279,17 +281,15 @@ end
 
 defmodule AshRpc.Test.ConstrainedPointNewType do
   @moduledoc false
-  # A NewType over `ConstrainedPoint`: the `plain?` constraint given where it
-  # is used decides its entries for the untyped walk. Declared fields come
-  # from the default constraints.
+  # A NewType over `ConstrainedPoint`. Declared fields come from the default
+  # constraints, so a `plain?` constraint where it is used changes nothing.
   use Ash.Type.NewType, subtype_of: AshRpc.Test.ConstrainedPoint
 end
 
 defmodule AshRpc.Test.DeepeningPoint do
   @moduledoc false
   # A composite type that lists itself with a deeper `depth` each time: every
-  # level has new constraints, so only a nesting limit stops the untyped walk.
-  # Declared, it is one recursive named type.
+  # level has new constraints. Declared, it is one recursive named type.
   use Ash.Type
 
   @impl true
@@ -310,4 +310,68 @@ defmodule AshRpc.Test.DeepeningPoint do
   @impl true
   def composite_types(constraints),
     do: [{:next, __MODULE__, [depth: (constraints[:depth] || 0) + 1]}]
+end
+
+defmodule AshRpc.Test.StorageSwitch do
+  @moduledoc false
+  # `:map` storage only with `as_map?: true`: map-likeness depends on the
+  # constraints where it is used. Never declared.
+  use Ash.Type
+
+  @impl true
+  def constraints, do: [as_map?: [type: :boolean, default: false]]
+
+  @impl true
+  def storage_type(constraints), do: if(constraints[:as_map?], do: :map, else: :string)
+  @impl true
+  def cast_input(value, _), do: {:ok, value}
+  @impl true
+  def cast_stored(value, _), do: {:ok, value}
+  @impl true
+  def dump_to_native(value, _), do: {:ok, value}
+end
+
+defmodule AshRpc.Test.StorageSwitchNewType do
+  @moduledoc false
+  # A NewType over `StorageSwitch`: the `as_map?` given where it is used decides.
+  use Ash.Type.NewType, subtype_of: AshRpc.Test.StorageSwitch
+end
+
+defmodule AshRpc.Test.CompositeOnly do
+  @moduledoc false
+  # Composite with `:string` storage and no entries: map-like, never declared.
+  use Ash.Type
+
+  @impl true
+  def storage_type(_), do: :string
+  @impl true
+  def cast_input(value, _), do: {:ok, value}
+  @impl true
+  def cast_stored(value, _), do: {:ok, value}
+  @impl true
+  def dump_to_native(value, _), do: {:ok, value}
+
+  @impl true
+  def composite?(_), do: true
+  @impl true
+  def composite_types(_), do: []
+end
+
+defmodule AshRpc.Test.MapRaisingPoint do
+  @moduledoc false
+  # `:map` storage and a raising `composite?/1`: storage is checked first, so
+  # the map-like check never calls it.
+  use Ash.Type
+
+  @impl true
+  def storage_type(_), do: :map
+  @impl true
+  def cast_input(value, _), do: {:ok, value}
+  @impl true
+  def cast_stored(value, _), do: {:ok, value}
+  @impl true
+  def dump_to_native(value, _), do: {:ok, value}
+
+  @impl true
+  def composite?(_), do: raise(ArgumentError, "composite?/1 raised")
 end

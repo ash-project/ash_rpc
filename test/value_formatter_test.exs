@@ -30,6 +30,14 @@ defmodule AshRpc.ValueFormatterTest do
              ValueFormatter.format(%{theme_name: "x"}, AshRpc.Test.PostSettings, [], :output, rt)
   end
 
+  test "output: a custom type still :unknown at runtime passes through unchanged", %{runtime: rt} do
+    # Decoration rejects undeclared map-like custom types on the wire, so the
+    # runtime leaves such a value as produced: no stringified or formatted keys.
+    value = %{point_x: 1, nested: %{inner_key: [%{deep_key: 2}]}}
+
+    assert ValueFormatter.format(value, AshRpc.Test.DisabledPoint, [], :output, rt) == value
+  end
+
   describe ":map_with_tag tag keys" do
     test "the tag key uses the member's decorated name, not re-formatted" do
       rt = Runtime.from_manifest(AshRpc.Test.ManifestBuilder.build(output_formatter: :snake_case))

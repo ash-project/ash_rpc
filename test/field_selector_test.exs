@@ -543,6 +543,8 @@ defmodule AshRpc.FieldSelectorTest do
       @impl true
       defdelegate type_field_names(type), to: MappingSource
       @impl true
+      defdelegate custom_type_fields(module), to: MappingSource
+      @impl true
       defdelegate entrypoint(entrypoint), to: MappingSource
     end
 

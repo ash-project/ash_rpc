@@ -27,10 +27,10 @@ defmodule AshRpc.Manifest.Decorator do
 
   Pure: manifest in, manifest out. Raises `AshRpc.Manifest.NameCollisionError`
   on client-name collisions, `AshRpc.Manifest.UntypedStructError` when a wire
-  entrypoint can reach a struct type with no field types
-  (`AshRpc.Introspection.find_untyped_struct/2`; `check_untyped_structs!/3`
-  runs that check for one entrypoint), and `ArgumentError` when a formatter
-  misbehaves.
+  entrypoint can reach a struct type with no field types or a map-like custom
+  type without declared fields (`AshRpc.Introspection.find_untyped_struct/2`;
+  `check_untyped_structs!/4` runs that check for one entrypoint), and
+  `ArgumentError` when a formatter misbehaves.
   """
 
   alias Ash.Info.Manifest
@@ -61,6 +61,10 @@ defmodule AshRpc.Manifest.Decorator do
     * `:extra_types` — `%Ash.Info.Manifest.Type{}` trees used only outside the
       manifest (default `[]`). Custom types in them are declared like the
       manifest's own, so their definitions land in `manifest.types`.
+    * `:custom_type_fields_hint` — a `(module() -> String.t() | nil)` function
+      that replaces the mapping source's optional `custom_type_fields_hint/1`
+      callback, for the `AshRpc.Manifest.UntypedStructError` about an
+      undeclared map-like custom type.
 
   Each custom `use Ash.Type` module (a `kind: :unknown` node) with declared
   fields becomes a named `kind: :map` definition in `manifest.types`, marked
@@ -112,10 +116,16 @@ defmodule AshRpc.Manifest.Decorator do
       mapping_source: mapping_source,
       output_formatter: output_formatter,
       entrypoints:
-        wire_entrypoints(entrypoints, mapping_source, output_formatter, %{
-          resource_lookup: resource_lookup,
-          type_lookup: type_lookup
-        }),
+        wire_entrypoints(
+          entrypoints,
+          mapping_source,
+          output_formatter,
+          %{
+            resource_lookup: resource_lookup,
+            type_lookup: type_lookup
+          },
+          custom_type_fields_hint(mapping_source, opts)
+        ),
       vocabulary: vocabulary(output_formatter)
     }
 
@@ -568,7 +578,14 @@ defmodule AshRpc.Manifest.Decorator do
     end)
   end
 
-  defp wire_entrypoints(entrypoints, source, formatter, lookups) do
+  defp custom_type_fields_hint(source, opts) do
+    Keyword.get_lazy(opts, :custom_type_fields_hint, fn ->
+      if Code.ensure_loaded?(source) and function_exported?(source, :custom_type_fields_hint, 1),
+        do: &source.custom_type_fields_hint/1
+    end)
+  end
+
+  defp wire_entrypoints(entrypoints, source, formatter, lookups, hint) do
     Enum.reduce(entrypoints, %{}, fn entrypoint, acc ->
       case source.entrypoint(entrypoint) do
         nil ->
@@ -580,7 +597,7 @@ defmodule AshRpc.Manifest.Decorator do
                   "duplicate wire entrypoint name #{inspect(name)} from #{inspect(source)}"
           end
 
-          check_untyped_structs!(entrypoint, e, lookups)
+          check_untyped_structs!(entrypoint, e, lookups, hint: hint)
           Map.put(acc, name, put_client_metadata_names(e, formatter))
       end
     end)
@@ -588,8 +605,9 @@ defmodule AshRpc.Manifest.Decorator do
 
   @doc """
   Raises `AshRpc.Manifest.UntypedStructError` on the first untyped struct
-  (`AshRpc.Introspection.untyped_struct?/1`) the entrypoint can reach, and
-  returns `:ok` when there is none.
+  (`AshRpc.Introspection.untyped_struct?/1`) or undeclared map-like custom
+  type the entrypoint can reach (`AshRpc.Introspection.find_untyped_struct/2`),
+  and returns `:ok` when there is none.
 
   `decorate/3` runs it for every wire entrypoint. An extension runs it for
   entrypoints it serves itself (ones its mapping source returns `nil` for),
@@ -601,15 +619,22 @@ defmodule AshRpc.Manifest.Decorator do
 
   `lookups` holds `:resource_lookup` and `:type_lookup` from a decorated
   manifest (`AshRpc.Manifest.resource_lookup/1`, `type_lookup/1`).
+
+  Options: `hint:`, extra text for an undeclared custom type
+  (`t:AshRpc.Manifest.UntypedStructError.hint/0`). `decorate/3` passes the
+  mapping source's `custom_type_fields_hint/1` when it has one.
   """
-  @spec check_untyped_structs!(Manifest.Entrypoint.t(), AshRpc.Entrypoint.t(), %{
-          resource_lookup: map(),
-          type_lookup: map()
-        }) :: :ok
+  @spec check_untyped_structs!(
+          Manifest.Entrypoint.t(),
+          AshRpc.Entrypoint.t(),
+          %{resource_lookup: map(), type_lookup: map()},
+          hint: UntypedStructError.hint()
+        ) :: :ok
   def check_untyped_structs!(
         %Manifest.Entrypoint{resource: resource, action: action},
         %AshRpc.Entrypoint{} = wire,
-        %{resource_lookup: _, type_lookup: _} = lookups
+        %{resource_lookup: _, type_lookup: _} = lookups,
+        opts \\ []
       ) do
     action
     |> untyped_roots(resource, wire, lookups)
@@ -623,6 +648,7 @@ defmodule AshRpc.Manifest.Decorator do
           type: found,
           path: path,
           verb: verb,
+          hint: Keyword.get(opts, :hint),
           entrypoint: %{name: wire.name, resource: resource, action: action.name}
     end
   end

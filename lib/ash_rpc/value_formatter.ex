@@ -211,37 +211,13 @@ defmodule AshRpc.ValueFormatter do
   defp do_format(value, _type, _constraints, _formatter, _direction, _rt), do: value
 
   # ---------------------------------------------------------------------------
-  # Scalar Handler — vectors and custom map-storage types
+  # Scalar Handler — vectors
   # ---------------------------------------------------------------------------
 
   defp format_scalar(value, %Type{module: Ash.Type.Vector}, _formatter, _direction),
     do: format_vector(value)
 
-  defp format_scalar(value, %Type{module: module}, _formatter, :output)
-       when is_map(value) and not is_struct(value) do
-    if is_custom_type_with_map_storage?(module), do: stringify_keys(value), else: value
-  end
-
   defp format_scalar(value, _type, _formatter, _direction), do: value
-
-  defp is_custom_type_with_map_storage?(module) when is_atom(module) do
-    Ash.Type.ash_type?(module) and
-      Ash.Type.storage_type(module) == :map and
-      not Ash.Type.builtin?(module)
-  rescue
-    _ -> false
-  end
-
-  # A custom map-storage type declares no field names, so its keys go out
-  # as their string form, unformatted, and come in as sent.
-  defp stringify_keys(%{} = map) when not is_struct(map),
-    do: Map.new(map, fn {key, value} -> {stringify_key(key), stringify_keys(value)} end)
-
-  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
-  defp stringify_keys(other), do: other
-
-  defp stringify_key(key) when is_atom(key), do: Atom.to_string(key)
-  defp stringify_key(key), do: key
 
   # `%Ash.Vector{}` keeps its floats in a packed binary, which is not
   # JSON-encodable, so the wire format has to be a plain list of numbers. Result extraction

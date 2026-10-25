@@ -380,45 +380,39 @@ defmodule AshRpc.Introspection do
       module.ash_type?()
   end
 
-  @max_custom_type_nesting 32
-
   @doc """
   Walks a manifest type tree and returns `{path, type}` for the first untyped
-  struct (`untyped_struct?/1`), or `nil` when there is none. `type` is the
-  offending node as the manifest has it, so its `instance_of` (or `module`)
-  names the struct.
+  struct (`untyped_struct?/1`) or undeclared map-like custom type, or `nil`
+  when there is none. `type` is the offending node as the manifest has it, so
+  its `instance_of` (or `module`) names the struct or custom type.
 
   The walk follows array items (path segment `[]`), the `fields` of maps,
   structs and keywords, tuple `element_types`, union `members`, named types
-  (`:type_ref`, resolved with `named_type_definition/2`), composite custom
-  types, and resource and embedded-resource nodes. For a resource it walks the
-  public fields the manifest carries (attributes, calculations and aggregates,
-  each field's type and then its calculation arguments) in name order, then its
-  relationships in name order. A relationship is followed only when its
-  destination is exposed (`AshRpc.Manifest.Custom.exposed?/1`), because
-  relationships to unexposed resources can't be selected. Resource nodes
-  reached by type are walked whatever their exposure.
+  (`:type_ref`, resolved with `named_type_definition/2`), and resource and
+  embedded-resource nodes. For a resource it walks the public fields the
+  manifest carries (attributes, calculations and aggregates, each field's type
+  and then its calculation arguments) in name order, then its relationships in
+  name order. A relationship is followed only when its destination is exposed
+  (`AshRpc.Manifest.Custom.exposed?/1`), because relationships to unexposed
+  resources can't be selected. Resource nodes reached by type are walked
+  whatever their exposure.
 
-  A custom `use Ash.Type` node (`kind: :unknown` with a module) is walked only
-  when `composite?(constraints)` is true: each `composite_types(constraints)`
-  entry is resolved with `Ash.Info.Manifest.Generator.TypeResolver.resolve/2`
-  and walked under its name (not its storage key), in declared order. Custom
-  types that aren't composite are opaque, like `:term`. Neither callback is
-  rescued. A `:type_ref` to a NewType over a custom type calls the NewType's
-  callbacks with the ref's constraints (those given where it is used, as Ash
-  calls them), not the NewType's defaults.
+  A declared custom type is a `:type_ref` to a `kind: :map` definition, walked
+  like any named type. A `kind: :unknown` node is reported when its module is
+  map-like at that use (`map_like_custom_type?/2` with the node's constraints:
+  `storage_type :map`, or `composite?/1` true); other custom types are opaque,
+  like `:term`. A `:type_ref` to a NewType over a custom type is checked with
+  the ref's constraints (those given where it is used), not the NewType's
+  defaults.
 
-  Each named type and resource is visited once, and each custom type once per
-  constraints, so recursive types terminate. A custom type that nests itself
-  with changing constraints more than #{@max_custom_type_nesting} levels deep
-  along one path raises `ArgumentError`.
+  Each named type and resource is visited once, so recursive types terminate.
 
   `lookups` is any map with `:resource_lookup` and `:type_lookup` (an
   `%AshRpc.Runtime{}` qualifies). They must come from a decorated manifest, so
-  that relationship exposure is known. The walk reads those lookups, and loads
-  custom type modules to call their `composite?/1` and `composite_types/1`
-  callbacks. It is meant for decoration time: the decorator, and extensions'
-  compile-time checks.
+  that relationship exposure is known and declared custom types are
+  `:type_ref`s. The walk reads those lookups, and loads custom type modules to
+  call their `storage_type/1` and `composite?/1` callbacks. It is meant for
+  decoration time: the decorator, and extensions' compile-time checks.
   """
   @spec find_untyped_struct(Ash.Info.Manifest.Type.t() | nil, %{
           required(:resource_lookup) => map(),
@@ -426,7 +420,7 @@ defmodule AshRpc.Introspection do
           optional(atom()) => term()
         }) :: {[type_path_segment()], Ash.Info.Manifest.Type.t()} | nil
   def find_untyped_struct(type, %{resource_lookup: _, type_lookup: _} = lookups) do
-    case walk_untyped(type, lookups, MapSet.new(), %{}) do
+    case walk_untyped(type, lookups, MapSet.new()) do
       {:found, path, found} -> {path, found}
       {:ok, _visited} -> nil
     end
@@ -435,9 +429,9 @@ defmodule AshRpc.Introspection do
   @doc """
   Runs `find_untyped_struct/2` over `{root, type, tag}` roots in order and
   returns `{[root | path], type, tag}` for the first that reaches an untyped
-  struct, or `nil`. `root` labels the place (such as `"returns"` or
-  `"argument :session"`); `tag` is carried through for the caller, such as
-  the verb for `AshRpc.Manifest.UntypedStructError`.
+  struct or undeclared map-like custom type, or `nil`. `root` labels the place
+  (such as `"returns"` or `"argument :session"`); `tag` is carried through for
+  the caller, such as the verb for `AshRpc.Manifest.UntypedStructError`.
   """
   @spec find_untyped_root([{term(), Ash.Info.Manifest.Type.t() | nil, tag}], map()) ::
           {list(), Ash.Info.Manifest.Type.t(), tag} | nil
@@ -451,104 +445,81 @@ defmodule AshRpc.Introspection do
     end)
   end
 
-  # `depths` counts, per custom type module, how many times it is expanded
-  # along the current path (it isn't threaded between siblings like `visited`).
-  defp walk_untyped(nil, _lookups, visited, _depths), do: {:ok, visited}
+  @doc false
+  # Map-like: an Ash type module whose storage at these constraints is `:map`,
+  # or whose `composite?/1` is true. Storage is checked first; neither callback
+  # is rescued. Decoration time only: it loads the module.
+  @spec map_like_custom_type?(module() | nil, keyword() | nil) :: boolean()
+  def map_like_custom_type?(module, constraints) when is_atom(module) and not is_nil(module) do
+    constraints = constraints || []
 
-  defp walk_untyped(%Ash.Info.Manifest.Type{} = type, lookups, visited, depths) do
-    if untyped_struct?(type) do
-      {:found, [], type}
-    else
-      walk_untyped_children(type, lookups, visited, depths)
+    type_module_available?(module) and ash_type_module?(module) and
+      (Ash.Type.storage_type(module, constraints) == :map or
+         module.composite?(constraints) == true)
+  end
+
+  def map_like_custom_type?(_module, _constraints), do: false
+
+  defp walk_untyped(nil, _lookups, visited), do: {:ok, visited}
+
+  defp walk_untyped(%Ash.Info.Manifest.Type{} = type, lookups, visited) do
+    cond do
+      untyped_struct?(type) -> {:found, [], type}
+      undeclared_custom_type?(type) -> {:found, [], type}
+      true -> walk_untyped_children(type, lookups, visited)
     end
   end
 
-  defp walk_untyped(_other, _lookups, visited, _depths), do: {:ok, visited}
+  defp walk_untyped(_other, _lookups, visited), do: {:ok, visited}
+
+  defp undeclared_custom_type?(%Ash.Info.Manifest.Type{kind: :unknown} = type),
+    do: map_like_custom_type?(type.module, type.constraints)
+
+  defp undeclared_custom_type?(_type), do: false
 
   defp walk_untyped_children(
          %Ash.Info.Manifest.Type{kind: :array, item_type: item},
          lookups,
-         visited,
-         depths
+         visited
        ),
-       do: walk_untyped_segments([{[], item}], lookups, visited, depths)
+       do: walk_untyped_segments([{[], item}], lookups, visited)
 
   defp walk_untyped_children(
          %Ash.Info.Manifest.Type{kind: :type_ref, module: module} = ref,
          lookups,
-         visited,
-         depths
+         visited
        ) do
     case named_type_definition(lookups.type_lookup, module) do
-      # A NewType over a custom type: its callbacks get the constraints given
-      # where it is used, as Ash calls them. The custom clause's visited key
-      # (per constraints) handles repeats.
+      # A NewType over a custom type: map-likeness uses the constraints given
+      # where it is used, as Ash calls the callbacks.
       %Ash.Info.Manifest.Type{kind: :unknown} = definition ->
-        walk_untyped(%{definition | constraints: ref.constraints}, lookups, visited, depths)
+        walk_untyped(%{definition | constraints: ref.constraints}, lookups, visited)
 
       definition ->
         if MapSet.member?(visited, {:type, module}) do
           {:ok, visited}
         else
-          walk_untyped(definition, lookups, MapSet.put(visited, {:type, module}), depths)
+          walk_untyped(definition, lookups, MapSet.put(visited, {:type, module}))
         end
     end
   end
 
-  defp walk_untyped_children(%Ash.Info.Manifest.Type{kind: kind} = type, lookups, visited, depths)
+  defp walk_untyped_children(%Ash.Info.Manifest.Type{kind: kind} = type, lookups, visited)
        when kind in [:resource, :embedded_resource] do
     module = Ash.Info.Manifest.Type.effective_resource(type)
     resource = Map.get(lookups.resource_lookup, module) || type.resource
-    walk_untyped_resource(module, resource, lookups, visited, depths)
+    walk_untyped_resource(module, resource, lookups, visited)
   end
 
-  # A custom `use Ash.Type` module: its `composite_types/1` entries are walked
-  # under their names when `composite?/1` is true (Ash's contract). Other custom
-  # types are opaque. Neither callback is rescued: one that raises fails decoration.
-  defp walk_untyped_children(
-         %Ash.Info.Manifest.Type{kind: :unknown, module: module} = type,
-         lookups,
-         visited,
-         depths
-       )
-       when is_atom(module) and not is_nil(module) do
-    constraints = type.constraints || []
-    key = {:custom, module, constraints}
-
-    if MapSet.member?(visited, key) or not composite_type?(module, constraints) do
-      {:ok, visited}
-    else
-      depths = Map.update(depths, module, 1, &(&1 + 1))
-
-      if depths[module] > @max_custom_type_nesting do
-        raise ArgumentError,
-              "#{inspect(module)} nests itself more than #{@max_custom_type_nesting} levels " <>
-                "deep with changing constraints, so its composite_types/1 entries can't be " <>
-                "walked to an end"
-      end
-
-      constraints
-      |> module.composite_types()
-      |> Enum.flat_map(&composite_step/1)
-      |> walk_untyped_segments(lookups, MapSet.put(visited, key), depths)
-    end
-  end
-
-  defp walk_untyped_children(%Ash.Info.Manifest.Type{} = type, lookups, visited, depths) do
+  defp walk_untyped_children(%Ash.Info.Manifest.Type{} = type, lookups, visited) do
     (List.wrap(type.fields) ++ List.wrap(type.element_types) ++ List.wrap(type.members))
     |> Enum.map(fn %{name: name, type: child} -> {name, child} end)
-    |> walk_untyped_segments(lookups, visited, depths)
+    |> walk_untyped_segments(lookups, visited)
   end
 
-  defp walk_untyped_resource(_module, nil, _lookups, visited, _depths), do: {:ok, visited}
+  defp walk_untyped_resource(_module, nil, _lookups, visited), do: {:ok, visited}
 
-  defp walk_untyped_resource(
-         module,
-         %Ash.Info.Manifest.Resource{} = resource,
-         lookups,
-         visited,
-         depths
-       ) do
+  defp walk_untyped_resource(module, %Ash.Info.Manifest.Resource{} = resource, lookups, visited) do
     if MapSet.member?(visited, {:resource, module}) do
       {:ok, visited}
     else
@@ -572,7 +543,7 @@ defmodule AshRpc.Introspection do
            }}
         end)
 
-      walk_untyped_segments(field_steps ++ relationship_steps, lookups, visited, depths)
+      walk_untyped_segments(field_steps ++ relationship_steps, lookups, visited)
     end
   end
 
@@ -592,11 +563,6 @@ defmodule AshRpc.Introspection do
     |> AshRpc.Manifest.Custom.exposed?()
   end
 
-  defp composite_type?(module, constraints) do
-    type_module_available?(module) and function_exported?(module, :composite?, 1) and
-      function_exported?(module, :composite_types, 1) and module.composite?(constraints) == true
-  end
-
   # As the manifest generator loads type modules: an Elixir module that is
   # still compiling is waited for, since `function_exported?/3` is false for
   # a module that isn't loaded.
@@ -607,21 +573,11 @@ defmodule AshRpc.Introspection do
     end
   end
 
-  # `{name, type, constraints}` or `{name, storage_key, type, constraints}`:
-  # the path uses the name. Anything else is skipped.
-  defp composite_step({name, type, constraints}) when is_atom(name) and is_list(constraints),
-    do: [{name, Ash.Info.Manifest.Generator.TypeResolver.resolve(type, constraints)}]
-
-  defp composite_step({name, _storage_key, type, constraints}),
-    do: composite_step({name, type, constraints})
-
-  defp composite_step(_entry), do: []
-
   # Each step is `{segment, type}`; a segment that is a list of names is
   # spliced into the path (a calculation argument's `[field, argument]`).
-  defp walk_untyped_segments(steps, lookups, visited, depths) do
+  defp walk_untyped_segments(steps, lookups, visited) do
     Enum.reduce_while(steps, {:ok, visited}, fn {segment, child}, {:ok, visited} ->
-      case walk_untyped(child, lookups, visited, depths) do
+      case walk_untyped(child, lookups, visited) do
         {:found, path, found} -> {:halt, {:found, path_prefix(segment) ++ path, found}}
         {:ok, visited} -> {:cont, {:ok, visited}}
       end
