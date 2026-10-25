@@ -40,7 +40,7 @@ defmodule AshRpc.Manifest.CustomTypesTest do
     defdelegate exposed_resource?(resource), to: MappingSource
     defdelegate field_names(resource), to: MappingSource
     defdelegate argument_names(resource, action), to: MappingSource
-    # Overrides for Palette: `primary` applies, `accent_color` loses to the spec.
+    # Overrides for Palette, which a declared type never reads.
     def type_field_names(Palette), do: %{primary: "main", accent_color: "accentTone"}
     def type_field_names(type), do: MappingSource.type_field_names(type)
     defdelegate entrypoint(entrypoint), to: MappingSource
@@ -53,6 +53,38 @@ defmodule AshRpc.Manifest.CustomTypesTest do
     end
 
     def custom_type_fields(module), do: MappingSource.custom_type_fields(module)
+  end
+
+  defmodule HiddenProjectSource do
+    @moduledoc false
+    # The test mapping source with Project unexposed: its Palette use stays
+    # `:unknown` in the decorated manifest.
+    @behaviour AshRpc.MappingSource
+
+    defdelegate output_formatter, to: MappingSource
+    def exposed_resource?(Project), do: false
+    def exposed_resource?(resource), do: MappingSource.exposed_resource?(resource)
+    defdelegate field_names(resource), to: MappingSource
+    defdelegate argument_names(resource, action), to: MappingSource
+    defdelegate type_field_names(type), to: MappingSource
+    defdelegate entrypoint(entrypoint), to: MappingSource
+    defdelegate custom_type_fields(module), to: MappingSource
+  end
+
+  defmodule RenamingSource do
+    @moduledoc false
+    # The test mapping source with type_field_names/1 overrides for Palette,
+    # whose specs carry no client_name.
+    @behaviour AshRpc.MappingSource
+
+    defdelegate output_formatter, to: MappingSource
+    defdelegate exposed_resource?(resource), to: MappingSource
+    defdelegate field_names(resource), to: MappingSource
+    defdelegate argument_names(resource, action), to: MappingSource
+    def type_field_names(Palette), do: %{primary: "main"}
+    def type_field_names(type), do: MappingSource.type_field_names(type)
+    defdelegate entrypoint(entrypoint), to: MappingSource
+    defdelegate custom_type_fields(module), to: MappingSource
   end
 
   setup_all do
@@ -159,18 +191,34 @@ defmodule AshRpc.Manifest.CustomTypesTest do
     assert Enum.map(fields, & &1.name) == [:currency, :value, :breakdown]
   end
 
-  test "client_name in a spec wins over type_field_names and the formatter" do
+  test "names come from the specs' client_name, else the formatter, never type_field_names" do
     m = ManifestBuilder.build(mapping_source: SpellingSource)
     definition = types(m)[Palette]
 
     assert Custom.type_field_names(definition) == %{
-             primary: "main",
+             primary: "primary",
              secondary: "secondary",
              accent_color: "accentColour"
            }
 
-    assert {%{primary: "main", accent_color: "accentColour"}, _} =
+    assert {%{accent_color: "accentColour"}, _} =
              Custom.type_field_name_overrides_pair(definition)
+  end
+
+  test "type_field_names/1 names no declared field, at decoration or at runtime" do
+    m = ManifestBuilder.build(mapping_source: RenamingSource)
+
+    assert Custom.type_field_names(types(m)[Palette]).primary == "primary"
+    assert Custom.type_field_name_overrides_pair(types(m)[Palette]) == nil
+
+    params = %{
+      "action" => "create_project",
+      "input" => %{"palette" => %{"primary" => "red", "secondary" => "blue"}},
+      "fields" => [%{"palette" => ["primary"]}]
+    }
+
+    assert AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, params, manifest: m) ==
+             %{"success" => true, "data" => %{"palette" => %{"primary" => "red"}}}
   end
 
   test "client_name collisions raise NameCollisionError" do
@@ -201,6 +249,21 @@ defmodule AshRpc.Manifest.CustomTypesTest do
         |> Decorator.decorate(MappingSource, custom_type_fields: fields)
       end
     end
+  end
+
+  test "a field declared twice raises ArgumentError naming the module and the field" do
+    fields = fn
+      Palette -> [primary: [type: :string], primary: [type: :integer]]
+      _ -> nil
+    end
+
+    assert_raise ArgumentError,
+                 "custom type AshRpc.Test.Palette declares the field :primary more than once",
+                 fn ->
+                   [hd(project_rows())]
+                   |> ManifestBuilder.generate!()
+                   |> Decorator.decorate(MappingSource, custom_type_fields: fields)
+                 end
   end
 
   test "a NewType over a declared composite type replaces its :unknown entry in place" do
@@ -262,6 +325,36 @@ defmodule AshRpc.Manifest.CustomTypesTest do
     assert %Manifest.Type{kind: :map, module: Amount} = types(m)[Amount]
   end
 
+  test "a definition carries the module's default constraints" do
+    m =
+      [%{resource: AshRpc.Test.Post, action: :read, config: %{}}]
+      |> ManifestBuilder.generate!()
+      |> Decorator.decorate(MappingSource,
+        extra_types: [TypeResolver.resolve(AshRpc.Test.ConstrainedPoint, [])]
+      )
+
+    assert %Manifest.Type{kind: :map, constraints: [plain?: false]} =
+             types(m)[AshRpc.Test.ConstrainedPoint]
+  end
+
+  test "an undeclared NewType inside declared fields is added with its :unknown definition" do
+    fields = fn
+      Palette -> [mode: [type: AshRpc.Test.StorageSwitchNewType]]
+      _ -> nil
+    end
+
+    m =
+      [hd(project_rows())]
+      |> ManifestBuilder.generate!()
+      |> Decorator.decorate(MappingSource, custom_type_fields: fields)
+
+    assert %Manifest.Type{kind: :type_ref, module: AshRpc.Test.StorageSwitchNewType} =
+             field(types(m)[Palette], :mode).type
+
+    assert [%Manifest.Type{kind: :unknown, name: "StorageSwitchNewType"}] =
+             entries_for(m, AshRpc.Test.StorageSwitchNewType)
+  end
+
   test "decorate_type/4 rewrites a declared use and decorate_type/3 still works" do
     use_site = TypeResolver.resolve(Palette, [])
 
@@ -285,6 +378,22 @@ defmodule AshRpc.Manifest.CustomTypesTest do
     assert_raise ArgumentError, ~r/AshRpc.Test.Palette already has a manifest.types entry/, fn ->
       Decorator.decorate(manifest, MappingSource)
     end
+  end
+
+  test "redecorate/2 keeps the definition of a type an unexposed resource uses" do
+    m =
+      [%{resource: Project, action: :read, config: %{}}]
+      |> ManifestBuilder.generate!()
+      |> Decorator.decorate(HiddenProjectSource)
+
+    assert %Manifest.Type{kind: :unknown, module: Palette} =
+             AshRpc.Manifest.resource_lookup(m)[Project].fields[:palette].type
+
+    snake = AshRpc.Manifest.redecorate(m, output_formatter: :snake_case)
+
+    assert [definition] = entries_for(snake, Palette)
+    assert Custom.custom_type?(definition)
+    assert Custom.type_field_names(definition).accent_color == "accent_color"
   end
 
   test "redecorate/2 keeps definitions, markers and overrides", %{manifest: m} do

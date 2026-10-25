@@ -14,7 +14,8 @@ defmodule AshRpc.MappingSource do
 
   `custom_type_fields/1` and `custom_type_fields_hint/1` are optional. An
   extension whose declarations need state passes `decorate/3`'s
-  `custom_type_fields:` option instead, which replaces the callback.
+  `custom_type_fields:` and `custom_type_fields_hint:` options instead, which
+  replace the callbacks (the hint option also takes a plain string).
   """
 
   @type formatter ::
@@ -36,8 +37,9 @@ defmodule AshRpc.MappingSource do
   @typedoc """
   `{field_name, opts}`, in the format of a typed map's `fields` constraint:
   `type:` (required), `constraints:`, `allow_nil?:` (default `true`),
-  `description:`, plus `client_name:`, the field's client name (ahead of
-  `type_field_names/1` and the output formatter).
+  `description:`, plus `client_name:`, the field's client name. A field
+  without one is named by the output formatter: a declared type's names come
+  from its specs alone, and `type_field_names/1` isn't read for it.
   """
   @type field_spec :: {atom(), keyword()}
 

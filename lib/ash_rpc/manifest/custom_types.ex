@@ -14,8 +14,8 @@ defmodule AshRpc.Manifest.CustomTypes do
   #    about, named types missing from the manifest are resolved and added,
   #    and resources must already be in the manifest.
   # 4. Stage: a `manifest.types` entry `kind: :unknown` for a declared module
-  #    (a NewType over a custom type) is replaced in place; the rest is
-  #    appended.
+  #    (a NewType over a custom type) is replaced in place, an existing
+  #    definition (a redecorate) is kept; the rest is appended.
   #
   # The decorator then rewrites every declared use to a `:type_ref`.
 
@@ -165,7 +165,16 @@ defmodule AshRpc.Manifest.CustomTypes do
               )
     end)
 
-    specs
+    names = Enum.map(specs, &elem(&1, 0))
+
+    case names -- Enum.uniq(names) do
+      [] ->
+        specs
+
+      [name | _] ->
+        raise ArgumentError,
+              "custom type #{inspect(module)} declares the field #{inspect(name)} more than once"
+    end
   end
 
   defp validate_specs!(specs, module) do
@@ -260,6 +269,10 @@ defmodule AshRpc.Manifest.CustomTypes do
       Enum.map(types, fn
         %Manifest.Type{kind: :unknown, module: m} = entry ->
           if MapSet.member?(declared, m), do: state.asked[m], else: entry
+
+        # Already declared (a redecorate): the definition stays as it is.
+        %Manifest.Type{custom: %{ash_rpc: %{custom_type: true}}} = entry ->
+          entry
 
         %Manifest.Type{kind: kind, module: m} = entry ->
           if MapSet.member?(declared, m) do

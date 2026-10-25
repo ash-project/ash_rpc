@@ -61,10 +61,12 @@ defmodule AshRpc.Manifest.Decorator do
     * `:extra_types` — `%Ash.Info.Manifest.Type{}` trees used only outside the
       manifest (default `[]`). Custom types in them are declared like the
       manifest's own, so their definitions land in `manifest.types`.
-    * `:custom_type_fields_hint` — a `(module() -> String.t() | nil)` function
-      that replaces the mapping source's optional `custom_type_fields_hint/1`
-      callback, for the `AshRpc.Manifest.UntypedStructError` about an
-      undeclared map-like custom type.
+    * `:custom_type_fields_hint` — extra text for the
+      `AshRpc.Manifest.UntypedStructError` about an undeclared map-like custom
+      type: a `t:AshRpc.Manifest.UntypedStructError.hint/0` (a string, or a
+      `(module() -> String.t() | nil)` function of the type's module). It
+      replaces the mapping source's optional `custom_type_fields_hint/1`
+      callback, and is passed to `check_untyped_structs!/4` as `hint:`.
 
   Each custom `use Ash.Type` module (a `kind: :unknown` node) with declared
   fields becomes a named `kind: :map` definition in `manifest.types`, marked
@@ -75,8 +77,8 @@ defmodule AshRpc.Manifest.Decorator do
   entry `kind: :unknown` for a declared module (a NewType over a custom type)
   is replaced in place. Named types inside declared fields that the manifest
   lacks are added; resources inside them must already be in the manifest
-  (`ArgumentError` otherwise). An empty or malformed field list raises
-  `ArgumentError` naming the module.
+  (`ArgumentError` otherwise). An empty or malformed field list, or one that
+  declares a field twice, raises `ArgumentError` naming the module.
   """
   @spec decorate(Manifest.t(), module(), keyword()) :: Manifest.t()
   def decorate(%Manifest{} = manifest, mapping_source, opts \\ []) when is_atom(mapping_source) do
@@ -439,14 +441,11 @@ defmodule AshRpc.Manifest.Decorator do
       else: %Manifest.Type{type | custom: Map.put(type.custom, :ash_rpc, payload)}
   end
 
-  # A declared custom type's spec client names win over the mapping source's
-  # overrides; they live on the definition, so re-decorating keeps them.
-  defp overrides_for(type, %{custom_type: true} = existing, source) do
-    case Map.merge(type_overrides(type, source) || %{}, existing[:field_name_overrides] || %{}) do
-      empty when map_size(empty) == 0 -> nil
-      overrides -> overrides
-    end
-  end
+  # A declared custom type is named only by its specs' client names, which
+  # live on the definition, so re-decorating keeps them; `type_field_names/1`
+  # isn't read.
+  defp overrides_for(_type, %{custom_type: true} = existing, _source),
+    do: existing[:field_name_overrides]
 
   defp overrides_for(type, _existing, source), do: type_overrides(type, source)
 
@@ -620,9 +619,11 @@ defmodule AshRpc.Manifest.Decorator do
   `lookups` holds `:resource_lookup` and `:type_lookup` from a decorated
   manifest (`AshRpc.Manifest.resource_lookup/1`, `type_lookup/1`).
 
-  Options: `hint:`, extra text for an undeclared custom type
-  (`t:AshRpc.Manifest.UntypedStructError.hint/0`). `decorate/3` passes the
-  mapping source's `custom_type_fields_hint/1` when it has one.
+  Options: `hint:`, extra text for an undeclared map-like custom type, a
+  `t:AshRpc.Manifest.UntypedStructError.hint/0` (a string, or a
+  `(module() -> String.t() | nil)` function of the type's module; `nil` adds
+  nothing). `decorate/3` passes its `custom_type_fields_hint:` option, else
+  the mapping source's `custom_type_fields_hint/1` when it has one.
   """
   @spec check_untyped_structs!(
           Manifest.Entrypoint.t(),

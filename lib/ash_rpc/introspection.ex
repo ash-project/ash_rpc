@@ -445,10 +445,16 @@ defmodule AshRpc.Introspection do
     end)
   end
 
-  @doc false
-  # Map-like: an Ash type module whose storage at these constraints is `:map`,
-  # or whose `composite?/1` is true. Storage is checked first; neither callback
-  # is rescued. Decoration time only: it loads the module.
+  @doc """
+  True when `module` is an Ash type module that is map-like at `constraints`
+  (`nil` counts as `[]`): its `storage_type/1` is `:map`, or its `composite?/1`
+  is true. Storage is checked first, and neither callback is rescued. Any
+  other value, `nil` included, is `false`.
+
+  This is the test `find_untyped_struct/2` applies to a `kind: :unknown` node,
+  for extensions whose compile-time checks reject the same custom types. It
+  loads the module, so it is meant for decoration time.
+  """
   @spec map_like_custom_type?(module() | nil, keyword() | nil) :: boolean()
   def map_like_custom_type?(module, constraints) when is_atom(module) and not is_nil(module) do
     constraints = constraints || []
@@ -643,15 +649,21 @@ defmodule AshRpc.Introspection do
 
   @doc """
   Client-name overrides for a type module: decorated type first, then the
-  mapping source (D4) for types the manifest doesn't carry.
+  mapping source (D4) for types the manifest doesn't carry or that carry no
+  overrides. A declared custom type is named by its field specs only, so the
+  mapping source isn't consulted for it.
   """
   def type_field_name_overrides(%{type_lookup: type_lookup, mapping_source: source}, module)
       when is_atom(module) and not is_nil(module) do
     case Ash.Info.Manifest.get_type(type_lookup, module) do
       %Ash.Info.Manifest.Type{} = type ->
         case AshRpc.Manifest.Custom.type_field_name_overrides_pair(type) do
-          {fwd, _rev} -> fwd
-          nil -> source_type_field_names(source, module)
+          {fwd, _rev} ->
+            fwd
+
+          nil ->
+            unless AshRpc.Manifest.Custom.custom_type?(type),
+              do: source_type_field_names(source, module)
         end
 
       nil ->
