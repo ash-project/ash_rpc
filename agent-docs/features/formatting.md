@@ -152,12 +152,12 @@ returns `%{"scoredStats" => %{"wordCount1" => 5}}`
 ### Where it runs in the pipeline
 
 - **`parse_request`** (input): `AshRpc.InputFormatter.format/4` formats
-  `params["input"]`; a key that isn't a client name, top-level or nested, is
-  `unknown_input` before Ash runs. The other top-level param
-  keys resolve through the `:params` vocabulary (a miss is dropped), `filter`
+  the `input` param; a key that isn't a client name, top-level or nested, is
+  `unknown_input` before Ash runs. Every top-level param key (`input` and
+  `identity` included) resolves through the `:params` vocabulary (a miss is
+  dropped), `filter`
   and `sort` through `AshRpc.FilterInput`, `page` keys through the `:page`
   vocabulary and `getBy`/`identity` keys through `ClientNames.resource_field/3`.
-  `input` and `identity` are popped first and matched literally.
 - **`format_output`** (output): `AshRpc.Pipeline` calls `ValueFormatter.format/5`
   directly (there is no output-formatter module). Non-generic actions are
   formatted against the resource; generic actions use the classification of

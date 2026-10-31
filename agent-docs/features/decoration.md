@@ -106,7 +106,7 @@ formatter, in four scopes (`test/manifest/decorator_test.exs` "vocabulary"):
 
 | Scope | Internal names |
 |-------|----------------|
-| `:params` | `action`, `fields`, `get_by`, `filter`, `sort`, `page`, `tenant`, `metadata_fields` (`input` and `identity` stay literal) |
+| `:params` | `action`, `input`, `identity`, `fields`, `get_by`, `filter`, `sort`, `page`, `tenant`, `metadata_fields` |
 | `:page` | `limit`, `offset`, `count`, `after`, `before` |
 | `:query_opts` | nested envelope keys: `page`, `filter`, `sort`, `limit`, `offset`, `args`, `fields` |
 | `:filter_ops` | `and`, `or`, `not`, `input`, every `Ash.Filter` built-in operator name, the aliases `equals`/`not_equals`/`gt`/`lt`/`gte`/`lte`, and every built-in function name |
