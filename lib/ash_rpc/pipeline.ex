@@ -904,10 +904,12 @@ defmodule AshRpc.Pipeline do
 
       meta when is_map(meta) ->
         # Values were already formatted via ValueFormatter in add_mutation_metadata,
-        # so only the top-level metadata keys need to be camelized here.
+        # and mapped metadata keys are already binary client names from format_metadata/2,
+        # so only unmapped atom keys need to be formatted here.
         formatted_metadata =
-          Enum.into(meta, %{}, fn {key, value} ->
-            {FieldFormatter.format_field_name(key, formatter), value}
+          Enum.into(meta, %{}, fn
+            {key, value} when is_binary(key) -> {key, value}
+            {key, value} -> {FieldFormatter.format_field_name(key, formatter), value}
           end)
 
         Map.put(
