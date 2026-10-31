@@ -171,6 +171,7 @@ defmodule AshRpc.FieldNameTranslationTest do
     for {formatter, names} <- [
           pascal_case: %{
             action: "Action",
+            input: "Input",
             fields: "Fields",
             success: "Success",
             data: "Data",
@@ -184,6 +185,7 @@ defmodule AshRpc.FieldNameTranslationTest do
           },
           snake_case: %{
             action: "action",
+            input: "input",
             fields: "fields",
             success: "success",
             data: "data",
@@ -207,7 +209,7 @@ defmodule AshRpc.FieldNameTranslationTest do
           run(
             %{
               n.action => "create_intake",
-              "input" => %{
+              n.input => %{
                 n.user_name => "someone",
                 n.stats => %{
                   "totalCount1" => 5,
@@ -240,7 +242,7 @@ defmodule AshRpc.FieldNameTranslationTest do
           run(
             %{
               n.action => "catalog_task_stats",
-              "input" => %{n.task_id => Ash.UUID.generate()},
+              n.input => %{n.task_id => Ash.UUID.generate()},
               n.fields => [n.total_count, "completed", "isUrgent"]
             },
             manifests[@formatter]
@@ -467,7 +469,7 @@ defmodule AshRpc.FieldNameTranslationTest do
         created =
           run.(%{
             n.(:action) => "create_post",
-            "input" => %{n.(:title) => "Other", n.(:view_count) => 0},
+            n.(:input) => %{n.(:title) => "Other", n.(:view_count) => 0},
             n.(:fields) => [n.(:id)]
           })
 

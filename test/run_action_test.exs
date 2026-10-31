@@ -94,11 +94,66 @@ defmodule AshRpc.RunActionTest do
                ctx(),
                %{
                  "Action" => "create_post",
-                 "input" => %{"Title" => "x"},
+                 "Input" => %{"Title" => "x"},
                  "Fields" => ["ViewCount"]
                },
                manifest: manifest
              )
+  end
+
+  describe "input and identity keys under a non-camel formatter" do
+    setup do
+      %{manifest: AshRpc.Test.ManifestBuilder.build(output_formatter: :pascal_case)}
+    end
+
+    test "Identity and Input are read under their formatted names", %{manifest: manifest} do
+      post = Ash.create!(AshRpc.Test.Post, %{title: "Old"})
+
+      assert %{"Success" => true, "Data" => %{"Title" => "New"}} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "Action" => "update_post",
+                   "Identity" => post.id,
+                   "Input" => %{"Title" => "New"},
+                   "Fields" => ["Title"]
+                 },
+                 manifest: manifest
+               )
+
+      assert %{"Success" => true, "Data" => %{"Title" => "New"}} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{"Action" => "destroy_post", "Identity" => post.id, "Fields" => ["Title"]},
+                 manifest: manifest
+               )
+    end
+
+    test "lowercase input and identity are not read", %{manifest: manifest} do
+      post = Ash.create!(AshRpc.Test.Post, %{title: "Old"})
+
+      assert %{"Success" => false, "Errors" => [%{"Type" => "required", "Fields" => ["Title"]}]} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "Action" => "create_post",
+                   "input" => %{"Title" => "x"},
+                   "Fields" => ["Title"]
+                 },
+                 manifest: manifest
+               )
+
+      assert %{"Success" => false, "Errors" => [%{"Type" => "missing_identity"} | _]} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{"Action" => "update_post", "identity" => post.id, "Fields" => ["Title"]},
+                 manifest: manifest
+               )
+    end
   end
 
   test "update returns only the selected fields and loads relationships" do

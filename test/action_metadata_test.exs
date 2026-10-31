@@ -279,7 +279,7 @@ defmodule AshRpc.ActionMetadataTest do
                  ctx(),
                  %{
                    "Action" => "create_post_with_metadata",
-                   "input" => %{"Title" => "Pascal meta"},
+                   "Input" => %{"Title" => "Pascal meta"},
                    "Fields" => ["Id"],
                    "MetadataFields" => ["TotalScore", "meta1", "isCached"]
                  },

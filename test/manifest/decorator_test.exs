@@ -188,7 +188,8 @@ defmodule AshRpc.Manifest.DecoratorTest do
 
       assert vocab.params["getBy"] == :get_by
       assert vocab.params["metadataFields"] == :metadata_fields
-      refute Map.has_key?(vocab.params, "input")
+      assert vocab.params["input"] == :input
+      assert vocab.params["identity"] == :identity
       assert vocab.page["after"] == :after
       assert vocab.query_opts["args"] == :args
       assert vocab.filter_ops["greaterThan"] == :greater_than
