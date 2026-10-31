@@ -234,6 +234,60 @@ defmodule AshRpc.ActionMetadataTest do
       assert %{"type" => "unknown_metadata_fields", "fields" => ["meta_1", "is_cached?"]} =
                metadata_error("read_posts_with_metadata", ["meta_1", "is_cached?"])
     end
+
+    test "mapped metadata names containing underscores are preserved verbatim in mutation responses" do
+      manifest =
+        [
+          %{
+            resource: AshRpc.Test.Post,
+            action: :create_with_metadata,
+            config: %{
+              ash_rpc_test: %{
+                name: "create_post_snake_meta",
+                opts: [
+                  exposed_metadata_fields: [:total_score, :meta_1],
+                  metadata_field_names: %{meta_1: "some_string_value"}
+                ]
+              }
+            }
+          }
+        ]
+        |> AshRpc.Test.ManifestBuilder.generate!()
+        |> AshRpc.Manifest.Decorator.decorate(AshRpc.Test.MappingSource, [])
+
+      assert %{"success" => true, "metadata" => metadata} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "action" => "create_post_snake_meta",
+                   "input" => %{"title" => "Snake mapped meta"},
+                   "fields" => ["id"]
+                 },
+                 manifest: manifest
+               )
+
+      assert metadata == %{"totalScore" => 42, "some_string_value" => "m1"}
+    end
+
+    test "mapped metadata names are preserved verbatim in mutation responses under :pascal_case" do
+      manifest = AshRpc.Test.ManifestBuilder.build(output_formatter: :pascal_case)
+
+      assert %{"Success" => true, "Metadata" => metadata} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "Action" => "create_post_with_metadata",
+                   "input" => %{"Title" => "Pascal meta"},
+                   "Fields" => ["Id"],
+                   "MetadataFields" => ["TotalScore", "meta1", "isCached"]
+                 },
+                 manifest: manifest
+               )
+
+      assert metadata == %{"TotalScore" => 42, "meta1" => "m1", "isCached" => true}
+    end
   end
 
   describe "metadata value formatting" do
