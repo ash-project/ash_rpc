@@ -472,25 +472,29 @@ defmodule AshRpc.ErrorBuilder do
 
   # Field names are already formatted by the pipeline
   defp build({:missing_get_by_fields, missing_fields}, ctx) do
+    get_by = param_name(:get_by, ctx.formatter)
+
     drift(
       ctx,
       "missing_required_input",
-      "Required getBy fields are missing: %{fields}",
-      "Missing required getBy fields",
+      "Required #{get_by} fields are missing: %{fields}",
+      "Missing required #{get_by} fields",
       vars: %{fields: Enum.join(missing_fields, ", ")},
       path: format_path([:get_by], ctx.formatter),
       fields: missing_fields,
-      details: %{suggestion: "Provide values for all required getBy fields"}
+      details: %{suggestion: "Provide values for all required #{get_by} fields"}
     )
   end
 
   # Field names are already formatted by the pipeline
   defp build({:unexpected_get_by_fields, extra_fields, allowed_fields}, ctx) do
+    get_by = param_name(:get_by, ctx.formatter)
+
     drift(
       ctx,
       "unexpected_get_by_fields",
-      "Unexpected getBy fields: %{extra_fields}. Allowed fields: %{allowed_fields}",
-      "Unexpected getBy fields",
+      "Unexpected #{get_by} fields: %{extra_fields}. Allowed fields: %{allowed_fields}",
+      "Unexpected #{get_by} fields",
       vars: %{
         extra_fields: Enum.join(extra_fields, ", "),
         allowed_fields: Enum.join(allowed_fields, ", ")
@@ -499,7 +503,7 @@ defmodule AshRpc.ErrorBuilder do
       fields: extra_fields,
       details: %{
         allowed_fields: allowed_fields,
-        suggestion: "Only provide the allowed getBy fields: %{allowed_fields}"
+        suggestion: "Only provide the allowed #{get_by} fields: %{allowed_fields}"
       }
     )
   end
@@ -641,13 +645,16 @@ defmodule AshRpc.ErrorBuilder do
   end
 
   defp build({:invalid_get_by, %{message: message}}, ctx) do
-    malformed("invalid_get_by", message, "Invalid getBy value",
+    get_by = param_name(:get_by, ctx.formatter)
+
+    malformed("invalid_get_by", message, "Invalid #{get_by} value",
       path: format_path([:get_by], ctx.formatter),
-      details: %{suggestion: "Provide a scalar value for each getBy field"}
+      details: %{suggestion: "Provide a scalar value for each #{get_by} field"}
     )
   end
 
   defp build({:missing_identity, %{expected_keys: expected_keys, identities: identities}}, ctx) do
+    identity = param_name(:identity, ctx.formatter)
     expected_keys_str = Enum.join(expected_keys, ", ")
 
     # Check if the only identity is _primary_key with a single field
@@ -656,7 +663,7 @@ defmodule AshRpc.ErrorBuilder do
       case {identities, expected_keys} do
         {[:_primary_key], [single_key]} ->
           {"Identity is required. Provide the #{single_key} value directly.",
-           "Pass the #{single_key} value directly as the identity field (e.g., identity: \"your-#{single_key}-here\")"}
+           "Pass the #{single_key} value directly as the #{identity} field (e.g., #{identity}: \"your-#{single_key}-here\")"}
 
         _ ->
           {"Identity is required but not provided. Expected one of: [%{expected_keys}]",
@@ -906,8 +913,12 @@ defmodule AshRpc.ErrorBuilder do
 
   # Fixed-vocabulary paths (`getBy`, `identity`, `metadataFields`, `page`).
   defp format_path(path, formatter) when is_list(path) do
-    Enum.map(path, &FieldFormatter.format_field_name(to_string(&1), formatter))
+    Enum.map(path, &param_name(&1, formatter))
   end
+
+  # A request param's client name, for paths and for message text naming it.
+  defp param_name(name, formatter),
+    do: FieldFormatter.format_field_name(to_string(name), formatter)
 
   # A string name is a client name that missed, so it is reported as sent;
   # an atom is an internal name and is formatted.

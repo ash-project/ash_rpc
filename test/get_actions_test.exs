@@ -456,6 +456,62 @@ defmodule AshRpc.GetActionsTest do
     end
   end
 
+  describe "request param names in error text under :pascal_case" do
+    setup do
+      manifest = AshRpc.Test.ManifestBuilder.build(output_formatter: :pascal_case)
+      %{run: &AshRpc.run_action(@profile, ctx(), &1, manifest: manifest)}
+    end
+
+    test "getBy errors name the GetBy param", %{run: run} do
+      assert %{"Errors" => [missing]} =
+               run.(%{
+                 "Action" => "get_post_by_slug_and_title",
+                 "GetBy" => %{"Slug" => unique("partial")},
+                 "Fields" => ["Id"]
+               })
+
+      assert missing["Message"] == "Required GetBy fields are missing: %{Fields}"
+      assert missing["ShortMessage"] == "Missing required GetBy fields"
+      assert missing["Details"]["Suggestion"] == "Provide values for all required GetBy fields"
+
+      assert %{"Errors" => [unexpected]} =
+               run.(%{
+                 "Action" => "get_post_by_slug",
+                 "GetBy" => %{"Slug" => unique("extra"), "Title" => "x"},
+                 "Fields" => ["Id"]
+               })
+
+      assert unexpected["Message"] ==
+               "Unexpected GetBy fields: %{ExtraFields}. Allowed fields: %{AllowedFields}"
+
+      assert unexpected["ShortMessage"] == "Unexpected GetBy fields"
+
+      assert unexpected["Details"]["Suggestion"] ==
+               "Only provide the allowed GetBy fields: %{AllowedFields}"
+
+      assert %{"Errors" => [invalid]} =
+               run.(%{
+                 "Action" => "get_post_by_slug",
+                 "GetBy" => %{"Slug" => %{"LessThan" => "b"}},
+                 "Fields" => ["Id"]
+               })
+
+      assert invalid["Message"] =~ "GetBy values must be scalar equality operands."
+      assert invalid["ShortMessage"] == "Invalid GetBy value"
+      assert invalid["Details"]["Suggestion"] == "Provide a scalar value for each GetBy field"
+    end
+
+    test "missing_identity names the Identity param", %{run: run} do
+      assert %{"Errors" => [error]} =
+               run.(%{"Action" => "update_post", "Input" => %{}, "Fields" => ["Id"]})
+
+      assert error["Type"] == "missing_identity"
+
+      assert error["Details"]["Suggestion"] ==
+               "Pass the Id value directly as the Identity field (e.g., Identity: \"your-Id-here\")"
+    end
+  end
+
   describe "non-scalar lookup values" do
     test "an operator map as a getBy value is invalid_get_by" do
       # As a filter, %{"lessThan" => "b"} would select this record without naming it.

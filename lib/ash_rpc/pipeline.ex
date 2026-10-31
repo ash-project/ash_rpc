@@ -57,14 +57,10 @@ defmodule AshRpc.Pipeline do
   def parse_request(runtime, %AshRpc.Context{} = ctx, params, opts \\ []) do
     validation_mode? = Keyword.get(opts, :validation_mode?, false)
 
-    {input_data, other_params} = Map.pop(params, "input", %{})
-    {identity, params_without_identity} = Map.pop(other_params, "identity")
-
     normalized_params =
-      params_without_identity
+      params
       |> resolve_param_keys(runtime)
-      |> Map.put(:input, input_data)
-      |> Map.put(:identity, identity)
+      |> Map.put_new(:input, %{})
 
     ctx = AshRpc.Context.put_tenant_param(ctx, normalized_params[:tenant])
     actor = ctx.actor
@@ -864,7 +860,7 @@ defmodule AshRpc.Pipeline do
          {:invalid_get_by,
           %{
             message:
-              "getBy values must be scalar equality operands. Non-scalar value provided for: #{formatted_keys}"
+              "#{FieldFormatter.format_field_name("get_by", output_formatter)} values must be scalar equality operands. Non-scalar value provided for: #{formatted_keys}"
           }}}
     end
   end

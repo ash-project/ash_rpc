@@ -88,7 +88,7 @@ use AshRpc.Channel, profile: MyExt.RpcProfile     # "run" / "validate" events
 complete minimal version of this wiring.
 
 ### Wire Contract
-Request params (keys are the output formatter's client names, from the `vocabulary`, apart from `input` and `identity`):
+Request params (keys are the output formatter's client names, from the `vocabulary`):
 `action`, `input`, `fields`, `identity`, `getBy`, `filter`, `sort`, `page`,
 `tenant`, `metadataFields`.
 

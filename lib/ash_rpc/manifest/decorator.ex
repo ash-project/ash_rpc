@@ -38,7 +38,18 @@ defmodule AshRpc.Manifest.Decorator do
   alias AshRpc.Manifest.{CustomTypes, NameCollisionError, UntypedStructError}
 
   @vocabulary %{
-    params: [:action, :fields, :get_by, :filter, :sort, :page, :tenant, :metadata_fields],
+    params: [
+      :action,
+      :input,
+      :identity,
+      :fields,
+      :get_by,
+      :filter,
+      :sort,
+      :page,
+      :tenant,
+      :metadata_fields
+    ],
     page: [:limit, :offset, :count, :after, :before],
     query_opts: [:page, :filter, :sort, :limit, :offset, :args, :fields]
   }

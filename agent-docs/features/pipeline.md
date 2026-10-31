@@ -99,10 +99,10 @@ and formats them like a normal response.
 
 Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
 
-1. Pops `"input"` and `"identity"` (matched literally) and resolves every
-   other param key through the `:params` vocabulary (`getBy` → `:get_by`,
-   `metadataFields` → `:metadata_fields` under `:camel_case`). A key that isn't
-   a client name is dropped, like any unknown key.
+1. Resolves every param key through the `:params` vocabulary (`getBy` →
+   `:get_by`, `metadataFields` → `:metadata_fields` under `:camel_case`;
+   `Input`, `Identity` under `:pascal_case`). A key that isn't a client name
+   is dropped, like any unknown key; a missing input defaults to `%{}`.
 2. Applies the `tenant` param with `AshRpc.Context.put_tenant_param/2`.
 3. Resolves the entrypoint: the `entrypoint:` option if given, else
    `runtime.entrypoints[params["action"]]`. A missing or empty action is

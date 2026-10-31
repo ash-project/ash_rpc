@@ -155,7 +155,7 @@ defmodule AshRpc.CustomTypeFieldsTest do
           },
           pascal_case: %{
             action: "Action",
-            input: "input",
+            input: "Input",
             fields: "Fields",
             success: "Success",
             data: "Data",
