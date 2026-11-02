@@ -90,7 +90,9 @@ it to `@exposed` in `test/support/mapping_source.ex` (never `Secret`).
 **Cause:** the field returns something with its own fields (an embedded
 resource, a typed map or struct, a declared custom type, a union, or a
 resource-returning calculation) and was requested by bare name.
-`vars.fieldType` names the kind.
+`vars.fieldType` names the kind in client wording (`Relationship`,
+`Embedded resource`, `Typed value`, `Tuple`, `Union`, `Union member`,
+`Calculation`; `test/field_selector_test.exs` "field type wording").
 
 **Fix:** pass a nested selection: `%{"selfPost" => ["id"]}`, or for a
 calculation with arguments `%{"scoredStats" => %{"args" => …, "fields" => […]}}`.
@@ -106,10 +108,12 @@ too), `test/union_input_test.exs`
 | Wire `type` | Cause | Test (`test/calculations_test.exs`) |
 |---|---|---|
 | `invalid_field_format` | A calculation that takes arguments requested as a bare name (`"excerpt"`). Internally `{:calculation_requires_args, …}` | "calculation_requires_args: a calculation with arguments requested as a bare name" |
-| `invalid_calculation_args` | `args` on a calculation that takes none, an `args` key the calculation doesn't define, or `fields` without `args` on one that does | "invalid_calculation_args" describe |
+| `invalid_calculation_args` | `args` that are not a map, `args` on a calculation that takes none, an `args` key the calculation doesn't define, or `fields` without `args` on one that does | "invalid_calculation_args" describe |
 | `invalid_field_selection` | A `fields` key on a scalar calculation | "invalid_field_selection: a fields key on a scalar calculation" |
 | `field_does_not_support_nesting` | A nested list on a scalar calculation (`%{"titleLength" => ["x"]}`) | "field_does_not_support_nesting: nested fields on a scalar calculation" |
 | `duplicate_field` | The same calculation requested twice with different args | "duplicate_field: the same calculation requested twice with different args" |
+| `unknown_input` | A key inside a structured argument value (`echoStats`'s `probe`) that isn't a client name of its type; `path` is `[…, "echoStats", "args", "probe"]` | "structured calculation arguments" describe |
+| `invalid_calculation_argument` | An argument value its type rejects (`"length" => "abc"`) or a missing required argument: in field selection Ash's `Ash.Error.Query.InvalidCalculationArgument`, `path` ending at the calculation's `args`; in a filter checked by `AshRpc.FilterInput`, `path` the full filter path to the calculation's `input` (sent or not). `fields` names the argument; the message is `is required` or `is invalid` | "invalid_calculation_argument" describe; `test/filter_sort_test.exs` "calculation arguments in filters" |
 
 The field selector checks `args` keys against the calculation's argument names
 (compared as strings, since keys reach Ash as-is), so an undefined key is
@@ -123,7 +127,7 @@ invalid_calculation_args").
 inside it is load-restricted. An embedded resource is selected like a
 relationship, with a nested field list
 (`%{"settings" => ["themeName", "themeLabel"]}`). A bare `"settings"` is `requires_field_selection` with `fieldType`
-`Embedded_resource` (`test/typed_field_selection_test.exs` "a bare embedded
+`Embedded resource` (`test/typed_field_selection_test.exs` "a bare embedded
 field is requires_field_selection"). A calculation on the embedded resource (`themeLabel`) is a
 load, so the entrypoint's load restrictions apply to it
 (`test/load_restrictions_test.exs` "an embedded resource calculation is a
@@ -223,7 +227,7 @@ See [action metadata](features/action-metadata.md).
 | `action_not_found` (`vars.actionName`) | The wire name isn't in the manifest's entrypoints: missing from `@entrypoints` in `test/support/manifest_builder.ex`, or the mapping source's `entrypoint/1` returned `nil` | Add the row (`test/run_action_test.exs` "unknown action and missing action") |
 | `missing_required_parameter` | No `action` param and no `entrypoint:` option | Send `action`, or pass `entrypoint:` |
 | A test sees stale or unexpected config | It mutated, or expected a change in, the cached `ManifestBuilder.manifest/0` | Build a fresh one with `build/1` |
-| `internal_error` or `unknown_error` with `path: ["load"]` | Ash rejected the load built from the selection | Reproduce with the field-selection view above and check the calculation's arguments |
+| `internal_error` or `unknown_error` with `path: []` or a relationship path | Ash rejected the load built from the selection with an error that has no `AshRpc.Error` impl (Ash's `:load` path segments are dropped) | Reproduce with the field-selection view above and check the calculation's arguments |
 | `AshRpc.Manifest.UntypedStructError` while building the manifest | A wire entrypoint reaches a `:struct` with no field types; the message's path (`returns → session`, `argument :session`, `<Resource> records → session`, or `returns → point` for a declared custom type's field) says where | Use one of the alternatives in the message, or keep the action out of the wire entrypoints (see [decoration](features/decoration.md#untyped-structs-are-rejected)) |
 | `UntypedStructError` "an undeclared custom type, `Mod`, at …" | A wire entrypoint reaches a map-like custom type (`storage_type :map`, or `composite?/1` true, with the constraints where it is used) that the mapping source declares no fields for; the hint after the explanation is the source's `custom_type_fields_hint/1` | Declare its fields (`custom_type_fields/1` or `decorate/3`'s `custom_type_fields:`), or keep the action off the wire. `test/untyped_struct_test.exs` "decoration rejects undeclared map-like custom types" |
 | `Protocol.UndefinedError` "Jason.Encoder not implemented for X" when the response is encoded (a 500) | An untyped value (unconstrained `:map` / `:term`) holds something Jason can't encode; it is sent as the action produced it | Convert it in the action or declare the type; see [field selection](features/field-selection.md#untyped-data-output) |

@@ -119,7 +119,7 @@ formatter.
 | **Value formatting** | `lib/ash_rpc/value_formatter.ex` (`input_formatter.ex` delegates to it; the pipeline formats output through it directly) |
 | **Field-name casing** | `lib/ash_rpc/field_formatter.ex`, `lib/ash_rpc/case.ex` |
 | **Client-name resolution** | `lib/ash_rpc/client_names.ex` |
-| **Filter/sort name rewriting** | `lib/ash_rpc/filter_input.ex` |
+| **Filter/sort name rewriting, filter value formatting** | `lib/ash_rpc/filter_input.ex`, `lib/ash_rpc/filter_input/invalid_value.ex` |
 | **Load-restriction normalization** | `lib/ash_rpc/load_restrictions.ex` (`normalize/1` in `parse_request`, `check!/2` from the field selector) |
 | **Error protocol + impls** | `lib/ash_rpc/error.ex` |
 | **Error pipeline** | `lib/ash_rpc/errors.ex` (Ash errors), `error_builder.ex` (pipeline reasons), `error_formatter.ex` |
@@ -263,7 +263,7 @@ stacktrace and returned as `unknown_error`.
 
 ### Core Patterns
 - **Type-driven dispatch**: `FieldSelector` and `ValueFormatter` both recurse on `{type, constraints}`
-- **Strict exposure**: selecting through a relationship to a resource the mapping source doesn't expose is `unknown_field`. Embedded resources the source doesn't expose are still decorated, under formatter-only names and `exposed: false`, so they stay selectable as attributes and union members. So are unexposed domain resources an entrypoint takes as a struct input, so their input keys resolve; relationships to them stay `unknown_field`
+- **Strict exposure**: selecting or filtering through a relationship to a resource the mapping source doesn't expose is `unknown_field`. Embedded resources the source doesn't expose are still decorated, under formatter-only names and `exposed: false`, so they stay selectable as attributes and union members. So are unexposed domain resources an entrypoint takes as a struct input, so their input keys resolve; relationships to them stay `unknown_field`
 - **Untyped data**: a value whose declared type has no shape
   (`AshRpc.Introspection.untyped_data_type?/2`: an unconstrained `:map`,
   `Ash.Type.Term`, or an array of either) is sent exactly as produced, as a
@@ -275,7 +275,7 @@ stacktrace and returned as `unknown_error`.
   and `run_action/4` callers get raw structs
 - **Typed output**: typed maps and structs (keywords and tuples included) emit only their declared fields on every output path, under decorated names; undeclared keys are dropped and struct values go through `Map.from_struct/1`
 - **Values formatted without extraction** (`ValueFormatter.format/5` on `:output`): scalar structs (`DateTime`, `Duration`, `Decimal`, …) at typed scalar positions get the extracted wire shape, resource structs keep only their manifest fields (`nil` for unloaded and forbidden values, `%{}` for a resource not in the manifest), and a raw `%Ash.Union{}` becomes `{member: value}`. Untyped data is unchanged
-- **Tenant param**: a `tenant` request param overrides the transport tenant (`conn` or `socket.assigns[:ash_tenant]`)
+- **Tenant param**: a `tenant` request param overrides the transport tenant (`conn` or `socket.assigns[:ash_tenant]`); one that isn't a string, integer or atom is `invalid_tenant_type`
 - **Optional transports**: `AshRpc.Plug` / `AshRpc.Channel` are wrapped in `Code.ensure_loaded?/1` and only exist when plug/phoenix are present. `AshRpc.Context.from_source/1` follows the same rule
 
 ## Common Errors
@@ -283,19 +283,28 @@ stacktrace and returned as `unknown_error`.
 | Error | Cause | Solution |
 |-------|-------|----------|
 | "has no custom.ash_rpc decoration" `ArgumentError` | Raw `Ash.Info.Manifest` passed to the runtime | Decorate with `AshRpc.Manifest.Decorator.decorate/3` (or use the fixture `ManifestBuilder`) |
-| `AshRpc.Manifest.NameCollisionError` | Two fields/args map to the same client name | Fix `field_names` / `argument_names` overrides |
+| `AshRpc.Manifest.NameCollisionError` | Two fields/args map to the same client name, or a read entrypoint's exposed metadata has the client name of one of the resource's public fields | Fix `field_names` / `argument_names` / `metadata_field_names` overrides |
+| `invalid_union_return` | A generic action returning a union (or an array of unions) returned a bare member value or map; logged server-side with the value's type | Return `%Ash.Union{type: member, value: value}` from the run |
 | `AshRpc.Manifest.UntypedStructError` | A wire entrypoint accepts or returns a `:struct` without `fields` (a plain `defstruct` `instance_of`, `instance_of` an Ash type, or no constraints), or with `fields: []` and no Ash-type `instance_of` (none, or a plain one), anywhere in its exposed graph, including inside a declared custom type's fields; or a map-like custom type (`storage_type :map` or composite) without declared fields ("an undeclared custom type") | Use an `Ash.TypedStruct`, a NewType over `:struct` with `fields`, `instance_of` a resource, or an unconstrained `:map` built in the action. For an Ash-type `instance_of`, use the type itself; in a declared custom type, change the field. For an undeclared custom type, declare its fields (`custom_type_fields/1`) |
 | `Protocol.UndefinedError` "Jason.Encoder not implemented for X" (a 500 from `AshRpc.Plug`) | Untyped data (an unconstrained `:map` / `:term` return, attribute or field) holds a struct, tuple, keyword list, `Duration` or `ForbiddenField`; it is sent as produced | Convert it in the action, or declare the type (the resource, an `Ash.TypedStruct`, a typed map). The error message `inspect`s the value, so mark secret attributes `sensitive?: true` |
 | Formatter change in a test has no effect | The output formatter is fixed at decoration time | `ManifestBuilder.build(output_formatter: …)` or `AshRpc.Manifest.redecorate/2`, then pass `manifest:` |
 | Test sees unexpected data/state | `ManifestBuilder.manifest/0` is cached in `:persistent_term` | Use `build/1` for a variant manifest. Don't mutate the cached one |
 | `action_not_found` | Wire name not in `@entrypoints`, or `entrypoint/1` returned `nil` | Add it to `manifest_builder.ex` |
+| `invalid_action_type` / `invalid_tenant_type` | The `action` param is not a string, or the `tenant` param is not a string, integer or atom (a map, a list, a float) | Send the action's wire name; send a scalar tenant |
 | `unknown_field` through a relationship | Destination resource not exposed | Add it to `@exposed` in the test mapping source (not `Secret`, which stays unexposed on purpose) |
-| `unknown_input` | An input key that isn't one of the action's client names (a misspelling, another casing, or a private `public? false` argument), or a nested key that isn't a client name of its type (`path` locates it); raised by ash_rpc before Ash runs | Send the client name from the manifest, or drop the key |
+| `unknown_input` | An input key that isn't one of the action's client names (a misspelling, another casing, or a private `public? false` argument), or a nested key that isn't a client name of its type (`path` locates it); raised by ash_rpc before Ash runs. Also a key in a structured filter operator value or a calculation argument value, or a filter `input` argument name (`path` runs through a `filter`, top level or in a relationship's query options like `["comments", "filter", …]`, or through the calculation's `args`) | Send the client name from the manifest, or drop the key |
 | `unknown_field` / sort or filter error for a correctly spelled name | The name is in a non-client casing (e.g. `view_count` under `:camel_case`) | Send the client name; names are matched exactly |
+| `invalid_sort` | `sort` (top level or nested) is not a string or a list of strings | Send `"-viewCount,title"` or `["-viewCount", "title"]` |
+| `invalid_identity` for a complete identity | An extra key, or a key in a non-client casing, next to the identity's keys; or a scalar identity for a composite primary key | Send exactly one identity's keys, by client name; a composite primary key as a map |
+| `get_by_not_supported` | `getBy` (an empty map included) sent to an entrypoint that declares no `get_by` fields | Remove the param, or add `get_by` to the entrypoint |
 | `UndefinedFunctionError` on `AshRpc.Plug` / `AshRpc.Channel` | plug/phoenix not in the consumer's deps | They're optional deps. Add them in the consumer |
-| `invalid_query_opts` | Query envelope on a non-relationship or to-one field, `args` mixed with query opts, or `page` mixed with bare `limit`/`offset` | Use the envelope only on has_many/many_to_many; pick `page` or `limit`/`offset` |
+| `invalid_query_opts` | Query envelope on a non-relationship or to-one field, `args` mixed with query opts, `page` mixed with bare `limit`/`offset`, a bare `limit`/`offset` that is not a non-negative integer, or a relationship envelope key that isn't an envelope option (`vars.keys`, as sent) | Use the envelope only on has_many/many_to_many; pick `page` or `limit`/`offset`; send integers ≥ 0; send only `fields`/`page`/`filter`/`sort`/`limit`/`offset` by their client names |
+| `invalid_filter` | A filter statement (the param, a list entry, an `and`/`or`/`not` operand, a relationship's condition) is a string, number or null, a relationship's condition is a boolean, or an `and`/`or` is empty; `path` locates it | Send a map (or a list of maps) of fields, relationships and `and`/`or`/`not` |
+| `invalid_filter_value` | An `in` given a non-list, or a value an operator's own type can't cast (`isNil` takes a boolean, `contains` a string); `path` ends at the operator, `details.expected` says what it takes. With `path` `["filter"]` and no `details.expected`: Ash couldn't cast a value to the field's type | Send a value of the shape the operator takes |
+| `unsortable_field` | A sort on a relationship, on a calculation with required arguments, or on a field the manifest marks unsortable (`details.reason`) | Sort on an attribute, aggregate or argument-free calculation |
 | `filter_not_supported` / `sort_not_supported` | `details.reason` `disabled`: the entrypoint sets `enable_filter?`/`enable_sort?: false`. `unsupported`: the param is on a non-list action (a `get?`/`get_by` entrypoint or a non-read action) or the relationship isn't filterable/sortable | Remove the param, or flip the entrypoint flag |
 | `pagination_not_supported` | `page` on a non-list action or an action without pagination, or nested `page` on a relationship whose read action has no pagination | Add pagination to that read action, or use bare `limit`/`offset` |
+| `invalid_calculation_argument` | A calculation argument value its type rejects, or a missing required one (field selection `args`, from Ash; or a filter `input`, checked by ash_rpc, sent or not); `path` ends at the calculation's `args` / `input` | Send a value of the argument's type |
 | `load_not_allowed` / `load_denied` | Requested field is outside the entrypoint's `{:allow, …}` list, or inside its `{:deny, …}` list | Change `load_restrictions` on the entrypoint (see `agent-docs/features/field-selection.md`) |
 | `invalid_union_input` "must be a map" | Bare value for a union input | Wrap it: `%{"member_name" => value}` |
 | `invalid_union_input` "does not contain any valid member key" | Map has no key naming a member | Use a member name from `vars.expectedMembers` |

@@ -131,6 +131,78 @@ defmodule AshRpc.ValidationTest do
              })
   end
 
+  describe "update/destroy targets resolve like run_action" do
+    defp author!,
+      do: Ash.create!(AshRpc.Test.Author, %{name: "a-#{System.unique_integer([:positive])}"})
+
+    test "a named identity with client names validates" do
+      author = author!()
+
+      assert validate(%{
+               "action" => "update_author_by_identity",
+               "identity" => %{"name" => author.name, "isActive" => true},
+               "input" => %{"name" => "renamed"}
+             }) == %{"success" => true}
+    end
+
+    test "an identity key in internal casing is invalid_identity, as in run_action" do
+      author = author!()
+
+      params = %{
+        "action" => "update_author_by_identity",
+        "identity" => %{"name" => author.name, "is_active?" => true},
+        "input" => %{"name" => "renamed"},
+        "fields" => ["id"]
+      }
+
+      assert %{"success" => false, "errors" => [%{"type" => "invalid_identity"} = error]} =
+               validate(params)
+
+      assert %{"success" => false, "errors" => [^error]} = run(params)
+    end
+
+    test "a primary key on an entrypoint without the primary-key identity is invalid_identity" do
+      post = Ash.create!(AshRpc.Test.Post, %{title: "a", slug: "s-#{System.unique_integer()}"})
+
+      params = %{
+        "action" => "update_post_by_slug",
+        "identity" => post.id,
+        "input" => %{"title" => "b"},
+        "fields" => ["id"]
+      }
+
+      assert %{"success" => false, "errors" => [error]} = validate(params)
+
+      assert %{
+               "type" => "invalid_identity",
+               "message" => "Primary key identity not allowed for this action"
+             } = error
+
+      assert %{"success" => false, "errors" => [^error]} = run(params)
+    end
+
+    test "a missing identity is missing_identity, as in run_action" do
+      params = %{"action" => "update_post", "input" => %{"title" => "b"}, "fields" => ["id"]}
+
+      assert %{"success" => false, "errors" => [%{"type" => "missing_identity"} = error]} =
+               validate(params)
+
+      assert %{"success" => false, "errors" => [^error]} = run(params)
+    end
+
+    test "an actor-scoped entrypoint validates against the actor's record" do
+      actor = author!()
+
+      assert AshRpc.validate_action(
+               @profile,
+               %AshRpc.Context{actor: actor},
+               %{"action" => "update_me", "input" => %{"name" => "renamed"}}
+             ) == %{"success" => true}
+
+      assert Ash.get!(AshRpc.Test.Author, actor.id).name == actor.name
+    end
+  end
+
   @owner_id "550e8400-e29b-41d4-a716-446655440000"
 
   defp required_error(field, message) do
@@ -314,7 +386,7 @@ defmodule AshRpc.ValidationTest do
                "errors" => [
                  %{
                    "type" => "unknown_field",
-                   "vars" => %{"field" => "unknown_field", "resource" => "AshRpc.Test.Post"},
+                   "vars" => %{"field" => "unknown_field"},
                    "path" => [],
                    "fields" => ["unknown_field"]
                  }

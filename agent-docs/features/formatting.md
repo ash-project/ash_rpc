@@ -62,7 +62,10 @@ Handled during or after classification:
   module) and classified as the named type.
 - Tuples and keyword lists match on `kind: :tuple | :keyword` after
   classification, become maps keyed by field name, then go through
-  typed-struct or typed-map formatting.
+  typed-struct or typed-map formatting. A list that is not a keyword list
+  (a JSON array sent for a keyword input) passes through, and Ash rejects it
+  (`invalid_attribute`, `test/keyword_tuple_test.exs` "a JSON list is
+  invalid_attribute").
 - `:map_with_tag` union output renames a tag field the member type doesn't
   declare under the formatter's name before the member is formatted. An
   untyped (unconstrained map) member keeps it; a typed-map member drops it,
@@ -344,9 +347,9 @@ Lookup calls:
 | Client → internal, resource field | `AshRpc.ClientNames.resource_field/3` (exact lookup in `client_field_names`, overrides included) |
 | Action argument | `AshRpc.Manifest.Custom.argument_name_override/3` / `original_argument_name/3` |
 | Type fields | `AshRpc.Manifest.Custom.type_field_name_overrides_pair/1`, else `AshRpc.Introspection.type_field_name_overrides/2` |
-| Client → internal, type field / union member / calc arg / vocabulary | `AshRpc.ClientNames.type_field/3`, `union_member/3`, `calc_arg/4`, `vocabulary/3`: pure map lookups returning `{:ok, atom}` or `:error`; atoms pass through, and no atom is ever created from a client string. `calc_args/4` resolves a whole argument map; action input keys go through `AshRpc.InputFormatter.expected_keys/3` |
+| Client → internal, type field / union member / calc arg / vocabulary | `AshRpc.ClientNames.type_field/3`, `union_member/3`, `calc_arg/4`, `vocabulary/3`: pure map lookups returning `{:ok, atom}` or `:error`; atoms pass through, and no atom is ever created from a client string. `calc_args/4` resolves a whole argument map (`ValueFormatter.format_calculation_args/4` also formats each value with its argument's type, for field selection and filter `input`); action input keys go through `AshRpc.InputFormatter.expected_keys/3` |
 | Whether a node is strict on input | `AshRpc.ClientNames.resource_named?/2`, `type_named?/2`: true when the resource or type (or its type lookup entry) carries decorated client names |
-| Filter statements and sort strings | `AshRpc.FilterInput.parse/3` and `parse_sort/3`: keep `+`, `++`, `-`, `--` and comma lists; a name that isn't a client name is dropped and reported as `Ash.Error.Query.NoSuchField` / `NoSuchFilterPredicate` with the name as sent |
+| Filter statements and sort strings | `AshRpc.FilterInput.parse/3` and `parse_sort/3`: keep `+`, `++`, `-`, `--` and comma lists; a name that isn't a client name is dropped and reported as `Ash.Error.Query.NoSuchField` / `NoSuchFilterPredicate` with the name as sent; operator values (and a bare `eq` value) go through `ValueFormatter.format_input/3` with the operator's `rhs` type, and a rejected one is `AshRpc.FilterInput.InvalidValue`; a relationship to an unexposed resource is `NoSuchField`; an `in` given a non-list or a value an operator's concrete type can't cast is `InvalidValue` (`invalid_filter_value`), and calculation arguments are checked (`invalid_calculation_argument`); a sort that isn't a string or a list of strings is `Ash.Error.Query.InvalidSort`, and one on a relationship or a calculation with required arguments `Ash.Error.Query.UnsortableField` |
 
 The readers are asserted in `test/client_names_test.exs` (every formatter,
 a custom one included) and `test/filter_input_test.exs`.

@@ -103,11 +103,14 @@ Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
    `:get_by`, `metadataFields` → `:metadata_fields` under `:camel_case`;
    `Input`, `Identity` under `:pascal_case`). A key that isn't a client name
    is dropped, like any unknown key; a missing input defaults to `%{}`.
-2. Applies the `tenant` param with `AshRpc.Context.put_tenant_param/2`.
-3. Resolves the entrypoint: the `entrypoint:` option if given, else
+2. Resolves the entrypoint: the `entrypoint:` option if given, else
    `runtime.entrypoints[params["action"]]`. A missing or empty action is
    `{:missing_required_parameter, :action}`; an unknown name is
-   `{:action_not_found, name}`.
+   `{:action_not_found, name}`; an action that is not a string (a number, a
+   list, a map) is `{:invalid_action_type, value}`.
+3. Checks the `tenant` param (a string, integer or atom, else
+   `{:invalid_tenant_type, value}`) and applies it with
+   `AshRpc.Context.put_tenant_param/2`.
 4. Reads the action with `AshRpc.Introspection.get_action!(runtime, resource,
    action)`, then `augment_action/2` sets `action.get?` to true when the
    entrypoint has `get?: true` or a non-empty `get_by`.
@@ -116,7 +119,8 @@ Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
 6. Checks `fields`: required (`missing_required_parameter`,
    `invalid_fields_type`, `empty_fields_array`) for reads and for generic
    actions with a typed return; not required for create/update/destroy,
-   generic actions returning an unconstrained map, or in validation mode.
+   generic actions returning an unconstrained map, or in validation mode,
+   but `invalid_fields_type` there too when it is sent and is not a list.
 7. Checks top-level `filter` / `sort` / `page` (see
    [below](#filter-sort-and-page)).
 8. Processes fields with `AshRpc.RequestedFieldsProcessor.process/5`
@@ -128,12 +132,17 @@ Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
    `{:unknown_input, key}`, and a nested key that isn't a client name of its
    type is `{:unknown_input, key, path}`; all of them are collected, one error
    per key, before Ash runs (in `validate_action` too). Then resolves `getBy` keys (misses join
-   `unexpected_get_by_fields`, reported as sent), `page` keys (misses are
+   `unexpected_get_by_fields`, reported as sent; a `getBy` that is not a map
+   is `{:invalid_get_by_format, value}`, wire `invalid_get_by`), `page` keys (misses are
    `unknown_page_keys`, as sent), rewrites `filter` and `sort` with
-   `AshRpc.FilterInput` (misses become `NoSuchField`/`NoSuchFilterPredicate`
-   on `Request.query_errors`, added to the read query), and resolves
+   `AshRpc.FilterInput` (misses become `NoSuchField`/`NoSuchFilterPredicate`,
+   rejected operator values `AshRpc.FilterInput.InvalidValue`, all on
+   `Request.query_errors`, added to the read query), and resolves
    `metadataFields` through the entrypoint's `client_metadata_field_names`
-   against `entrypoint.exposed_metadata_fields`.
+   against `entrypoint.exposed_metadata_fields` (a non-list is
+   `invalid_metadata_fields_type`; a `null`, boolean or number entry is an
+   `unknown_metadata_fields` miss). A `getBy` sent to an entrypoint without
+   `get_by` fields is `get_by_not_supported` (details below).
 
 ### 2. `Pipeline.execute_ash_action(request)`
 
@@ -211,10 +220,14 @@ changeset or action input without executing it and sends its errors through
   argument), filled from `vars.field`, the client name.
 - A valid create returns `%{"success" => true}` and persists nothing
   ("create: nothing is persisted").
-- Update/destroy load the target with `Ash.get/3` using the entrypoint's
-  `read_action` (primary read when unset), so records hidden by it look missing
-  ("the read_action used for the lookup is the entrypoint's", "update: unknown
-  identity is not_found"). Existing records validate and stay unchanged.
+- Update/destroy read the target with `Ash.read_one/2` from the query
+  `run_action` narrows (`Pipeline.target_query/2`: identity keys by client
+  name, `entrypoint.identities`, scalar values, actor-scoped `identities: []`),
+  with the entrypoint's `read_action` (primary read when unset), so records
+  hidden by it look missing and `missing_identity` / `invalid_identity` match
+  `run_action`'s ("the read_action used for the lookup is the entrypoint's",
+  "update: unknown identity is not_found", describe "update/destroy targets
+  resolve like run_action"). Existing records validate and stay unchanged.
 - A bad argument cast is `invalid_argument` for every action type: the
   changeset, query and generic-action `InvalidArgument` errors share one impl
   (`test/error_protocol_test.exs` "changeset, query and action InvalidArgument
@@ -226,6 +239,15 @@ changeset or action input without executing it and sends its errors through
   missing required mapped argument is reported under its client name").
 - Atomic validations on update/destroy only run during `run_action`, so
   `validate_action` can succeed where `run_action` fails.
+- Filter, sort and nested query-option errors are not applied either.
+  `AshRpc.FilterInput` collects its errors (unknown filter/sort names,
+  rejected operator values and calculation arguments, invalid sorts) on
+  `Request.query_errors`, or on a relationship's load query for nested
+  options, and both are only added to what `run_action` executes; Ash's own
+  filter, load and page checks only run then too. So such a request can
+  validate and fail in `run_action`. Errors stage 1 returns directly (field
+  selection, envelope shapes, `getBy`, `identity`, `input` keys) are reported
+  by both. Both limitations are in the `AshRpc.Validation` moduledoc.
 
 ## Transports
 
@@ -259,9 +281,13 @@ end
 
 ## `tenant` param
 
-A `tenant` request param overrides the conn, socket or context tenant and is
-passed to Ash unvalidated. Covered in `test/multitenancy_test.exs` with the
-attribute-multitenant `AshRpc.Test.Note`:
+A `tenant` request param overrides the conn, socket or context tenant. It must
+be a string, an integer or an atom (what `Ash.ToTenant` converts); anything
+else (a map, a list, a float) is `invalid_tenant_type` with `path` the
+formatted `tenant` key. Its message asks for "a string or an integer", since
+atoms come only from server-side callers. Its value is otherwise passed to Ash unchecked, and
+the transport tenant is not checked at all. Covered in
+`test/multitenancy_test.exs` with the attribute-multitenant `AshRpc.Test.Note`:
 
 ```elixir
 AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{tenant: "w1"}, %{
@@ -281,6 +307,9 @@ AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{tenant: "w1"}, %{
   and the action runs").
 - Nested envelopes stay inside the tenant ("a paged replies envelope stays
   inside the tenant").
+- A non-scalar tenant param is rejected, a string, integer or boolean one
+  reaches the request, and a transport tenant is never checked ("a tenant
+  param that is not a scalar" describe).
 
 ## `filter`, `sort` and `page`
 
@@ -288,8 +317,8 @@ AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{tenant: "w1"}, %{
 
 Sort strings are rewritten to internal names by
 `AshRpc.FilterInput.parse_sort/3` and applied with
-`Ash.Query.sort_input/2`. A string or a list (`test/filter_sort_test.exs`
-"sort strings", "sort lists"):
+`Ash.Query.sort_input/2`. A string or a list of strings
+(`test/filter_sort_test.exs` "sort strings", "sort lists"):
 
 | Form | Meaning |
 |------|---------|
@@ -301,7 +330,14 @@ Sort strings are rewritten to internal names by
 
 A name that isn't a client name (`"-view_count"` under `:camel_case`) is
 dropped and reported as Ash's unknown-field error, the same as a misspelled
-name (`test/filter_sort_test.exs` "strict client names").
+name (`test/filter_sort_test.exs` "strict client names"). Any other sort (a
+map, a number), and a list entry that isn't a string, is `invalid_sort`, at the
+top level and in a relationship's query options (describe "invalid sort
+shapes"). A relationship, a calculation with required arguments (a sort
+can't carry them) and a field the manifest marks unsortable are
+`unsortable_field` with `details.reason` `relationship` /
+`requires_arguments`; a relationship to an unexposed resource is
+`unknown_field`, as in filters (describe "unsortable fields").
 
 ### Filter
 
@@ -309,10 +345,39 @@ Filter keys and operators are rewritten to internal names by
 `AshRpc.FilterInput.parse/3` (field names per resource, recursing through
 relationships; operator and function names and `and`/`or`/`not` through the
 `:filter_ops` vocabulary; calculation `input` keys through the calculation's
-argument names) and applied with `Ash.Query.filter_input/2`. Operator
-right-hand sides are left as sent. A field miss is dropped and reported as
-`NoSuchField`, an operator miss as `NoSuchFilterPredicate`; a calc-arg miss stays
-a string for Ash to reject. Example: e.g. `%{"slug" => %{"isNil" => true}}`, also inside
+argument names) and applied with `Ash.Query.filter_input/2`. A relationship to
+a resource the mapping source doesn't expose is `unknown_field`, as in field
+selection. Each operator
+value is formatted as client input (`AshRpc.ValueFormatter.format_input/3`)
+with the type the field's operator takes, read from the manifest field's
+`filter_operators` / `filter_functions` `rhs`: `:same` / `:any` is the field's
+type (the element type for `has`), `{:array, rhs}` an array of it (`in`),
+`{:concrete, mod}` is left as sent once `mod` casts it. So an embedded resource, typed map or
+struct, or union value takes internal keys:
+`%{"settings" => %{"eq" => %{"allowComments" => false}}}` becomes
+`%{settings: %{eq: %{allow_comments: false}}}`. A bare value on a field
+(`%{"history" => [%{"priorityScore" => 1}]}`) is `eq` and is formatted the
+same way. Calculation `input` values are formatted with each argument's type.
+A field miss is dropped and reported as `NoSuchField` (`path` where it sits,
+e.g. `["filter", "author", "posts"]`), an operator miss as
+`NoSuchFilterPredicate` (`input` on a field that isn't a calculation
+included). An `in` given a non-list, or a `{:concrete, mod}` value `mod` can't
+cast (`isNil` takes a boolean, `contains` a string), is `invalid_filter_value`
+at the operator; Ash's error for these names internals (describe "invalid
+filter values"). A calculation's arguments are checked here too (required,
+cast, constraints), so a missing or rejected one is
+`invalid_calculation_argument` with the full path to its `input`, sent or not
+(describe "calculation arguments in filters"). A rejected operator value drops that operator (the
+field, for a bare value) and is reported as `AshRpc.FilterInput.InvalidValue`
+(see [errors](errors.md)); so is a calculation `input` argument name that isn't
+a client name, or a rejected argument value, which drop the whole field; a
+calculation `input` that is not a map is `invalid_calculation_args` at
+`[filter, calc, input]`. A statement (the filter, a list entry, an
+`and`/`or`/`not` operand, a relationship's condition) that is a string, number
+or null, a relationship's condition that is a boolean, and an empty
+`and`/`or`, is dropped and reported as an `InvalidValue` rendered
+`invalid_filter` at its path ("invalid filter shapes"); a boolean statement
+elsewhere passes to Ash. Example: e.g. `%{"slug" => %{"isNil" => true}}`, also inside
 `and` / `or` ("filter with isNil"; "filter and sort reach the request with
 internal names" shows `request.filter == %{slug: %{is_nil: true}}`).
 
@@ -369,9 +434,15 @@ Covered in `test/get_actions_test.exs`; wire rows in `manifest_builder.ex`.
     missing_required_input").
   - An extra key is `unexpected_get_by_fields` with `details.allowedFields`.
   - An operator map or a list as a value is `invalid_get_by`; lookups are
-    equality-only (describe "non-scalar lookup values").
+    equality-only (describe "non-scalar lookup values"). So is a `getBy` that
+    is not a map (`test/run_action_test.exs` "malformed request params").
 - **`not_found_error?: false`** (`get_post_by_slug_nullable`): no match is
   `%{"success" => true, "data" => nil}` (describe "not_found_error?: false").
+- An entrypoint without `get_by` fields (`get_post`, `list_posts`) rejects a
+  `getBy` param that is present, an empty map or a non-map included, as
+  `get_by_not_supported` (`details.reason` `unsupported`, `path`
+  `["getBy"]`) instead of ignoring it; `null` is absent (describe "getBy on
+  an entrypoint without get_by").
 
 ```elixir
 AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
@@ -387,17 +458,23 @@ AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
 (describe "identities", "missing_identity", "actor-scoped entrypoints"):
 
 - `:_primary_key` (the default): the primary key as a scalar (`update_author`
-  with `"identity" => author.id`). Composite keys are a map.
+  with `"identity" => author.id`). Composite keys are a map; a scalar for one
+  is `invalid_identity` naming every key part in `details.expectedKeys`,
+  never a match on the first part (`update_post_tag`; describe "composite
+  primary key identity").
 - A named identity (`update_post_by_slug`, identity `:unique_slug`;
   `update_author_by_identity`, `[:_primary_key, :name_active]`): a map with
-  client field names, e.g. `%{"name" => …, "isActive" => true}`. Extra keys
-  are ignored.
+  client field names, e.g. `%{"name" => …, "isActive" => true}`. The keys
+  must be exactly one identity's: an extra key, or one in another casing
+  (`is_active?`), is `invalid_identity`.
 - A non-matching value is `not_found` and changes nothing, for update and
   destroy alike ("destroying a missing record is not_found and destroys
   nothing").
 - `invalid_identity`: a scalar when the primary key isn't allowed, keys that
-  match no listed identity (with `details.providedKeys` / `expectedKeys` in
-  client names), an empty map, or a non-scalar value.
+  match no listed identity (with `details.providedKeys` as sent and
+  `expectedKeys` in client names), an empty map, or a non-scalar value
+  (`fields` / `vars.fields` name the keys by client name; `invalid_get_by`
+  does the same for `getBy`).
 - `missing_identity`: no `identity` param when `identities` is non-empty;
   `details.expectedKeys` lists every accepted key.
 - `identities: []` is actor-scoped: no identity is read, and the target comes

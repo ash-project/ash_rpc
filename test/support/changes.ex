@@ -31,6 +31,18 @@ defmodule AshRpc.Test.Changes.PutMetadataOnRead do
   end
 end
 
+defmodule AshRpc.Test.Changes.PutActivityMetadata do
+  @moduledoc false
+  use Ash.Resource.Preparation
+
+  @impl true
+  def prepare(query, _opts, _context) do
+    Ash.Query.after_action(query, fn _query, records ->
+      {:ok, Enum.map(records, &Ash.Resource.put_metadata(&1, :is_active?, "META"))}
+    end)
+  end
+end
+
 defmodule AshRpc.Test.Changes.PutAmountMetadata do
   @moduledoc false
   # Puts an `Amount` struct value with an undeclared `internal` key.

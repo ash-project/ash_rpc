@@ -132,7 +132,7 @@ defmodule AshRpc.TypedFieldSelectionTest do
                  %{
                    "type" => "requires_field_selection",
                    "fields" => ["settings"],
-                   "vars" => %{"fieldType" => "Embedded_resource"}
+                   "vars" => %{"fieldType" => "Embedded resource"}
                  }
                ]
              } = run("list_posts", ["settings"])
@@ -309,8 +309,7 @@ defmodule AshRpc.TypedFieldSelectionTest do
                    "fields" => ["nonExistent"],
                    "path" => [],
                    "vars" => %{
-                     "field" => "nonExistent",
-                     "resource" => "AshRpc.Test.Project"
+                     "field" => "nonExistent"
                    }
                  }
                ]

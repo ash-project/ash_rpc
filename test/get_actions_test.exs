@@ -69,6 +69,51 @@ defmodule AshRpc.GetActionsTest do
     end
   end
 
+  describe "getBy on an entrypoint without get_by" do
+    test "is get_by_not_supported, present even when empty" do
+      post!(%{title: "First", slug: unique("first")})
+      second = post!(%{title: "Second", slug: unique("second")})
+
+      expected = %{
+        "type" => "get_by_not_supported",
+        "message" => "This action does not support the getBy parameter",
+        "shortMessage" => "getBy not supported",
+        "path" => ["getBy"],
+        "fields" => [],
+        "vars" => %{},
+        "details" => %{
+          "reason" => "unsupported",
+          "suggestion" =>
+            "Remove the getBy parameter. It is only available on entrypoints that declare get_by fields",
+          "hint" => AshRpc.Profile.default_stale_client_hint()
+        }
+      }
+
+      for {action, get_by} <- [
+            {"get_post", %{"slug" => second.slug}},
+            {"get_post", %{}},
+            {"get_post", "x"},
+            {"list_posts", %{"slug" => second.slug}}
+          ] do
+        params = %{"action" => action, "getBy" => get_by, "fields" => ["title"]}
+
+        assert %{"success" => false, "errors" => [^expected]} = run(params)
+
+        assert %{"success" => false, "errors" => [^expected]} =
+                 AshRpc.validate_action(@profile, ctx(), params)
+      end
+    end
+
+    test "a null getBy is absent" do
+      post = post!(%{title: "Only"})
+
+      assert %{"success" => true} =
+               run(%{"action" => "get_post", "getBy" => nil, "fields" => ["title"]})
+
+      assert reload!(post).title == "Only"
+    end
+  end
+
   describe "getBy" do
     test "a single getBy field selects the matching record" do
       post = post!(%{title: "Wanted", slug: unique("wanted")})
@@ -240,16 +285,84 @@ defmodule AshRpc.GetActionsTest do
       assert data == %{"id" => author.id, "name" => new_name, "isActive" => true}
     end
 
-    test "extra identity keys are ignored" do
+    test "an extra identity key is invalid_identity and changes nothing" do
       post = post!(%{title: "Before", slug: unique("extra")})
 
-      assert %{"success" => true, "data" => %{"title" => "After"}} =
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "invalid_identity",
+                   "details" => %{
+                     "providedKeys" => provided,
+                     "expectedKeys" => ["slug"]
+                   }
+                 }
+               ]
+             } =
                run(%{
                  "action" => "update_post_by_slug",
                  "identity" => %{"slug" => post.slug, "extraField" => "value"},
                  "input" => %{"title" => "After"},
                  "fields" => ["title"]
                })
+
+      assert Enum.sort(provided) == ["extraField", "slug"]
+      assert reload!(post).title == "Before"
+    end
+
+    test "a field of the resource outside the identity is invalid_identity" do
+      post = post!(%{title: "Before", slug: unique("outside")})
+
+      assert %{"success" => false, "errors" => [%{"type" => "invalid_identity"}]} =
+               run(%{
+                 "action" => "update_post_by_slug",
+                 "identity" => %{"slug" => post.slug, "title" => "Before"},
+                 "input" => %{"title" => "After"},
+                 "fields" => ["title"]
+               })
+
+      assert reload!(post).title == "Before"
+    end
+
+    test "an unknown or internal-cased key next to a complete identity is invalid_identity" do
+      author = author!()
+
+      for {key, value} <- [{"bogus", 1}, {"is_active?", false}] do
+        assert %{"success" => false, "errors" => [%{"type" => "invalid_identity"}]} =
+                 run(%{
+                   "action" => "update_author_by_identity",
+                   "identity" => %{"name" => author.name, "isActive" => true, key => value},
+                   "input" => %{"name" => unique("renamed")},
+                   "fields" => ["id"]
+                 })
+      end
+
+      assert reload!(author).name == author.name
+    end
+
+    test "an identity key in internal casing is invalid_identity" do
+      author = author!()
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "invalid_identity",
+                   "details" => %{"providedKeys" => provided, "expectedKeys" => expected}
+                 }
+               ]
+             } =
+               run(%{
+                 "action" => "update_author_by_identity",
+                 "identity" => %{"name" => author.name, "is_active?" => true},
+                 "input" => %{"name" => unique("renamed")},
+                 "fields" => ["id"]
+               })
+
+      assert Enum.sort(provided) == ["is_active?", "name"]
+      assert expected == ["id", "name", "isActive"]
+      assert reload!(author).name == author.name
     end
 
     test "a non-matching identity value is not_found and changes nothing" do
@@ -334,9 +447,28 @@ defmodule AshRpc.GetActionsTest do
       assert error["message"] =~ "%{providedKeys}"
       assert error["message"] =~ "%{expectedKeys}"
       assert Enum.sort(keys) == ["isActiv", "name"]
-      # Map key order puts the existing atom :name before the unresolved "is_activ"
-      assert provided == "name, isActiv"
+      # The keys as sent, in map order
+      assert provided == "isActiv, name"
       assert reload!(author).name == author.name
+    end
+
+    test "invalid_identity reports a decorated key as sent" do
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "invalid_identity",
+                   "vars" => %{"providedKeys" => "isActive"},
+                   "details" => %{"providedKeys" => ["isActive"]}
+                 }
+               ]
+             } =
+               run(%{
+                 "action" => "update_author_by_identity",
+                 "identity" => %{"isActive" => true},
+                 "input" => %{"name" => unique("renamed")},
+                 "fields" => ["id"]
+               })
     end
 
     test "an empty identity map is invalid_identity" do
@@ -523,8 +655,7 @@ defmodule AshRpc.GetActionsTest do
         "fields" => ["id", "title"]
       }
 
-      assert {:error, {:invalid_get_by, %{message: message}}} = parse(params)
-      assert message =~ "Non-scalar value provided for: slug"
+      assert {:error, {:invalid_get_by, %{non_scalar_keys: ["slug"]}}} = parse(params)
 
       assert %{
                "success" => false,
@@ -550,7 +681,7 @@ defmodule AshRpc.GetActionsTest do
         "fields" => ["id"]
       }
 
-      assert {:error, {:invalid_get_by, %{message: _}}} = parse(params)
+      assert {:error, {:invalid_get_by, %{non_scalar_keys: ["slug"]}}} = parse(params)
 
       assert %{"success" => false, "errors" => [%{"type" => "invalid_get_by"}]} = run(params)
     end
@@ -565,7 +696,7 @@ defmodule AshRpc.GetActionsTest do
                  %{
                    "type" => "invalid_identity",
                    "shortMessage" => "Invalid identity",
-                   "message" => message,
+                   "fields" => ["slug"],
                    "path" => ["identity"]
                  }
                ]
@@ -577,8 +708,56 @@ defmodule AshRpc.GetActionsTest do
                  "fields" => ["title"]
                })
 
-      assert message =~ "Non-scalar value provided for: slug"
       assert reload!(post).title == "Original"
+    end
+
+    test "a non-scalar identity value is named by its client name" do
+      author = author!()
+
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{
+                 "action" => "update_author_by_identity",
+                 "identity" => %{"name" => author.name, "isActive" => %{"a" => 1}},
+                 "input" => %{"name" => unique("renamed")},
+                 "fields" => ["id"]
+               })
+
+      assert %{
+               "type" => "invalid_identity",
+               "message" =>
+                 "Identity values must be scalar equality operands. Non-scalar value provided for: %{fields}",
+               "vars" => %{"fields" => "isActive"},
+               "fields" => ["isActive"],
+               "path" => ["identity"]
+             } = error
+
+      assert reload!(author).name == author.name
+    end
+
+    test "a non-scalar getBy value is named by its client name" do
+      author!()
+
+      params = %{
+        "action" => "get_author_by_name_active",
+        "getBy" => %{"name" => "x", "isActive" => %{"a" => 1}},
+        "fields" => ["id"]
+      }
+
+      assert {:error, {:invalid_get_by, %{non_scalar_keys: ["isActive"]}}} = parse(params)
+
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "invalid_get_by",
+                   "message" =>
+                     "getBy values must be scalar equality operands. Non-scalar value provided for: %{fields}",
+                   "vars" => %{"fields" => "isActive"},
+                   "fields" => ["isActive"],
+                   "path" => ["getBy"]
+                 }
+               ]
+             } = run(params)
     end
 
     test "a list as the primary key is invalid_identity, record unchanged" do
@@ -586,7 +765,7 @@ defmodule AshRpc.GetActionsTest do
 
       assert %{
                "success" => false,
-               "errors" => [%{"type" => "invalid_identity", "message" => message}]
+               "errors" => [%{"type" => "invalid_identity", "fields" => ["id"]}]
              } =
                run(%{
                  "action" => "update_post",
@@ -595,7 +774,6 @@ defmodule AshRpc.GetActionsTest do
                  "fields" => ["title"]
                })
 
-      assert message =~ "Non-scalar value provided for: id"
       assert reload!(post).title == "Original"
     end
   end
@@ -652,6 +830,44 @@ defmodule AshRpc.GetActionsTest do
              } = error
 
       assert {:ok, %PostTag{position: 1}} = get_post_tag(post_tag)
+    end
+
+    test "a scalar identity is invalid_identity naming every key part, record unchanged" do
+      post_tag = post_tag!(%{position: 1})
+      _other = post_tag!(%{position: 1})
+
+      params = %{
+        "action" => "update_post_tag",
+        "identity" => post_tag.post_id,
+        "input" => %{"position" => 2},
+        "fields" => ["position"]
+      }
+
+      expected = %{
+        "type" => "invalid_identity",
+        "message" =>
+          "Identity must be a map of the primary key fields for a composite primary key: [%{expectedKeys}]",
+        "shortMessage" => "Invalid identity",
+        "path" => ["identity"],
+        "fields" => [],
+        "vars" => %{"expectedKeys" => "postId, tagId"},
+        "details" => %{
+          "expectedKeys" => ["postId", "tagId"],
+          "suggestion" => "Provide the identity as a map of postId, tagId",
+          "hint" => AshRpc.Profile.default_stale_client_hint()
+        }
+      }
+
+      assert %{"success" => false, "errors" => [^expected]} = run(params)
+
+      assert %{"success" => false, "errors" => [^expected]} =
+               AshRpc.validate_action(@profile, ctx(), params)
+
+      assert %{"success" => false, "errors" => [^expected]} =
+               run(%{"action" => "destroy_post_tag", "identity" => post_tag.post_id})
+
+      assert {:ok, %PostTag{position: 1}} = get_post_tag(post_tag)
+      assert Ash.count!(PostTag) >= 2
     end
 
     test "a non-matching key is not_found" do

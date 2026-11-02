@@ -15,6 +15,7 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"totals", AshRpc.Test.Post, :totals},
     {"location", AshRpc.Test.Post, :location},
     {"payload", AshRpc.Test.Post, :payload},
+    {"payloads", AshRpc.Test.Post, :payloads},
     {"ping", AshRpc.Test.Post, :ping},
     {"list_authors", AshRpc.Test.Author, :read},
     {"create_author", AshRpc.Test.Author, :create},
@@ -27,6 +28,7 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"get_post_by_slug_nullable", AshRpc.Test.Post, :get_by_slug,
      get_by: [:slug], not_found_error?: false},
     {"get_post_by_slug_and_title", AshRpc.Test.Post, :get_by_slug, get_by: [:slug, :title]},
+    {"get_author_by_name_active", AshRpc.Test.Author, :read, get_by: [:name, :is_active?]},
     # Filter/sort flags
     {"list_posts_no_filter", AshRpc.Test.Post, :read, enable_filter?: false},
     {"list_posts_no_sort", AshRpc.Test.Post, :read, enable_sort?: false},
@@ -106,6 +108,7 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"get_place", AshRpc.Test.Place, :read, get?: true},
     {"place_keyword_options", AshRpc.Test.Place, :keyword_options},
     {"place_coordinates_info", AshRpc.Test.Place, :coordinates_info},
+    {"place_geo_point", AshRpc.Test.Place, :geo_point},
     # Embedded, custom and typed-struct values
     {"create_project", AshRpc.Test.Project, :create},
     {"update_project", AshRpc.Test.Project, :update},

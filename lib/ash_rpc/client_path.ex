@@ -11,9 +11,14 @@ defmodule AshRpc.ClientPath do
   #     action declares it (argument overrides apply), else a resource field or
   #     relationship
   #   * `{:resource, resource}`: a resource field or relationship; the walk
-  #     continues in the field's type or the relationship's destination
+  #     continues in the field's type or the relationship's destination. A
+  #     calculation with arguments continues in its return type, or in its
+  #     arguments after `:args` / `:input`. Ash's `:load` prefix (nested load
+  #     errors) is dropped; `:filter` / `:sort` stay on the resource
   #   * `{:type, type}`: a typed container field, a union member, an array item
-  #     (`:type_ref` nodes resolve through the type lookup)
+  #     (`:type_ref` nodes resolve through the type lookup). On a union, a name
+  #     that is no member is looked up in the member types, since Ash reports
+  #     a member's field at the union
   #
   # Atoms take the decorated client name of the node they are on. Integers keep
   # the current node. A string is a name the client sent: it is reported as
@@ -29,6 +34,8 @@ defmodule AshRpc.ClientPath do
           {:root, Manifest.Resource.t() | nil, Manifest.Action.t() | nil}
           | {:resource, Manifest.Resource.t()}
           | {:type, Type.t()}
+          | {:calculation, Manifest.Resource.t(), Manifest.Field.t()}
+          | {:calc_args, Manifest.Resource.t(), Manifest.Field.t()}
           | :none
 
   @doc false
@@ -58,8 +65,10 @@ defmodule AshRpc.ClientPath do
           {[index | acc], ctx}
 
         segment, {acc, ctx} when is_atom(segment) ->
-          {name, next} = segment(ctx, segment, rt)
-          {[name | acc], next}
+          case segment(ctx, segment, rt) do
+            {:skip, next} -> {acc, next}
+            {name, next} -> {[name | acc], next}
+          end
 
         other, {acc, _ctx} ->
           {[other | acc], :none}
@@ -71,71 +80,142 @@ defmodule AshRpc.ClientPath do
   @doc false
   @spec name(context(), term(), AshRpc.Runtime.t()) :: term()
   def name(ctx, field, rt) when is_atom(field) and not is_nil(field) do
-    {name, _next} = segment(ctx, field, rt)
-    name
+    case segment(ctx, field, rt) do
+      {:skip, _next} -> field |> formatted(rt) |> elem(0)
+      {name, _next} -> name
+    end
   end
 
   def name(_ctx, field, _rt), do: field
 
   # ── segments ──────────────────────────────────────────────────────
 
-  defp segment({:root, %Manifest.Resource{} = r, %Manifest.Action{} = action}, seg, rt) do
+  defp segment(ctx, seg, rt) do
+    case lookup(ctx, seg, rt) do
+      {:ok, found} -> found
+      :error -> formatted(seg, rt)
+    end
+  end
+
+  # `{:ok, {client_name, next_context}}` when the node names `seg`, else `:error`.
+  defp lookup({:root, %Manifest.Resource{} = r, %Manifest.Action{} = action}, seg, rt) do
     types = Custom.action_input_field_types(action) || %{}
 
     if Map.has_key?(types, seg) do
       name = Introspection.format_input_name(r, action.name, seg, rt.output_formatter)
-      {name, type_context(Map.get(types, seg))}
+      {:ok, {name, type_context(Map.get(types, seg))}}
     else
-      segment({:resource, r}, seg, rt)
+      lookup({:resource, r}, seg, rt)
     end
   end
 
-  defp segment({:root, %Manifest.Resource{} = r, _action}, seg, rt),
-    do: segment({:resource, r}, seg, rt)
+  defp lookup({:root, %Manifest.Resource{} = r, _action}, seg, rt),
+    do: lookup({:resource, r}, seg, rt)
 
-  defp segment({:resource, %Manifest.Resource{} = r}, seg, rt) do
+  defp lookup({:resource, %Manifest.Resource{} = r}, seg, rt) do
     case Map.fetch(Custom.field_names(r), seg) do
-      {:ok, name} -> {name, resource_child(r, seg, rt)}
-      :error -> formatted(seg, rt)
+      {:ok, name} -> {:ok, {name, resource_child(r, seg, rt)}}
+      :error -> query_lookup(r, seg, rt)
     end
   end
 
-  defp segment({:type, %Type{} = type}, seg, rt) do
+  defp lookup({:calculation, r, %Manifest.Field{} = calc}, seg, rt) do
+    case lookup(type_context(calc.type), seg, rt) do
+      {:ok, _} = found -> found
+      :error -> calc_args_lookup(r, calc, seg, rt)
+    end
+  end
+
+  defp lookup({:calc_args, r, %Manifest.Field{} = calc}, seg, _rt) do
+    names = Custom.calculation_argument_names(r, calc.name)
+
+    with {name, _} <- Enum.find(names, fn {_client, internal} -> internal == seg end),
+         %{type: type} <- Enum.find(calc.arguments, &(&1.name == seg)) do
+      {:ok, {name, type_context(type)}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp lookup({:type, %Type{} = type}, seg, rt) do
     case decorated_type(type, rt) do
       %Type{kind: :type_ref} ->
-        formatted(seg, rt)
+        :error
 
       %Type{kind: :array, item_type: item} ->
-        segment(type_context(item), seg, rt)
+        lookup(type_context(item), seg, rt)
 
       %Type{} = t ->
         if Type.resource_kind?(t),
-          do: segment(resource_context(Type.effective_resource(t), rt), seg, rt),
-          else: container_segment(t, seg, rt)
+          do: lookup(resource_context(Type.effective_resource(t), rt), seg, rt),
+          else: container_lookup(t, seg, rt)
     end
   end
 
-  defp segment(_ctx, seg, rt), do: formatted(seg, rt)
+  defp lookup(_ctx, _seg, _rt), do: :error
 
-  defp container_segment(%Type{kind: :union} = t, seg, rt) do
+  # Ash prefixes errors from a nested load's query with `[:load, relationship]`
+  # (and a top-level load's with `[:load]`): the segment is skipped, and the
+  # relationship that follows names the destination. `filter` and `sort` name
+  # the query option and stay on the resource, whose fields they filter on.
+  defp query_lookup(r, :load, _rt), do: {:ok, {:skip, {:resource, r}}}
+
+  defp query_lookup(r, seg, rt) when seg in [:filter, :sort],
+    do: {:ok, {seg |> formatted(rt) |> elem(0), {:resource, r}}}
+
+  defp query_lookup(_r, _seg, _rt), do: :error
+
+  # A calculation's `args` (field selection) or `input` (filters) map, named
+  # by the calculation's argument names.
+  defp calc_args_lookup(r, calc, seg, rt) when seg in [:args, :input],
+    do: {:ok, {seg |> formatted(rt) |> elem(0), {:calc_args, r, calc}}}
+
+  defp calc_args_lookup(_r, _calc, _seg, _rt), do: :error
+
+  defp container_lookup(%Type{kind: :union} = t, seg, rt) do
     case Map.fetch(Custom.type_member_names(t), seg) do
-      {:ok, name} -> {name, t |> Type.find_member(seg) |> member_type() |> type_context()}
-      :error -> formatted(seg, rt)
+      {:ok, name} -> {:ok, {name, t |> Type.find_member(seg) |> member_type() |> type_context()}}
+      :error -> member_field_lookup(t, seg, rt)
     end
   end
 
-  defp container_segment(%Type{} = t, seg, rt) do
+  defp container_lookup(%Type{} = t, seg, _rt) do
     case Map.fetch(Custom.type_field_names(t), seg) do
-      {:ok, name} -> {name, type_context(Type.find_field_type(t, seg))}
-      :error -> formatted(seg, rt)
+      {:ok, name} -> {:ok, {name, type_context(Type.find_field_type(t, seg))}}
+      :error -> :error
     end
   end
+
+  # Ash reports an error inside a union member at the union, naming the
+  # member's field but not the member: the first member (that is not itself a
+  # union) with a field of that name names it.
+  defp member_field_lookup(%Type{members: [_ | _] = members}, seg, rt) do
+    Enum.find_value(members, :error, fn member ->
+      with %Type{} = type <- member_type(member),
+           false <- decorated_type(type, rt).kind == :union,
+           {:ok, _} = found <- lookup(type_context(type), seg, rt) do
+        found
+      else
+        _ -> nil
+      end
+    end)
+  end
+
+  defp member_field_lookup(_type, _seg, _rt), do: :error
 
   defp resource_child(%Manifest.Resource{} = r, seg, rt) do
     case {Map.get(r.fields, seg), Map.get(r.relationships, seg)} do
-      {%Manifest.Field{type: type}, _} -> type_context(type)
-      {nil, %Manifest.Relationship{destination: dest}} -> resource_context(dest, rt)
-      _ -> :none
+      {%Manifest.Field{kind: :calculation, arguments: [_ | _]} = calc, _} ->
+        {:calculation, r, calc}
+
+      {%Manifest.Field{type: type}, _} ->
+        type_context(type)
+
+      {nil, %Manifest.Relationship{destination: dest}} ->
+        resource_context(dest, rt)
+
+      _ ->
+        :none
     end
   end
 

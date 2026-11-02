@@ -33,6 +33,15 @@ defmodule AshRpc.Test.Calculations.ScoredStats do
   end
 end
 
+defmodule AshRpc.Test.Calculations.EchoStats do
+  @moduledoc false
+  use Ash.Resource.Calculation
+
+  @impl true
+  def calculate(records, _opts, context),
+    do: Enum.map(records, fn _record -> context.arguments.probe end)
+end
+
 defmodule AshRpc.Test.Calculations.SelfPost do
   @moduledoc false
   use Ash.Resource.Calculation
@@ -131,5 +140,24 @@ defmodule AshRpc.Test.Calculations.DaysLeft do
   def calculate(records, _opts, _context) do
     today = Date.utc_today()
     Enum.map(records, &(&1.due_date && Date.diff(&1.due_date, today)))
+  end
+end
+
+defmodule AshRpc.Test.Calculations.Origin do
+  @moduledoc false
+  use Ash.Resource.Calculation
+
+  @impl true
+  def calculate(records, _opts, _context), do: Enum.map(records, fn _ -> {0.5, 1.5, false} end)
+end
+
+defmodule AshRpc.Test.Calculations.ChoiceLabel do
+  @moduledoc false
+  use Ash.Resource.Calculation
+
+  @impl true
+  def calculate(records, _opts, context) do
+    %Ash.Union{value: value} = context.arguments.choice
+    Enum.map(records, fn _ -> to_string(value) end)
   end
 end

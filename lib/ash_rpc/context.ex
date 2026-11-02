@@ -7,8 +7,9 @@ defmodule AshRpc.Context do
   Actor, tenant and Ash context for one RPC call, independent of transport.
 
   A `tenant` request param overrides the transport's tenant on every
-  transport and is passed to Ash unvalidated; invalid or unauthorized
-  tenants surface as normal Ash/policy errors.
+  transport. The pipeline rejects a param that is not a string, integer or
+  atom (`invalid_tenant_type`) and passes any other value to Ash unchecked;
+  invalid or unauthorized tenants surface as normal Ash/policy errors.
   """
 
   @type t :: %__MODULE__{

@@ -89,7 +89,8 @@ end
 
 # A filter or sort name that is not a client name of the resource.
 # `AshRpc.FilterInput` reports these misses as Ash's NoSuchField, naming the
-# field as the client sent it, with `path` `[:filter]` or `[:sort]`.
+# field as the client sent it, with `path` where it sits: `[:sort]`, or the
+# filter path to its parent (`[:filter, "author", "posts"]`).
 defimpl AshRpc.Error, for: Ash.Error.Query.NoSuchField do
   def to_error(error) do
     field = to_string(error.field)
@@ -117,6 +118,94 @@ defimpl AshRpc.Error, for: Ash.Error.Query.NoSuchFilterPredicate do
       type: "unknown_filter_operator",
       fields: [operator],
       path: error.path || []
+    }
+  end
+end
+
+# A sort that is not a string or a list of strings (`AshRpc.FilterInput`), or
+# one Ash rejects. The rejected value is not echoed back: Ash's own uses hold
+# internal names.
+defimpl AshRpc.Error, for: Ash.Error.Query.InvalidSort do
+  def to_error(error) do
+    %{
+      message: "Invalid sort",
+      short_message: "Invalid sort",
+      vars: %{},
+      type: "invalid_sort",
+      fields: [],
+      path: error.path || [],
+      details: %{
+        expected:
+          "A string or a list of strings, each a field name with an optional +, -, ++ or -- prefix"
+      }
+    }
+  end
+end
+
+# A calculation argument value Ash rejects, or a missing required one. From
+# field selection the path is Ash's (`[:load]`, `[:load, relationship]`) and
+# continues at the calculation's `args`, where `AshRpc.Errors` names the
+# argument. `AshRpc.FilterInput` checks filter arguments itself, with the full
+# path, so `[:filter]` (and `[:sort]`) only come from server-side callers: the
+# path continues at the calculation (and its `input`). The message is fixed:
+# a type's cast error string could echo the value.
+defimpl AshRpc.Error, for: Ash.Error.Query.InvalidCalculationArgument do
+  def to_error(error) do
+    path = error.path || []
+
+    suffix =
+      case List.last(path) do
+        :filter -> [error.calculation, :input]
+        :sort -> [error.calculation]
+        _ -> [error.calculation, :args]
+      end
+
+    %{
+      message: if(error.message == "is required", do: "is required", else: "is invalid"),
+      short_message: "Invalid calculation argument",
+      vars: %{field: error.field},
+      type: "invalid_calculation_argument",
+      fields: [error.field],
+      path: path ++ suffix
+    }
+  end
+end
+
+# A filter value Ash rejects. `AshRpc.FilterInput` reports the shapes it can
+# check (an `in` that is not a list, a value an operator's concrete type
+# can't cast, a relationship given a boolean) with their full path; what
+# remains (a value the field's type can't cast) has only Ash's `[:filter]`.
+# Ash's message names internal fields and echoes the value, so it is dropped.
+defimpl AshRpc.Error, for: Ash.Error.Query.InvalidFilterValue do
+  def to_error(error) do
+    %{
+      message: "Invalid filter value",
+      short_message: "Invalid filter value",
+      vars: %{},
+      type: "invalid_filter_value",
+      fields: [],
+      path: error.path || [],
+      details: %{}
+    }
+  end
+end
+
+# A sort field that can't be sorted on. `AshRpc.FilterInput` reports
+# relationships (`reason` `:relationship`), calculations with required
+# arguments (`:requires_arguments`) and fields the manifest marks unsortable,
+# naming the field as sent; Ash reports others by internal name (`:type`,
+# `:to_many`), which `AshRpc.Errors` names for the client. Ash's message names
+# the resource module, so it is not used.
+defimpl AshRpc.Error, for: Ash.Error.Query.UnsortableField do
+  def to_error(error) do
+    %{
+      message: "Cannot sort on %{field}",
+      short_message: "Unsortable field",
+      vars: %{field: error.field},
+      type: "unsortable_field",
+      fields: [error.field],
+      path: error.path || [],
+      details: if(error.reason, do: %{reason: to_string(error.reason)}, else: %{})
     }
   end
 end

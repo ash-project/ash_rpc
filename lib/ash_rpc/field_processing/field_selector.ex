@@ -27,7 +27,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   | Ash / embedded resource | `:resource`, `:embedded_resource` | `select_resource_fields/4` |
   | Typed struct | struct/map with field-name overrides | `select_typed_struct_fields/4` |
   | Typed Map/Keyword | `:map`/`:keyword` with fields | `select_typed_map_fields/5` |
-  | Tuple | `:tuple` | `select_tuple_fields/4` |
+  | Tuple | `:tuple`, with or without field-name overrides | `select_tuple_fields/4` |
   | Union | `:union` | `select_union_fields/5` |
   | Array | `:array` | Recurse with `item_type` |
   | Named type reference | `:type_ref` | Resolve via the runtime's type lookup, re-dispatch |
@@ -35,7 +35,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   """
 
   alias Ash.Info.Manifest.Type
-  alias AshRpc.{ClientNames, FilterInput, Introspection, LoadRestrictions}
+  alias AshRpc.{ClientNames, FilterInput, Introspection, LoadRestrictions, ValueFormatter}
   alias AshRpc.FieldProcessing.Atomizer
   alias AshRpc.FieldProcessing.FieldSelector.Validation
   alias AshRpc.Manifest.Custom
@@ -141,11 +141,11 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       {:union, type} ->
         select_union_fields(type, requested_fields, path, "union_attribute", ctx)
 
+      {_, %Type{kind: :tuple} = type} ->
+        select_tuple_fields(type, requested_fields, path, ctx)
+
       {:typed_struct, type} ->
         select_typed_struct_fields(type, requested_fields, path, ctx)
-
-      {:fields, %Type{kind: :tuple} = type} ->
-        select_tuple_fields(type, requested_fields, path, ctx)
 
       {:fields, %Type{kind: kind} = type} ->
         if Type.has_fields?(type) do
@@ -210,8 +210,23 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
        do:
          process_relationship_with_query_opts(resource, field_name, opts, fields, path, acc, ctx)
 
-  defp process_resource_request({:with_args, calc_name, args, fields}, resource, path, acc, ctx),
-    do: process_args_or_relationship_envelope(resource, calc_name, args, fields, path, acc, ctx)
+  defp process_resource_request(
+         {:with_args, calc_name, args, fields, unknown_keys},
+         resource,
+         path,
+         acc,
+         ctx
+       ),
+       do:
+         process_args_or_relationship_envelope(
+           resource,
+           calc_name,
+           {args, unknown_keys},
+           fields,
+           path,
+           acc,
+           ctx
+         )
 
   defp process_resource_request({:multi_nested, entries}, resource, path, acc, ctx) do
     Enum.reduce(entries, acc, fn {field_name, nested}, inner_acc ->
@@ -388,7 +403,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
          ctx
        ) do
     internal_name = resolve_resource_field_name(resource, calc_name, ctx)
-    args = ClientNames.calc_args(ctx.runtime, resource, internal_name, args)
 
     calc_field =
       case Ash.Info.Manifest.get_field(
@@ -403,6 +417,13 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     if is_nil(calc_field) do
       throw({:unknown_field, internal_name, resource, path})
     end
+
+    unless is_nil(args) or (is_map(args) and not is_struct(args)) do
+      throw({:invalid_calculation_args, internal_name, path})
+    end
+
+    {args, arg_value_errors} =
+      ValueFormatter.format_calculation_args(ctx.runtime, resource, calc_field, args)
 
     field_type = calc_field.type
     new_path = path ++ [internal_name]
@@ -428,6 +449,13 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       has_non_empty_args && undefined_arg_keys?(args, calc_field) ->
         throw({:invalid_calculation_args, internal_name, path})
 
+      arg_value_errors != [] ->
+        throw(
+          Enum.map(arg_value_errors, fn {key, reason} ->
+            {:invalid_calculation_arg_value, reason, path ++ [internal_name], key}
+          end)
+        )
+
       true ->
         :ok
     end
@@ -441,7 +469,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
           select_fields(field_type, fields, new_path, ctx)
 
         is_complex_return_type ->
-          throw({:requires_field_selection, :complex_type, internal_name, path})
+          throw({:requires_field_selection, :calculation_complex, internal_name, path})
 
         true ->
           {[], [], []}
@@ -482,8 +510,17 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
   # An args/fields map targeted at a relationship is a bare-fields envelope
   # (e.g. %{comments: %{fields: [...]}}) — route it through the query-opts
-  # processor. Calculations keep the existing args path.
-  defp process_args_or_relationship_envelope(resource, calc_name, args, fields, path, acc, ctx) do
+  # processor. Calculations keep the existing args path; unknown envelope
+  # keys are only checked on relationships.
+  defp process_args_or_relationship_envelope(
+         resource,
+         calc_name,
+         {args, unknown_keys},
+         fields,
+         path,
+         acc,
+         ctx
+       ) do
     internal = resolve_resource_field_name(resource, calc_name, ctx)
 
     case get_resource_relationship(resource, internal, ctx.runtime) do
@@ -491,7 +528,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
         process_relationship_with_query_opts(
           resource,
           calc_name,
-          %{args: args},
+          %{args: args, unknown_keys: unknown_keys},
           fields,
           path,
           acc,
@@ -592,8 +629,10 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
   # Validation order (spec):
   # 1. relationship  2. cardinality :many  3. destination is RPC resource
-  # 4. args exclusivity  5. page vs pagination capability  6. filter gates
-  # 7. sort gates  8. page xor bare limit/offset  9. non-empty fields
+  # 4. no unknown envelope keys  5. args exclusivity  6. page vs pagination
+  # capability  7. filter gates  8. sort gates  9. page xor bare
+  # limit/offset  10. limit/offset are non-negative integers  11. fields is
+  # a non-empty list
   defp validate_query_opts!(resource, internal_name, rel, opts, fields, path, ctx) do
     rel =
       case rel do
@@ -612,6 +651,11 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
     unless Custom.exposed?(Map.get(ctx.runtime.resource_lookup, rel.destination)) do
       throw({:unknown_field, internal_name, resource, path})
+    end
+
+    case Map.get(opts, :unknown_keys, []) do
+      [] -> :ok
+      keys -> throw({:unknown_query_opts, internal_name, keys, path})
     end
 
     if Map.get(opts, :args) != nil do
@@ -653,9 +697,17 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       throw({:page_and_limit_offset_combined, internal_name, path})
     end
 
-    if is_nil(fields) or fields == [] do
+    for key <- [:limit, :offset],
+        value = Map.get(opts, key),
+        not is_nil(value) and not (is_integer(value) and value >= 0) do
+      throw({:invalid_query_opt_value, internal_name, key, path})
+    end
+
+    if is_nil(fields) do
       throw({:requires_field_selection, :relationship, internal_name, path})
     end
+
+    Validation.validate_non_empty(fields, internal_name, path)
 
     rel
   end
@@ -821,8 +873,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     Enum.any?(Map.keys(args), &(not MapSet.member?(names, &1)))
   end
 
-  defp undefined_arg_keys?(_args, _calc), do: false
-
   defp has_required_arguments?(calc) do
     case calc.arguments do
       [] ->
@@ -895,7 +945,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       {:with_query_opts, field_name, _opts, _fields} ->
         reject_query_opts!(field_name, "typed field", path)
 
-      {:with_args, _calc_name, _args, _fields} ->
+      {:with_args, _calc_name, _args, _fields, _unknown_keys} ->
         throw({:invalid_field_format, field, path})
     end
   end
@@ -1016,7 +1066,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
           {:with_query_opts, field_name, _opts, _fields} ->
             reject_query_opts!(field_name, "tuple field", path)
 
-          {:with_args, _calc_name, _args, _fields} ->
+          {:with_args, _calc_name, _args, _fields, _unknown_keys} ->
             throw({:invalid_field_format, field, path})
         end
       end)
@@ -1043,7 +1093,8 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     members = type_info.members || []
     normalized_fields = normalize_union_fields(requested_fields)
 
-    Validation.validate_non_empty(normalized_fields, "union", path, :union)
+    # `path` ends at the union (empty for a generic action's return).
+    if normalized_fields in [[], %{}], do: throw({:requires_field_selection, :union, path})
 
     Validation.check_for_duplicates(
       normalized_fields,
@@ -1098,7 +1149,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
           {:with_query_opts, member_name, _opts, _fields} ->
             reject_query_opts!(member_name, "union member", path)
 
-          {:with_args, _calc_name, _args, _fields} ->
+          {:with_args, _calc_name, _args, _fields, _unknown_keys} ->
             throw({:invalid_field_format, field, path})
         end
       end)
@@ -1127,7 +1178,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
     # Check if member requires nested selection (embedded resources, typed maps, etc.)
     if requires_nested_selection?(member.type, ctx) do
-      throw({:requires_field_selection, :complex_type, internal_name, path})
+      throw({:requires_field_selection, :union_member, internal_name, path})
     end
 
     {load_acc, template_acc ++ [internal_name]}
@@ -1151,9 +1202,13 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       throw({:unknown_field, internal_name, error_type, path})
     end
 
+    if not is_list(nested_fields) do
+      throw({:unsupported_field_combination, :union_member, internal_name, nested_fields, path})
+    end
+
     # An empty selection on a complex member is the same as naming it bare.
     if nested_fields == [] and requires_nested_selection?(member.type, ctx) do
-      throw({:requires_field_selection, :complex_type, internal_name, path})
+      throw({:requires_field_selection, :union_member, internal_name, path})
     end
 
     new_path = path ++ [internal_name]
@@ -1203,11 +1258,24 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
     end
   end
 
+  @query_opt_keys [:page, :filter, :sort, :limit, :offset]
+  @envelope_keys [:args, :fields | @query_opt_keys]
+
+  # An envelope's keys that aren't envelope options travel with it as sent
+  # (`unknown_keys`), so a relationship can reject them.
   defp parse_nested(field_name, %{} = nested, ctx) do
-    case nested |> envelope_keys(ctx) |> classify_nested_map() do
-      {:with_query_opts, opts, fields} -> {:with_query_opts, field_name, opts, fields}
-      {:with_args, args, fields} -> {:with_args, field_name, args, fields}
-      :not_args_structure -> {:nested, field_name, nested}
+    resolved = envelope_keys(nested, ctx)
+    unknown_keys = for {key, _} <- resolved, key not in @envelope_keys, do: key
+
+    case classify_nested_map(resolved) do
+      {:with_query_opts, opts, fields} ->
+        {:with_query_opts, field_name, Map.put(opts, :unknown_keys, unknown_keys), fields}
+
+      {:with_args, args, fields} ->
+        {:with_args, field_name, args, fields, unknown_keys}
+
+      :not_args_structure ->
+        {:nested, field_name, nested}
     end
   end
 
@@ -1224,8 +1292,6 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
       end
     end)
   end
-
-  @query_opt_keys [:page, :filter, :sort, :limit, :offset]
 
   # Collects envelope query options from a nested map whose envelope keys
   # are resolved (`envelope_keys/2`). Returns {:ok, opts_map} when at least

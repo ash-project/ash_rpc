@@ -45,7 +45,7 @@ defmodule AshRpc.FieldProcessing.FieldSelector.Validation do
   """
   def validate_non_empty(nested_fields, field_name, path, error_type \\ :relationship) do
     if not is_list(nested_fields) do
-      throw({:unsupported_field_combination, :relationship, field_name, nested_fields, path})
+      throw({:unsupported_field_combination, error_type, field_name, nested_fields, path})
     end
 
     if nested_fields == [] do

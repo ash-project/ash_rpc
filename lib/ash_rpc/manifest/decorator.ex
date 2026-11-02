@@ -608,7 +608,7 @@ defmodule AshRpc.Manifest.Decorator do
           end
 
           check_untyped_structs!(entrypoint, e, lookups, hint: hint)
-          Map.put(acc, name, put_client_metadata_names(e, formatter))
+          Map.put(acc, name, put_client_metadata_names(e, entrypoint, formatter, lookups))
       end
     end)
   end
@@ -699,7 +699,7 @@ defmodule AshRpc.Manifest.Decorator do
     inputs ++ [{"returns", action.returns, "returns"}] ++ records ++ metadata
   end
 
-  defp put_client_metadata_names(%AshRpc.Entrypoint{} = e, formatter) do
+  defp put_client_metadata_names(%AshRpc.Entrypoint{} = e, entrypoint, formatter, lookups) do
     where = "metadata of entrypoint #{inspect(e.name)}"
 
     forward =
@@ -708,7 +708,35 @@ defmodule AshRpc.Manifest.Decorator do
       end)
 
     check_collisions!(forward, where)
+
+    if entrypoint.action.type == :read,
+      do: check_record_collisions!(forward, entrypoint.resource, lookups, where)
+
     %AshRpc.Entrypoint{e | client_metadata_field_names: reverse_map(forward)}
+  end
+
+  # Read metadata is merged into each record, so its client names must not
+  # be those of the resource's public fields (overrides included).
+  defp check_record_collisions!(forward, resource, lookups, where) do
+    client_fields =
+      lookups.resource_lookup |> Map.get(resource) |> AshRpc.Manifest.Custom.client_field_names()
+
+    forward
+    |> Enum.filter(fn {_field, client} -> Map.has_key?(client_fields, client) end)
+    |> Enum.sort()
+    |> case do
+      [] ->
+        :ok
+
+      clashes ->
+        details =
+          Enum.map_join(clashes, "; ", fn {field, client} ->
+            "metadata #{inspect(field)} and field #{inspect(Map.fetch!(client_fields, client))} " <>
+              "of #{inspect(resource)} both map to #{inspect(client)}"
+          end)
+
+        raise NameCollisionError, message: "Client name collision in #{where}: #{details}"
+    end
   end
 
   # ── helpers ───────────────────────────────────────────────────────

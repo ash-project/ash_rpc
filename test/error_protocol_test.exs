@@ -349,6 +349,126 @@ defmodule AshRpc.ErrorProtocolTest do
          fields: [],
          path: []
        }},
+      {"InvalidSort", Ash.Error.Query.InvalidSort.exception(sort: %{"x" => 1}, path: [:sort]),
+       %{
+         message: "Invalid sort",
+         short_message: "Invalid sort",
+         type: "invalid_sort",
+         vars: %{},
+         fields: [],
+         path: [:sort],
+         details: %{
+           expected:
+             "A string or a list of strings, each a field name with an optional +, -, ++ or -- prefix"
+         }
+       }},
+      {"InvalidCalculationArgument (load)",
+       Ash.Error.Query.InvalidCalculationArgument.exception(
+         calculation: :excerpt,
+         field: :omission_text,
+         message: "is invalid",
+         value: "secret",
+         path: [:load]
+       ),
+       %{
+         message: "is invalid",
+         short_message: "Invalid calculation argument",
+         type: "invalid_calculation_argument",
+         vars: %{field: :omission_text},
+         fields: [:omission_text],
+         path: [:load, :excerpt, :args]
+       }},
+      {"InvalidCalculationArgument (filter)",
+       Ash.Error.Query.InvalidCalculationArgument.exception(
+         calculation: :excerpt,
+         field: :length,
+         message: "is required",
+         path: [:load, :comments, :filter]
+       ),
+       %{
+         message: "is required",
+         short_message: "Invalid calculation argument",
+         type: "invalid_calculation_argument",
+         vars: %{field: :length},
+         fields: [:length],
+         path: [:load, :comments, :filter, :excerpt, :input]
+       }},
+      {"InvalidCalculationArgument (a cast error string is not passed through)",
+       Ash.Error.Query.InvalidCalculationArgument.exception(
+         calculation: :excerpt,
+         field: :omission_text,
+         message: "secret-value is not allowed",
+         path: [:load]
+       ),
+       %{
+         message: "is invalid",
+         short_message: "Invalid calculation argument",
+         type: "invalid_calculation_argument",
+         vars: %{field: :omission_text},
+         fields: [:omission_text],
+         path: [:load, :excerpt, :args]
+       }},
+      {"InvalidCalculationArgument (sort)",
+       Ash.Error.Query.InvalidCalculationArgument.exception(
+         calculation: :excerpt,
+         field: :length,
+         message: "is required",
+         path: [:sort]
+       ),
+       %{
+         message: "is required",
+         short_message: "Invalid calculation argument",
+         type: "invalid_calculation_argument",
+         vars: %{field: :length},
+         fields: [:length],
+         path: [:sort, :excerpt]
+       }},
+      {"InvalidFilterValue",
+       Ash.Error.Query.InvalidFilterValue.exception(
+         value: "secret",
+         message: "Could not cast secret as :integer",
+         path: [:filter]
+       ),
+       %{
+         message: "Invalid filter value",
+         short_message: "Invalid filter value",
+         type: "invalid_filter_value",
+         vars: %{},
+         fields: [],
+         path: [:filter],
+         details: %{}
+       }},
+      {"UnsortableField (Ash, to_many)",
+       Ash.Error.Query.UnsortableField.exception(
+         resource: AshRpc.Test.Post,
+         field: :comments,
+         reason: :to_many,
+         path: [:sort]
+       ),
+       %{
+         message: "Cannot sort on %{field}",
+         short_message: "Unsortable field",
+         type: "unsortable_field",
+         vars: %{field: :comments},
+         fields: [:comments],
+         path: [:sort],
+         details: %{reason: "to_many"}
+       }},
+      {"UnsortableField (no reason)",
+       Ash.Error.Query.UnsortableField.exception(
+         resource: AshRpc.Test.Post,
+         field: "viewCount",
+         path: [:sort]
+       ),
+       %{
+         message: "Cannot sort on %{field}",
+         short_message: "Unsortable field",
+         type: "unsortable_field",
+         vars: %{field: "viewCount"},
+         fields: ["viewCount"],
+         path: [:sort],
+         details: %{}
+       }},
       {"InvalidPrimaryKey",
        Ash.Error.Invalid.InvalidPrimaryKey.exception(resource: AshRpc.Test.Post, value: "nope"),
        %{

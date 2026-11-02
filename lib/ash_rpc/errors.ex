@@ -12,8 +12,9 @@ defmodule AshRpc.Errors do
 
   require Logger
 
-  alias AshRpc.ClientPath
+  alias AshRpc.{ClientPath, ErrorBuilder}
   alias AshRpc.Error, as: ErrorProtocol
+  alias AshRpc.FilterInput.InvalidValue, as: InvalidFilterValue
 
   @doc """
   Transforms errors into standardized RPC error responses.
@@ -22,7 +23,9 @@ defmodule AshRpc.Errors do
   1. Convert to Ash error class using Ash.Error.to_error_class
   2. Unwrap nested error structures and clear their bread crumbs
   3. Transform via Error protocol (or expose the raised message when the
-     profile's `show_raised_errors?/1` is true for the domain)
+     profile's `show_raised_errors?/1` is true for the domain). An
+     `AshRpc.FilterInput.InvalidValue` is rendered by `AshRpc.ErrorBuilder`
+     from its reason instead
   4. Replace policy messages with a breakdown when the profile's
      `show_policy_breakdowns?/0` is true, and add the profile's
      `stale_client_hint/0` to unknown inputs, filter/sort fields and filter
@@ -88,10 +91,15 @@ defmodule AshRpc.Errors do
 
   defp process_single_error(error, runtime, domain, resource, context) do
     transformed_error =
-      if profile_show_raised_errors?(runtime, domain) and is_exception(error) do
-        raised_error(error)
-      else
-        protocol_error(error)
+      cond do
+        match?(%InvalidFilterValue{}, error) ->
+          invalid_filter_value(error, runtime, resource)
+
+        profile_show_raised_errors?(runtime, domain) and is_exception(error) ->
+          raised_error(error)
+
+        true ->
+          protocol_error(error)
       end
 
     transformed_error =
@@ -112,6 +120,18 @@ defmodule AshRpc.Errors do
   defp resource_error_handler(resource) do
     if resource && function_exported?(resource, :handle_rpc_error, 2),
       do: {resource, :handle_rpc_error, []}
+  end
+
+  # A request error, not a raised one: the same wire error the reason gets
+  # for an action input, under the value's filter path.
+  # The path's atoms (Ash's `[:load, relationship]` prefix for a nested
+  # filter, `:filter`) are named from the resource first; the keys as sent
+  # follow unchanged.
+  defp invalid_filter_value(%InvalidFilterValue{reason: reason, path: path}, runtime, resource) do
+    {client_path, _leaf} =
+      ClientPath.resolve(path, ClientPath.root(runtime, resource, nil), runtime)
+
+    ErrorBuilder.input_error_at(runtime, reason, client_path)
   end
 
   # show_raised_errors? exposes the actual exception message

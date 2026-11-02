@@ -35,6 +35,18 @@ defmodule AshRpc.KeywordTupleTest do
 
       assert Ash.get!(Place, id).options == [priority: 8, category: "work", notify: true]
     end
+
+    # A list is not a keyword input; it reaches Ash, which rejects it.
+    test "a JSON list is invalid_attribute" do
+      for options <- [["a", "b"], [1]] do
+        assert %{
+                 "success" => false,
+                 "errors" => [
+                   %{"type" => "invalid_attribute", "fields" => ["options"], "path" => []}
+                 ]
+               } = run(%{"action" => "create_place", "input" => %{"options" => options}})
+      end
+    end
   end
 
   describe "keyword attribute output" do
@@ -95,7 +107,7 @@ defmodule AshRpc.KeywordTupleTest do
                "type" => "requires_field_selection",
                "fields" => ["options"],
                "path" => [],
-               "vars" => %{"field" => "options", "fieldType" => "Field_constrained_type"}
+               "vars" => %{"field" => "options", "fieldType" => "Typed value"}
              } = error!(%{"action" => "list_places", "fields" => ["id", "options"]})
     end
 
@@ -104,7 +116,7 @@ defmodule AshRpc.KeywordTupleTest do
                "type" => "requires_field_selection",
                "fields" => ["options"],
                "path" => [],
-               "vars" => %{"field" => "options", "fieldType" => "Field_constrained_type"}
+               "vars" => %{"field" => "options", "fieldType" => "Typed value"}
              } = error!(%{"action" => "list_places", "fields" => ["id", %{"options" => []}]})
     end
 
@@ -275,6 +287,46 @@ defmodule AshRpc.KeywordTupleTest do
                })
 
       assert Ash.get!(Place, id).location == {37.7749, -122.4194, true}
+    end
+
+    test "partial selection returns only the requested elements" do
+      create_place!(%{"location" => %{"lat1" => 1.0, "lng1" => 2.0, "isVerified" => true}})
+
+      assert %{"success" => true, "data" => %{"location" => %{"lat1" => 1.0}}} ==
+               get_place([%{"location" => ["lat1"]}])
+    end
+
+    test "an array of the tuple selects elements per item" do
+      create_place!(%{
+        "route" => [
+          %{"lat1" => 1.0, "lng1" => 2.0, "isVerified" => true},
+          %{"lat1" => 5.0, "lng1" => 6.0, "isVerified" => false}
+        ]
+      })
+
+      assert %{
+               "success" => true,
+               "data" => %{"route" => [%{"isVerified" => true}, %{"isVerified" => false}]}
+             } == get_place([%{"route" => ["isVerified"]}])
+    end
+
+    test "a calculation returning the tuple selects elements" do
+      create_place!(%{})
+
+      assert %{"success" => true, "data" => %{"origin" => %{"lng1" => 1.5}}} ==
+               get_place([%{"origin" => ["lng1"]}])
+    end
+
+    test "a generic action returning the tuple selects elements" do
+      assert %{"success" => true, "data" => %{"lat1" => 3.0, "isVerified" => true}} ==
+               run(%{"action" => "place_geo_point", "fields" => ["lat1", "isVerified"]})
+    end
+
+    test "the template lists each element with its index", %{runtime: rt} do
+      assert {:ok, {[:location], [], [location: [%{index: 2, field_name: :is_verified?}]]}} ==
+               RequestedFieldsProcessor.process(rt, Place, :read, [
+                 %{"location" => ["isVerified"]}
+               ])
     end
 
     test "ValueFormatter maps override names to field names on input", %{runtime: rt} do

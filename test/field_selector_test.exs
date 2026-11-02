@@ -387,14 +387,65 @@ defmodule AshRpc.FieldSelectorTest do
     end
   end
 
+  # vars.fieldType and the suggestion name the kind of field in client
+  # wording, not the selector's internal category atom.
+  describe "field type wording" do
+    defp intake_error(fields) do
+      %{"action" => "create_intake", "input" => %{"userName" => "u"}, "fields" => ["id" | fields]}
+      |> then(&AshRpc.run_action(@profile, %AshRpc.Context{}, &1))
+      |> single_error()
+    end
+
+    test "requires_field_selection names the kind of field" do
+      for {field, label} <- [
+            {"profile", "Embedded resource"},
+            {"stats", "Typed value"},
+            {"location", "Tuple"},
+            {"content", "Union"}
+          ] do
+        assert %{
+                 "type" => "requires_field_selection",
+                 "vars" => %{"field" => ^field, "fieldType" => ^label},
+                 "details" => %{"suggestion" => suggestion}
+               } = intake_error([field])
+
+        assert suggestion == "Specify which fields to select from this #{String.downcase(label)}"
+      end
+    end
+
+    test "a calculation with a typed return is a calculation" do
+      assert %{"vars" => %{"fieldType" => "Calculation"}} =
+               single_error(run("list_posts", [%{"scoredStats" => %{"args" => %{"boost" => 1}}}]))
+    end
+
+    test "unsupported_field_combination names an embedded attribute as such" do
+      assert %{
+               "type" => "unsupported_field_combination",
+               "vars" => %{"field" => "section.profile", "fieldType" => "embedded resource"}
+             } = intake_error([%{"section" => [%{"profile" => "x"}]}])
+
+      assert %{"vars" => %{"fieldType" => "relationship"}} =
+               single_error(run("list_posts", [%{"author" => "x"}]))
+    end
+
+    test "invalid_field_selection names the kind of field" do
+      assert %{"vars" => %{"fieldType" => "aggregate"}} =
+               single_error(run("list_posts", [%{"commentCount" => ["x"]}]))
+    end
+  end
+
   describe "unknown_field at depth" do
     test "an unknown attribute inside a relationship" do
       assert %{
                "type" => "unknown_field",
                "fields" => ["author.invalidField"],
                "path" => ["author"],
-               "vars" => %{"field" => "author.invalidField", "resource" => "AshRpc.Test.Author"}
+               "message" => "Unknown field %{field}",
+               "vars" => vars
              } = single_error(run("list_posts", [%{"author" => ["invalidField"]}]))
+
+      # No internal module name reaches the client
+      assert vars == %{"field" => "author.invalidField"}
     end
 
     test "an unknown relationship inside a relationship" do
@@ -402,7 +453,7 @@ defmodule AshRpc.FieldSelectorTest do
                "type" => "unknown_field",
                "fields" => ["author.invalidRelationship"],
                "path" => ["author"],
-               "vars" => %{"resource" => "AshRpc.Test.Author"}
+               "vars" => %{"field" => "author.invalidRelationship"}
              } =
                single_error(
                  run("list_posts", [%{"author" => [%{"invalidRelationship" => ["id"]}]}])
@@ -416,7 +467,7 @@ defmodule AshRpc.FieldSelectorTest do
                "type" => "unknown_field",
                "fields" => ["author.posts.invalidField"],
                "path" => ["author", "posts"],
-               "vars" => %{"resource" => "AshRpc.Test.Post"}
+               "vars" => %{"field" => "author.posts.invalidField"}
              } = single_error(run("list_posts", fields))
     end
 
@@ -425,7 +476,7 @@ defmodule AshRpc.FieldSelectorTest do
                "type" => "unknown_field",
                "fields" => ["selfPost.author.nope"],
                "path" => ["selfPost", "author"],
-               "vars" => %{"resource" => "AshRpc.Test.Author"}
+               "vars" => %{"field" => "selfPost.author.nope"}
              } = single_error(run("list_posts", [%{"selfPost" => [%{"author" => ["nope"]}]}]))
     end
 
@@ -434,7 +485,7 @@ defmodule AshRpc.FieldSelectorTest do
                "type" => "unknown_field",
                "fields" => ["nonexistentRelation"],
                "path" => [],
-               "vars" => %{"field" => "nonexistentRelation", "resource" => "AshRpc.Test.Post"}
+               "vars" => %{"field" => "nonexistentRelation"}
              } = single_error(run("list_posts", [%{"nonexistentRelation" => ["id", "name"]}]))
     end
   end
@@ -449,7 +500,7 @@ defmodule AshRpc.FieldSelectorTest do
                "type" => "unknown_field",
                "fields" => ["titleShout"],
                "path" => [],
-               "vars" => %{"field" => "titleShout", "resource" => "AshRpc.Test.Post"}
+               "vars" => %{"field" => "titleShout"}
              } = single_error(run("list_posts", ["id", "titleShout"]))
     end
 

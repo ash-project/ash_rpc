@@ -80,6 +80,10 @@ Built-in impls live in `lib/ash_rpc/error.ex`:
 | `Ash.Error.Invalid.NoSuchInput` | `unknown_input` |
 | `Ash.Error.Query.NoSuchField` | `unknown_field` |
 | `Ash.Error.Query.NoSuchFilterPredicate` | `unknown_filter_operator` |
+| `Ash.Error.Query.InvalidSort` | `invalid_sort` |
+| `Ash.Error.Query.InvalidCalculationArgument` | `invalid_calculation_argument` |
+| `Ash.Error.Query.InvalidFilterValue` | `invalid_filter_value` |
+| `Ash.Error.Query.UnsortableField` | `unsortable_field` |
 | `Ash.Error.Unknown.UnknownError` | `unknown_error` |
 
 Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
@@ -113,13 +117,92 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   unconstrained maps and undeclared scalar custom types are verbatim (an
   undeclared map-like custom type can't be on the wire).
 - `AshRpc.FilterInput` reports a filter or sort name that isn't a client name
-  of the resource as Ash's `NoSuchField` (path `["filter"]` / `["sort"]`) and an
-  unknown filter operator as `NoSuchFilterPredicate`. They become
+  of the resource as Ash's `NoSuchField` (path where the field sits:
+  `["sort"]`, `["filter"]`, or the filter path to its parent, keys as sent:
+  `["filter", "author", "posts"]`) and an unknown filter operator as
+  `NoSuchFilterPredicate` (path the field's, keys as sent:
+  `["filter", "viewCount"]`; `input` on a field that isn't a calculation is
+  one too). They become
   `unknown_field` and `unknown_filter_operator`, name the field or operator as
   the client sent it, and carry the stale-client hint
   (`test/filter_sort_test.exs` "unknown names" describe). Before these impls
   existed, both fell through to `unknown_error` with a "no protocol
   implementation" warning.
+- An operator value `AshRpc.FilterInput` rejects (an unknown key, a malformed
+  union) is an `AshRpc.FilterInput.InvalidValue` carrying the
+  `format_input/3` reason and the filter path as sent (`[:filter, "stats",
+  "eq"]`, relationships, `and`/`or`/`not` and list indexes included).
+  `AshRpc.Errors` renders it with `ErrorBuilder`, ahead of
+  `show_raised_errors?`: an unknown key is `unknown_input` with the stale-client
+  hint, `path` the filter path plus the key's parents in the value
+  (`["filter", "stats", "eq"]`), `fields` the key as sent
+  (`test/filter_sort_test.exs` "an unknown key in a filter value"). A
+  calculation `input` argument name that isn't a client name is the same
+  `unknown_input` at `["filter", "excerpt", "input"]`, and an argument value's
+  unknown key carries the argument too (`["filter", "echoStats", "input",
+  "probe"]`); a bare `eq` value's path ends at the field. A malformed
+  statement (`:invalid_filter_statement`, wire `invalid_filter`) and a
+  non-map calculation `input` (`:invalid_calculation_input`, wire
+  `invalid_calculation_args`) are `InvalidValue`s too, without the hint
+  (`test/filter_sort_test.exs` "invalid filter shapes").
+- A calculation argument value in field selection that `format_input/3`
+  rejects is the pipeline reason `{:invalid_calculation_arg_value, reason,
+  calc_path, key}`, rendered as the reason's own error (`unknown_input`,
+  `invalid_union_input`) with `path` through the calculation, `args` and the
+  argument: `["posts", "echoStats", "args", "probe"]`
+  (`test/calculations_test.exs` "structured calculation arguments"; golden
+  cases `invalid_calculation_arg_value`, `invalid_calculation_arg_value_union`).
+- `Ash.Error.Query.InvalidCalculationArgument` (Ash rejects an argument
+  value in field selection, or a required one is missing) is
+  `invalid_calculation_argument`: a fixed message (`is required`, otherwise
+  `is invalid`, never Ash's, since a type's cast error could echo the value),
+  `fields` / `vars.field` the argument's client name, `path` through the
+  calculation to its `args`: `["excerpt", "args"]`,
+  `["post", "excerpt", "args"]` (`test/calculations_test.exs`
+  "invalid_calculation_argument"). In filters `AshRpc.FilterInput` checks the
+  arguments itself (required, cast, constraints), so Ash never reports them
+  with its path-less `[:filter]`: the `InvalidValue` reason
+  `{:invalid_calculation_argument, client_name, :required | :invalid}` gives
+  the same wire map with the full path to the calculation's `input`, sent or
+  not: `["filter", "post", "excerpt", "input"]`,
+  `["filter", "or", 0, "excerpt", "input"]` (`test/filter_sort_test.exs`
+  "calculation arguments in filters"). A calculation with required arguments
+  in a `sort` is `unsortable_field` (below).
+- `AshRpc.FilterInput` rejects an operator value of the wrong shape as the
+  `InvalidValue` reason `{:invalid_filter_value, expected}` (wire
+  `invalid_filter_value`, path at the operator): a list operator (`in`)
+  given a non-list (`details.expected` `A list`), or a value an operator's
+  concrete right-hand type can't cast (`isNil` → `A boolean value`,
+  `contains` → `A string value`). A relationship given a boolean is
+  `invalid_filter` at the relationship. What still reaches Ash (a value the
+  field's type can't cast, e.g. a map in an `in` list on a uuid) is
+  `Ash.Error.Query.InvalidFilterValue`, rendered with a fixed message, no
+  `details.expected` and Ash's `["filter"]` path; Ash's message names
+  internals and echoes the value (`test/filter_sort_test.exs` "invalid
+  filter values").
+- A sort on a relationship (`details.reason` `relationship`), on a
+  calculation with required arguments (`requires_arguments`) or on a field
+  the manifest marks unsortable is `Ash.Error.Query.UnsortableField` from
+  `AshRpc.FilterInput`, wire `unsortable_field` (`Cannot sort on %{field}`,
+  the field as sent, `path` `["sort"]` or `["comments", "sort"]`). A
+  relationship to an unexposed resource is `unknown_field`, as in filters.
+  Ash's own `UnsortableField` gets the same type, its `reason` (`type`,
+  `to_many`) in `details.reason` (`test/filter_sort_test.exs` "unsortable
+  fields").
+- Errors from a nested load's query carry Ash's `[:load, relationship]`
+  prefix. `AshRpc.ClientPath` drops `:load` and walks the relationship to its
+  destination, so the client sees `["author", "posts", "filter", "viewCount"]`
+  or `["comments", "sort"]` (`test/filter_sort_test.exs` "errors in nested
+  query options"). A field Ash reports at a union attribute without its member
+  (a cast error inside `content.data`) is named against the member types
+  (`test/field_name_translation_test.exs` "cast errors inside a union
+  member").
+- `unknown_field` from field selection carries no `vars.resource`: the
+  message is `Unknown field %{field}` and `path` locates the field.
+- A sort that isn't a string or a list of strings (or a list entry that isn't
+  a string) is `Ash.Error.Query.InvalidSort`, rendered as `invalid_sort` with
+  `path` `["sort"]` and `details.expected`; the rejected value isn't echoed
+  (`test/filter_sort_test.exs` "invalid sort shapes").
 - `AshRpc.Errors` formats atom field names for the client and leaves string
   ones as sent: a string in `fields` or `vars.field` is a name the client sent.
 - A `required` message is a template naming the field through `vars.field`,
