@@ -255,7 +255,10 @@ the manifest build"). The `list_posts_allow_author` row is
 - Two fields or two action inputs mapping to the same client name raise
   `AshRpc.Manifest.NameCollisionError` at decoration
   (`test/manifest/decorator_test.exs` "two fields formatting to the same client
-  name raise").
+  name raise"). So does an exposed metadata field of a read entrypoint whose
+  client name is that of one of the resource's public fields (overrides
+  included), since read metadata is merged into each record
+  (`test/action_metadata_test.exs` "metadata named like a resource field").
 - A formatter that returns a non-string, or raises, makes decoration raise
   `ArgumentError` naming the formatter and field
   (`test/manifest/decorator_test.exs` "a formatter returning a non-string raises

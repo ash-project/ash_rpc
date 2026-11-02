@@ -47,7 +47,10 @@ Flow:
 2. **FieldSelector** (`lib/ash_rpc/field_processing/field_selector.ex`).
    Every string name resolves by exact lookup against the current scope with
    `AshRpc.ClientNames`: resource fields (`resource_field/3`), a calculation's
-   `args` keys (`calc_arg/4`; a miss is `invalid_calculation_args`), typed map,
+   `args` keys (`calc_arg/4`; a miss is `invalid_calculation_args`; each value
+   is formatted with its argument's type by
+   `ValueFormatter.format_calculation_args/4`, and a rejected one is
+   `unknown_input` / `invalid_union_input` under the argument), typed map,
    keyword, tuple and TypedStruct fields (`type_field/3`) and union members
    (`union_member/3`). Envelope keys (`args`, `fields`, `page`, `filter`,
    `sort`, `limit`, `offset`) resolve through the `:query_opts` vocabulary, so
@@ -71,8 +74,8 @@ Flow:
    | `{:array, item}` | recurse into the item type |
    | `{:resource, mod}` (resource or embedded resource) | `select_resource_fields/4` |
    | `{:union, type}` | `select_union_fields/5` |
+   | `{:typed_struct, type}` or `{:fields, type}` tuple, overrides or not | `select_tuple_fields/4` |
    | `{:typed_struct, type}` (a type with field-name overrides) | `select_typed_struct_fields/4` |
-   | `{:fields, type}` tuple | `select_tuple_fields/4` |
    | `{:fields, type}` map/keyword/struct with `fields` constraints | `select_typed_map_fields/5` |
    | anything else | primitive: any nested selection is `invalid_field_selection` |
 
@@ -131,8 +134,9 @@ Asserted in `test/calculations_test.exs`:
 | Wire `type` | Cause | Test |
 |---|---|---|
 | `requires_field_selection` | A relationship, embedded resource, union, typed value or complex calculation requested by bare name, or with missing/empty `fields` | calculations_test "a complex calculation requested as a bare name", "a complex calculation with args but missing or empty fields" |
-| `invalid_calculation_args` | `args` on a calculation that takes none, an `args` key the calculation doesn't define, or a calculation with arguments sent without `args` | calculations_test "args on a calculation that takes none", "an args key the calculation doesn't define is invalid_calculation_args", "missing args on a calculation that takes arguments" |
+| `invalid_calculation_args` | `args` that are not a map, `args` on a calculation that takes none, an `args` key the calculation doesn't define, or a calculation with arguments sent without `args` | calculations_test "args on a calculation that takes none", "an args key the calculation doesn't define is invalid_calculation_args", "missing args on a calculation that takes arguments" |
 | `invalid_field_format` | A calculation with arguments requested as a bare name (internal reason `calculation_requires_args`) | calculations_test "calculation_requires_args: a calculation with arguments requested as a bare name" |
+| `unknown_input` | A key in a structured calculation argument value that isn't a client name of its type (`path` runs through the calculation, `args` and the argument) | calculations_test "structured calculation arguments" describe |
 | `invalid_field_selection` | A `fields` key on a scalar calculation, or a nested selection on a primitive aggregate | calculations_test "invalid_field_selection: a fields key on a scalar calculation"; aggregates_test "nested selection on a primitive aggregate is invalid_field_selection" |
 | `field_does_not_support_nesting` | A nested list on a scalar calculation or attribute | calculations_test "field_does_not_support_nesting: nested fields on a scalar calculation" |
 | `unknown_field` | No such field on the resource or in a nested selection (`path` names the parent) | calculations_test "an unknown calculation name", "an unknown field inside a calculation's selection"; aggregates_test "an unknown aggregate is unknown_field, bare or with nested fields" |
@@ -147,7 +151,7 @@ as `PostStats`) is `unknown_field` with `vars.kind` `"field constrained"`.
 Aggregates are selected by name (`"commentCount"`, `"hasComments"`,
 `"avgRating"`, `"firstCommentBody"`, `"commentBodies"`, …) and always count as
 loads. A nested selection on an aggregate with a primitive return is
-`invalid_field_selection` (`vars.fieldType` `":aggregate"`). Aggregates appear
+`invalid_field_selection` (`vars.fieldType` `"aggregate"`). Aggregates appear
 in mutation results too, and the client can sort and filter by them. See
 `test/aggregates_test.exs`: "each Post aggregate is computed over its
 comments", "Author.post_count counts the author's posts", "create returns
@@ -173,12 +177,15 @@ field list:
 1. the field is a relationship (otherwise `invalid_query_opts`, or `unknown_field` if there is no such field);
 2. it is to-many (otherwise `invalid_query_opts`);
 3. the destination is exposed (otherwise `unknown_field`);
-4. no `args` key (otherwise `invalid_query_opts`);
-5. `page` only if the relationship's read action paginates (decorated as `Custom.relationship_pagination/1`; otherwise `pagination_not_supported`);
-6. `filter`: the entrypoint's `enable_filter?`, then the relationship's `filterable?` (otherwise `filter_not_supported` with `details.reason` `disabled` / `unsupported`);
-7. `sort`: `enable_sort?`, then `sortable?` (`sort_not_supported`, same reasons);
-8. `page` is not mixed with bare `limit`/`offset` (otherwise `invalid_query_opts`);
-9. `fields` is non-empty (otherwise `requires_field_selection`).
+4. every key is an envelope key (`fields`, `page`, `filter`, `sort`, `limit`, `offset`, `args`, by their client names); others are `invalid_query_opts` with the keys as sent in `vars.keys` and `path` at the relationship (e.g. `["comments"]`). A map with no envelope key at all is a plain nested selection, not an envelope;
+5. no `args` key (otherwise `invalid_query_opts`);
+6. `page` only if the relationship's read action paginates (decorated as `Custom.relationship_pagination/1`; otherwise `pagination_not_supported`);
+7. `filter`: the entrypoint's `enable_filter?`, then the relationship's `filterable?` (otherwise `filter_not_supported` with `details.reason` `disabled` / `unsupported`);
+8. `sort`: `enable_sort?`, then `sortable?` (`sort_not_supported`, same reasons);
+9. `page` is not mixed with bare `limit`/`offset` (otherwise `invalid_query_opts`);
+10. bare `limit`/`offset` are non-negative integers (otherwise `invalid_query_opts`, `path` ending at the key, e.g. `["comments", "limit"]`);
+11. `fields` is non-empty (otherwise `requires_field_selection`);
+12. `fields` is a list (otherwise `unsupported_field_combination`).
 
 An unknown key inside a nested `page` is `invalid_pagination` with
 `details.reason` `"unknown_keys"` and the keys in `vars.keys` (parsed, then
@@ -244,7 +251,7 @@ embedded resource calculation is a load"), and the wire result is
 `%{"settings" => %{"themeName" => "dark", "themeLabel" => "theme:dark"}}`
 (`test/typed_field_selection_test.exs` "nested fields select attributes and
 load calculations"). A bare `"settings"` is `requires_field_selection` with
-`vars.fieldType` `Embedded_resource` ("a bare embedded field is
+`vars.fieldType` `Embedded resource` ("a bare embedded field is
 requires_field_selection").
 
 Typed values need an explicit selection:
@@ -255,6 +262,12 @@ Typed values need an explicit selection:
   `%{"wordCount1" => 3}`.
 - Typed map without overrides (the `totals` action) and tuple (`location`) use
   the type's decorated client names (`ClientNames.type_field/3`).
+- A tuple is selected and extracted as a tuple whether or not its type has
+  field-name overrides: `AshRpc.Test.GeoPoint` (`lat_1` → `lat1`, …) on
+  `Place.location`, `Place.route` (an array), the `origin` calculation and
+  the `place_geo_point` action returns only the requested elements, with a
+  `%{field_name:, index:}` template (`test/keyword_tuple_test.exs` "tuple
+  NewType with client field-name overrides").
 - Declared custom type (a custom `use Ash.Type` with fields from the mapping
   source, see [decoration](decoration.md#declared-custom-types)): a typed map
   through its `:type_ref`. `%{"palette" => ["primary", "accentColor"]}` on
@@ -292,10 +305,16 @@ takes a nested list:
   (`test/union_input_test.exs` "output selection must name members").
 - A member that needs nested fields (embedded resource, typed map) named bare
   or with `[]` (`%{"content" => [%{"text" => []}]}`) is
-  `requires_field_selection` with `vars.fieldType` `Complex_type`
+  `requires_field_selection` with `vars.fieldType` `Union member`
   (`test/union_output_test.exs` "a bare complex member requires field
   selection", "an empty selection on an embedded member requires field
-  selection"). A scalar member takes `[]` or a bare name.
+  selection"). A scalar member takes `[]` or a bare name. A member
+  selection that is not a list (`%{"content" => %{"text" => "x"}}`) is
+  `unsupported_field_combination` with `vars.fieldType` `union member`
+  ("a member selection that is not a list is unsupported_field_combination").
+- A generic action returning a union (`payload`) with `fields: []` or no
+  `fields` is `requires_field_selection` with `vars.fieldType` `Union` and no
+  `fields` ("an empty or missing selection is requires_field_selection").
 - `ResultProcessor.extract_union_value/4` returns `%{member => value}` for the
   active member, and `nil` when the active member wasn't requested. In arrays,
   items whose member wasn't requested are dropped and items that were `nil` are
@@ -329,9 +348,15 @@ no normalization, no extraction and no output formatting.
   (`test/unconstrained_map_test.exs` "a stored value is sent as stored,
   nothing converted"). A `ForbiddenField` or `NotLoaded` as the
   whole value is still redacted or skipped first.
-- A generic action returning a `:union` goes through `ResultProcessor.process/4`,
-  which normalizes the member value, untyped members included. Only a union
-  nested in a field-selected typed container sends an untyped member as is.
+- A generic action returning a `:union` (or an array of unions) is extracted
+  against `action.returns` like any typed container, so an untyped member is
+  sent as is there too. Its run must return `%Ash.Union{}` values: a bare
+  member value or map (or such an item in an array) is the
+  `invalid_union_return` error, not guessed into a member
+  (`test/union_output_test.exs` "generic action returning a union"). It is a
+  server-side bug, so it is also logged (`Logger.error`) with the resource,
+  action, entrypoint and the offending value's type (`a string`, `a map`),
+  never the value, which may hold data the client must not see.
 - The exception: a typed resource selected whole has no per-field types, so
   its untyped attributes are still normalized (`test/untyped_struct_test.exs`
   "a typed resource selected whole normalizes its untyped attributes").
@@ -400,8 +425,11 @@ Rules, all in `test/load_restrictions_test.exs`:
   (the "query envelopes", "pagination" and "nested calculations" describes).
 
 Wire errors: `load_not_allowed` with `details.disallowedPaths`, and
-`load_denied` with `details.deniedPaths`. Paths are dotted internal names
-(`"comments.weighted_rating"`, `"settings.theme_label"`), not client names.
+`load_denied` with `details.deniedPaths`. Paths are dotted client names, from
+the selection root (`"comments.weightedRating"`, `"author.isProlific"`; the
+"wire errors" describe). `LoadRestrictions.check!/2` throws the internal path
+(`[:author, :is_prolific?]`) and `ErrorBuilder` names it; a string path in a
+reason is kept as given.
 From "load_not_allowed carries the disallowed paths":
 
 ```elixir

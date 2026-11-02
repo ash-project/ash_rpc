@@ -60,13 +60,16 @@ returns from `entrypoint/1` (see [decoration](decoration.md)).
   every exposed field, overrides included; built on the fly for an entrypoint
   passed with `entrypoint:`). Any miss fails the request with one
   `unknown_metadata_fields` error: an internal name such as `"meta_1"`, another
-  casing, a field the entrypoint doesn't expose, or any name when it exposes
-  nothing (including actions without metadata). `fields` lists the misses in
+  casing, a field the entrypoint doesn't expose, any name when it exposes
+  nothing (including actions without metadata), or an entry that is not a
+  name (`null`, a boolean, a number; reported as sent). `fields` lists the misses in
   request order and `details.allowedFields` the exposed client names
   (`test/action_metadata_test.exs` "internal names are not client names and are
   rejected").
 - If the param is absent (or `[]`): read actions get `[]`, and create, update
   and destroy actions get every exposed field.
+- Any other value (a string, a map) is `invalid_metadata_fields_type`
+  (`test/run_action_test.exs` "malformed request params").
 
 ## On read actions
 
@@ -126,20 +129,26 @@ straight away (`process_result/2`).
 
 ## Names
 
-Output always uses the mapped client name from `metadata_field_names`
-(`meta1`, `isCached`). Fields without a mapping go through the output formatter
-(`total_score` → `totalScore`). Requests also accept the original internal names
-(`"meta_1"`, `"is_cached?"`), but the output keys stay mapped.
-Test: `describe "metadata field names"`, "original names are accepted in
-requests but output stays mapped".
+Output always uses the decorated client name (`client_metadata_field_names`):
+the mapped name from `metadata_field_names` (`meta1`, `isCached`), else the
+output formatter's (`total_score` → `totalScore`). `format_metadata/2` keys
+each value by that binary name, so read metadata merged into a record never
+takes the key of a field with the same internal name: `metadata :is_active?`
+on Author's `read_with_activity_meta` comes back as `"isActive?"` next to the
+attribute's `"isActive"`. A read entrypoint whose exposed metadata client name
+equals a client name of one of the resource's public fields (overrides
+included) fails decoration with `NameCollisionError`. Mutation metadata sits
+apart from the record and isn't checked.
+Tests: `describe "metadata field names"`, `describe "metadata named like a
+resource field"`.
 
 ## Value formatting
 
 Each value is formatted with `AshRpc.ValueFormatter` against the metadata
 field's declared type (`format_metadata/2` in `pipeline.ex`), the same
 type-driven dispatch used for attributes (see [formatting](formatting.md)).
-`format_output` then formats only the top-level keys of the `metadata` object,
-since the values are already formatted.
+`format_output` passes the `metadata` object through: it is already keyed by
+client names and formatted.
 
 | Behaviour | Test (`describe "metadata value formatting"`) |
 |---|---|
