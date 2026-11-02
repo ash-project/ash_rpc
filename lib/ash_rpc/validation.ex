@@ -9,14 +9,25 @@ defmodule AshRpc.Validation do
   `AshRpc.Errors`, so error types match `run_action` (`required`,
   `invalid_attribute`, `invalid_argument`, …).
 
-  Update/destroy targets are loaded with the entrypoint's `read_action`
-  (primary read when unset), so records hidden by it look missing.
+  Update/destroy targets are read from the query `run_action` narrows
+  (`AshRpc.Pipeline.target_query/2`: identity keys by client name, the
+  entrypoint's `identities`, scalar values) with the entrypoint's
+  `read_action` (primary read when unset), so records hidden by it look
+  missing and identity errors match `run_action`'s.
 
-  Known limitation: atomic validations on update/destroy only run during
-  execution, so `validate_action` can succeed where `run_action` fails.
+  Known limitations, where `validate_action` can succeed and `run_action`
+  fail:
+
+    * Atomic validations on update/destroy only run during execution.
+    * Filter, sort and nested query-option errors are not applied: the ones
+      `AshRpc.FilterInput` collects (on `Request.query_errors`, or a
+      relationship's load query) are only added to what `run_action`
+      executes, and Ash's own filter, load and page checks only run then.
+      Errors stage 1 returns directly (field selection, envelope shapes,
+      `getBy`, `identity`, `input` keys) are reported by both.
   """
 
-  alias AshRpc.{Errors, Request}
+  alias AshRpc.{ErrorBuilder, Errors, Pipeline, Request}
 
   @spec validate(Request.t()) :: %{success: true} | %{success: false, errors: [map()]}
   def validate(%Request{} = request) do
@@ -25,6 +36,7 @@ defmodule AshRpc.Validation do
     case build(request, opts) do
       {:ok, %{valid?: true}} -> %{success: true}
       {:ok, %{errors: errors}} -> failure(request, errors)
+      {:error, {:pipeline, reason}} -> pipeline_failure(request, reason)
       {:error, error} -> failure(request, error)
     end
   rescue
@@ -50,11 +62,36 @@ defmodule AshRpc.Validation do
   defp build(%Request{action: %{type: :action}} = r, opts),
     do: {:ok, Ash.ActionInput.for_action(r.resource, r.action.name, r.input, opts)}
 
-  defp fetch_target(%Request{entrypoint: %{read_action: nil}} = r, opts),
-    do: Ash.get(r.resource, r.identity, opts)
+  defp fetch_target(%Request{} = r, opts) do
+    with {:ok, query} <- target_query(r, opts),
+         {:ok, %_{} = record} <- Ash.read_one(query, read_opts(r, opts)) do
+      {:ok, record}
+    else
+      {:ok, nil} -> {:error, Ash.Error.Query.NotFound.exception(resource: r.resource)}
+      {:error, _} = error -> error
+    end
+  end
 
-  defp fetch_target(%Request{entrypoint: %{read_action: read_action}} = r, opts),
-    do: Ash.get(r.resource, r.identity, Keyword.put(opts, :action, read_action))
+  defp target_query(r, opts) do
+    case Pipeline.target_query(r, opts) do
+      {:ok, query} -> {:ok, query}
+      {:error, reason} -> {:error, {:pipeline, reason}}
+    end
+  end
+
+  defp read_opts(%Request{entrypoint: %{read_action: nil}}, opts), do: opts
+
+  defp read_opts(%Request{entrypoint: %{read_action: read_action}}, opts),
+    do: Keyword.put(opts, :action, read_action)
+
+  defp pipeline_failure(%Request{} = r, reason) do
+    errors =
+      r.runtime
+      |> ErrorBuilder.build_error_response(reason, Pipeline.error_scope(r))
+      |> List.wrap()
+
+    %{success: false, errors: errors}
+  end
 
   defp failure(%Request{} = r, errors) do
     %{

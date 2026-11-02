@@ -104,6 +104,15 @@ defmodule AshRpc.ActionMetadataTest do
                ["totalScore", "meta1", "isCached", "breakdown", "extra"]
     end
 
+    test "null, booleans and numbers are unknown_metadata_fields, not dropped" do
+      create_post("Non-string")
+
+      for entry <- [nil, true, false, 1] do
+        assert %{"type" => "unknown_metadata_fields", "fields" => [^entry]} =
+                 metadata_error("read_posts_with_metadata", [entry, "meta1"])
+      end
+    end
+
     test "requested fields that are not exposed are rejected" do
       create_post("Some exposed")
 
@@ -287,6 +296,102 @@ defmodule AshRpc.ActionMetadataTest do
                )
 
       assert metadata == %{"TotalScore" => 42, "meta1" => "m1", "isCached" => true}
+    end
+  end
+
+  describe "metadata named like a resource field" do
+    defp scratch_manifest(resource, action, opts) do
+      [
+        %{
+          resource: resource,
+          action: action,
+          config: %{ash_rpc_test: %{name: "scratch_metadata", opts: opts}}
+        }
+      ]
+      |> AshRpc.Test.ManifestBuilder.generate!()
+      |> AshRpc.Manifest.Decorator.decorate(AshRpc.Test.MappingSource, [])
+    end
+
+    test "read metadata keeps its own client name next to the field's" do
+      author = Ash.create!(AshRpc.Test.Author, %{name: "Meta #{System.unique_integer()}"})
+
+      manifest =
+        scratch_manifest(AshRpc.Test.Author, :read_with_activity_meta,
+          exposed_metadata_fields: [:is_active?]
+        )
+
+      assert %{"success" => true, "data" => records} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "action" => "scratch_metadata",
+                   "fields" => ["id", "isActive"],
+                   "metadataFields" => ["isActive?"]
+                 },
+                 manifest: manifest
+               )
+
+      assert Enum.find(records, &(&1["id"] == author.id)) == %{
+               "id" => author.id,
+               "isActive" => true,
+               "isActive?" => "META"
+             }
+    end
+
+    test "a read metadata client name equal to a field's client name is a collision" do
+      assert_raise AshRpc.Manifest.NameCollisionError,
+                   ~s(Client name collision in metadata of entrypoint "scratch_metadata": ) <>
+                     ~s(metadata :meta_1 and field :title of AshRpc.Test.Post both map to "title"),
+                   fn ->
+                     scratch_manifest(AshRpc.Test.Post, :read_with_metadata,
+                       exposed_metadata_fields: [:meta_1],
+                       metadata_field_names: %{meta_1: "title"}
+                     )
+                   end
+    end
+
+    test "a field's override counts as its client name" do
+      assert_raise AshRpc.Manifest.NameCollisionError,
+                   ~s(Client name collision in metadata of entrypoint "scratch_metadata": ) <>
+                     ~s(metadata :is_active? and field :is_active? of AshRpc.Test.Author ) <>
+                     ~s(both map to "isActive"),
+                   fn ->
+                     scratch_manifest(AshRpc.Test.Author, :read_with_activity_meta,
+                       exposed_metadata_fields: [:is_active?],
+                       metadata_field_names: %{is_active?: "isActive"}
+                     )
+                   end
+    end
+
+    test "unexposed read metadata is not checked" do
+      assert %Ash.Info.Manifest{} =
+               scratch_manifest(AshRpc.Test.Post, :read_with_metadata,
+                 exposed_metadata_fields: [:total_score],
+                 metadata_field_names: %{meta_1: "title"}
+               )
+    end
+
+    test "mutation metadata, sent apart from the record, may share a field's client name" do
+      manifest =
+        scratch_manifest(AshRpc.Test.Post, :create_with_metadata,
+          exposed_metadata_fields: [:meta_1],
+          metadata_field_names: %{meta_1: "title"}
+        )
+
+      assert %{"success" => true, "data" => %{"title" => "Shared"}, "metadata" => metadata} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "action" => "scratch_metadata",
+                   "input" => %{"title" => "Shared"},
+                   "fields" => ["title"]
+                 },
+                 manifest: manifest
+               )
+
+      assert metadata == %{"title" => "m1"}
     end
   end
 

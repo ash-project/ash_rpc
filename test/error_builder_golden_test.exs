@@ -11,6 +11,210 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
   alias AshRpc.Test.ErrorCases
 
   @golden %{
+    "invalid_metadata_fields_type" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "Array of metadata field names"},
+          "fields" => [],
+          "message" => "metadataFields parameter must be an array",
+          "path" => ["metadataFields"],
+          "shortMessage" => "Invalid metadataFields type",
+          "type" => "invalid_metadata_fields_type",
+          "vars" => %{"received" => "\"totalScore\""}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_get_by_format" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "Map of getBy field names to values"},
+          "fields" => [],
+          "message" => "getBy parameter must be a map",
+          "path" => ["getBy"],
+          "shortMessage" => "Invalid getBy value",
+          "type" => "invalid_get_by",
+          "vars" => %{"received" => "\"alpha\""}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_query_opt_value" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "A non-negative integer"},
+          "fields" => ["author.posts"],
+          "message" => "%{key} for relationship %{field} must be a non-negative integer",
+          "path" => ["author", "posts", "limit"],
+          "shortMessage" => "Invalid query options",
+          "type" => "invalid_query_opts",
+          "vars" => %{"field" => "author.posts", "key" => "limit"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_action_type" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "The name of an RPC action"},
+          "fields" => [],
+          "message" => "action parameter must be a string",
+          "path" => ["action"],
+          "shortMessage" => "Invalid action type",
+          "type" => "invalid_action_type",
+          "vars" => %{"received" => "123"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_tenant_type" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "A string or an integer"},
+          "fields" => [],
+          "message" => "tenant parameter must be a string or an integer",
+          "path" => ["tenant"],
+          "shortMessage" => "Invalid tenant type",
+          "type" => "invalid_tenant_type",
+          "vars" => %{"received" => "%{\"id\" => 1}"}
+        }
+      ],
+      "success" => false
+    },
+    "unknown_query_opts" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "fields, page, filter, sort, limit, offset"},
+          "fields" => ["author.posts"],
+          "message" => "Unknown query option keys for relationship %{field}: %{keys}",
+          "path" => ["author", "posts"],
+          "shortMessage" => "Invalid query options",
+          "type" => "invalid_query_opts",
+          "vars" => %{"field" => "author.posts", "keys" => "bogus, Sort"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_filter_statement" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "expected" =>
+              "A map of field names, relationships and and/or/not to conditions, or a list of such maps"
+          },
+          "fields" => [],
+          "message" => "Invalid filter statement",
+          "path" => [],
+          "shortMessage" => "Invalid filter",
+          "type" => "invalid_filter",
+          "vars" => %{}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_calculation_input" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "Map of argument names to values"},
+          "fields" => [],
+          "message" => "Calculation input must be a map",
+          "path" => [],
+          "shortMessage" => "Invalid calculation arguments",
+          "type" => "invalid_calculation_args",
+          "vars" => %{}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_get_by_non_scalar" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "suggestion" => "Provide a scalar value for each getBy field"
+          },
+          "fields" => ["slug"],
+          "message" =>
+            "getBy values must be scalar equality operands. Non-scalar value provided for: %{fields}",
+          "path" => ["getBy"],
+          "shortMessage" => "Invalid getBy value",
+          "type" => "invalid_get_by",
+          "vars" => %{"fields" => "slug"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_identity_non_scalar" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "suggestion" => "Provide a scalar value for each identity field"
+          },
+          "fields" => ["slug", "isActive"],
+          "message" =>
+            "Identity values must be scalar equality operands. Non-scalar value provided for: %{fields}",
+          "path" => ["identity"],
+          "shortMessage" => "Invalid identity",
+          "type" => "invalid_identity",
+          "vars" => %{"fields" => "slug, isActive"}
+        }
+      ],
+      "success" => false
+    },
+    "load_not_allowed_internal_path" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "disallowedPaths" => ["author.postCount"],
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
+            "suggestion" =>
+              "Remove these fields from your request or check the entrypoint's load_restrictions"
+          },
+          "fields" => ["author.postCount"],
+          "message" => "Loading the following fields is not allowed: %{fields}",
+          "path" => [],
+          "shortMessage" => "Load not allowed",
+          "type" => "load_not_allowed",
+          "vars" => %{"fields" => "author.postCount"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_calculation_arg_value" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes."
+          },
+          "fields" => ["bogusKey"],
+          "message" => "Unknown input %{field}",
+          "path" => ["author", "fullName", "args", "probe", "inner", 0],
+          "shortMessage" => "Unknown input",
+          "type" => "unknown_input",
+          "vars" => %{"field" => "bogusKey"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_calculation_arg_value_union" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
+            "suggestion" => "Provide union input in the format: {\"member_name\": value}"
+          },
+          "fields" => [],
+          "message" => "Union input must be a map with exactly one member key",
+          "path" => ["fullName", "args", "probe"],
+          "shortMessage" => "Invalid union input",
+          "type" => "invalid_union_input",
+          "vars" => %{}
+        }
+      ],
+      "success" => false
+    },
     "sort_not_supported_top_level" => %{
       "errors" => [
         %{
@@ -168,7 +372,7 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "suggestion" => "Provide arguments in the format: {\"full_name\": {\"args\": {...}}}"
+            "suggestion" => "Provide arguments in the format: {\"fullName\": {\"args\": {...}}}"
           },
           "fields" => ["author.fullName"],
           "message" => "Calculation %{field} requires arguments",
@@ -221,14 +425,14 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "suggestion" => "Specify which fields to select from this field_constrained_type"
+            "suggestion" => "Specify which fields to select from this typed value"
           },
           "fields" => [],
           "message" => "%{fieldType} requires field selection",
           "path" => [],
           "shortMessage" => "Field selection required",
           "type" => "requires_field_selection",
-          "vars" => %{"fieldType" => "Field_constrained_type"}
+          "vars" => %{"fieldType" => "Typed value"}
         }
       ],
       "success" => false
@@ -277,6 +481,86 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "path" => [],
           "shortMessage" => "Not found",
           "type" => "not_found",
+          "vars" => %{}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_filter_value" => %{
+      "errors" => [
+        %{
+          "details" => %{"expected" => "A list"},
+          "fields" => [],
+          "message" => "Invalid filter value",
+          "path" => [],
+          "shortMessage" => "Invalid filter value",
+          "type" => "invalid_filter_value",
+          "vars" => %{}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_calculation_argument_required" => %{
+      "errors" => [
+        %{
+          "fields" => ["omissionText"],
+          "message" => "is required",
+          "path" => [],
+          "shortMessage" => "Invalid calculation argument",
+          "type" => "invalid_calculation_argument",
+          "vars" => %{"field" => "omissionText"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_calculation_argument_invalid" => %{
+      "errors" => [
+        %{
+          "fields" => ["length"],
+          "message" => "is invalid",
+          "path" => [],
+          "shortMessage" => "Invalid calculation argument",
+          "type" => "invalid_calculation_argument",
+          "vars" => %{"field" => "length"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_identity_composite_primary_key" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "expectedKeys" => ["postId", "tagId"],
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
+            "suggestion" => "Provide the identity as a map of postId, tagId"
+          },
+          "fields" => [],
+          "message" =>
+            "Identity must be a map of the primary key fields for a composite primary key: [%{expectedKeys}]",
+          "path" => ["identity"],
+          "shortMessage" => "Invalid identity",
+          "type" => "invalid_identity",
+          "vars" => %{"expectedKeys" => "postId, tagId"}
+        }
+      ],
+      "success" => false
+    },
+    "get_by_not_supported" => %{
+      "errors" => [
+        %{
+          "details" => %{
+            "hint" =>
+              "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
+            "reason" => "unsupported",
+            "suggestion" =>
+              "Remove the getBy parameter. It is only available on entrypoints that declare get_by fields"
+          },
+          "fields" => [],
+          "message" => "This action does not support the getBy parameter",
+          "path" => ["getBy"],
+          "shortMessage" => "getBy not supported",
+          "type" => "get_by_not_supported",
           "vars" => %{}
         }
       ],
@@ -365,14 +649,14 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "details" => %{
             "hint" =>
               "This error is most likely happening because the generated client used is not up to date with the running backend. Check that you are using the latest generated client, and/or that it has been regenerated after the last backend changes.",
-            "suggestion" => "Remove the field selection for this :attribute field"
+            "suggestion" => "Remove the field selection for this attribute field"
           },
           "fields" => ["post.viewCount"],
           "message" => "Cannot select fields from %{fieldType} %{field}",
           "path" => ["post"],
           "shortMessage" => "Invalid field selection",
           "type" => "invalid_field_selection",
-          "vars" => %{"field" => "post.viewCount", "fieldType" => ":attribute"}
+          "vars" => %{"field" => "post.viewCount", "fieldType" => "attribute"}
         }
       ],
       "success" => false
@@ -594,11 +878,11 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
               "Check the field name spelling and ensure it's a public attribute, calculation, or relationship"
           },
           "fields" => ["author.userName"],
-          "message" => "Unknown field %{field} for resource %{resource}",
+          "message" => "Unknown field %{field}",
           "path" => ["author"],
           "shortMessage" => "Unknown field",
           "type" => "unknown_field",
-          "vars" => %{"field" => "author.userName", "resource" => "AshRpc.Test.Post"}
+          "vars" => %{"field" => "author.userName"}
         }
       ],
       "success" => false
@@ -933,6 +1217,20 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
           "shortMessage" => "Pagination not supported",
           "type" => "pagination_not_supported",
           "vars" => %{"field" => "posts"}
+        }
+      ],
+      "success" => false
+    },
+    "invalid_union_return" => %{
+      "errors" => [
+        %{
+          "details" => %{},
+          "fields" => [],
+          "message" => "Action %{action} must return an Ash.Union value, not a bare member value",
+          "path" => [],
+          "shortMessage" => "Invalid union return",
+          "type" => "invalid_union_return",
+          "vars" => %{"action" => "payload"}
         }
       ],
       "success" => false

@@ -103,11 +103,113 @@ defmodule AshRpc.FilterSortTest do
       assert error["type"] == "unknown_filter_operator"
       assert error["fields"] == ["bogusOp"]
       assert error["vars"]["operator"] == "bogusOp"
+      assert error["path"] == ["filter", "viewCount"]
+    end
+
+    test "an unknown key in a calculation input value is unknown_input under input" do
+      error =
+        run_error(%{
+          "action" => "list_posts",
+          "filter" => %{
+            "excerpt" => %{"input" => %{"length" => 3, "omission_text" => "!"}, "isNil" => false}
+          }
+        })
+
+      assert error == %{
+               "type" => "unknown_input",
+               "message" => "Unknown input %{field}",
+               "shortMessage" => "Unknown input",
+               "vars" => %{"field" => "omission_text"},
+               "fields" => ["omission_text"],
+               "path" => ["filter", "excerpt", "input"],
+               "details" => %{"hint" => AshRpc.Profile.default_stale_client_hint()}
+             }
+
+      error =
+        run_error(%{
+          "action" => "list_posts",
+          "filter" => %{"echoStats" => %{"input" => %{"probe" => %{"bogus" => 3}}}}
+        })
+
+      assert error["type"] == "unknown_input"
+      assert error["fields"] == ["bogus"]
+      assert error["path"] == ["filter", "echoStats", "input", "probe"]
+    end
+
+    test "an unknown key in a bare filter value is unknown_input at the field" do
+      error =
+        run_error(%{
+          "action" => "list_projects",
+          "fields" => ["id"],
+          "filter" => %{"history" => [%{"category" => "a", "priority_score" => 1}]}
+        })
+
+      assert error["type"] == "unknown_input"
+      assert error["fields"] == ["priority_score"]
+      assert error["path"] == ["filter", "history", 0]
+    end
+
+    test "a filter through a relationship to an unexposed resource is unknown_field" do
+      error =
+        run_error(%{
+          "action" => "list_posts",
+          "filter" => %{"vouchers" => %{"voucherCode" => %{"eq" => "x"}}}
+        })
+
+      assert error["type"] == "unknown_field"
+      assert error["fields"] == ["vouchers"]
+      assert error["path"] == ["filter"]
     end
 
     test "unknown filter and sort names carry the stale-client hint" do
       error = run_error(%{"action" => "list_posts", "sort" => "view_count"})
       assert is_binary(error["details"]["hint"])
+    end
+  end
+
+  # Ash reports errors from a nested load's query under `[:load, relationship]`;
+  # the client sees the relationships it selected through.
+  describe "errors in nested query options" do
+    defp nested_error(fields), do: run_error(%{"action" => "list_posts", "fields" => fields})
+
+    test "an unknown filter operator two relationships deep" do
+      error =
+        nested_error([
+          %{
+            "author" => [
+              %{"posts" => %{"fields" => ["id"], "filter" => %{"viewCount" => %{"zz" => 1}}}}
+            ]
+          }
+        ])
+
+      assert error["type"] == "unknown_filter_operator"
+      assert error["path"] == ["author", "posts", "filter", "viewCount"]
+    end
+
+    test "an unknown sort field" do
+      error = nested_error([%{"comments" => %{"fields" => ["id"], "sort" => "nope"}}])
+
+      assert error["type"] == "unknown_field"
+      assert error["fields"] == ["nope"]
+      assert error["path"] == ["comments", "sort"]
+    end
+
+    test "an unknown filter field" do
+      error =
+        nested_error([
+          %{"comments" => %{"fields" => ["id"], "filter" => %{"nope" => %{"eq" => 1}}}}
+        ])
+
+      assert error["type"] == "unknown_field"
+      assert error["path"] == ["comments", "filter"]
+    end
+
+    test "an unknown key in a filter value" do
+      filter = %{"attachment" => %{"eq" => %{"file" => %{"bogus" => 1}}}}
+      error = nested_error([%{"comments" => %{"fields" => ["id"], "filter" => filter}}])
+
+      assert error["type"] == "unknown_input"
+      assert error["path"] == ["comments", "filter", "attachment", "eq", "file"]
     end
   end
 
@@ -130,6 +232,313 @@ defmodule AshRpc.FilterSortTest do
 
     test "comma-separated fields sort in order, with camelCase names" do
       assert list_titles(%{"sort" => "viewCount,-title"}) == ["Charlie", "Alpha", "Bravo"]
+    end
+  end
+
+  describe "invalid sort shapes" do
+    @invalid_sort %{
+      "type" => "invalid_sort",
+      "message" => "Invalid sort",
+      "shortMessage" => "Invalid sort",
+      "vars" => %{},
+      "fields" => [],
+      "path" => ["sort"],
+      "details" => %{
+        "expected" =>
+          "A string or a list of strings, each a field name with an optional +, -, ++ or -- prefix"
+      }
+    }
+
+    test "a sort map is invalid_sort" do
+      assert run_error(%{"action" => "list_posts", "sort" => %{"view_count" => "asc"}}) ==
+               @invalid_sort
+    end
+
+    test "a sort list with a map entry is invalid_sort" do
+      assert run_error(%{"action" => "list_posts", "sort" => [%{"title" => "asc"}]}) ==
+               @invalid_sort
+    end
+
+    test "a nested sort map is invalid_sort" do
+      error =
+        run_error(%{
+          "action" => "list_posts",
+          "fields" => [%{"comments" => %{"sort" => %{"rating" => "asc"}, "fields" => ["body"]}}]
+        })
+
+      assert error == %{@invalid_sort | "path" => ["comments", "sort"]}
+    end
+  end
+
+  describe "invalid filter values" do
+    defp invalid_filter_value(path, expected) do
+      %{
+        "type" => "invalid_filter_value",
+        "message" => "Invalid filter value",
+        "shortMessage" => "Invalid filter value",
+        "vars" => %{},
+        "fields" => [],
+        "path" => path,
+        "details" => %{"expected" => expected}
+      }
+    end
+
+    defp filter_error(filter), do: run_error(%{"action" => "list_posts", "filter" => filter})
+
+    test "an in that is not a list is invalid_filter_value at the operator" do
+      for {filter, field} <- [
+            {%{"title" => %{"in" => "x"}}, "title"},
+            {%{"stats" => %{"in" => %{"a" => 1}}}, "stats"}
+          ] do
+        assert filter_error(filter) == invalid_filter_value(["filter", field, "in"], "A list")
+      end
+    end
+
+    test "a value the operator's concrete type can't cast is invalid_filter_value" do
+      for {filter, field, op, expected} <- [
+            {%{"title" => %{"isNil" => "yes"}}, "title", "isNil", "A boolean value"},
+            {%{"stats" => %{"isNil" => %{"x" => 1}}}, "stats", "isNil", "A boolean value"},
+            {%{"title" => %{"contains" => %{"a" => 1}}}, "title", "contains", "A string value"}
+          ] do
+        assert filter_error(filter) == invalid_filter_value(["filter", field, op], expected)
+      end
+    end
+
+    test "the path runs through relationships and and/or" do
+      assert filter_error(%{"or" => [%{"author" => %{"posts" => %{"title" => %{"in" => 1}}}}]}) ==
+               invalid_filter_value(
+                 ["filter", "or", 0, "author", "posts", "title", "in"],
+                 "A list"
+               )
+    end
+
+    test "an operand Ash rejects is invalid_filter_value without Ash's message" do
+      error = filter_error(%{"id" => %{"in" => [%{"a" => 1}]}})
+
+      assert error == %{
+               "type" => "invalid_filter_value",
+               "message" => "Invalid filter value",
+               "shortMessage" => "Invalid filter value",
+               "vars" => %{},
+               "fields" => [],
+               "path" => ["filter"],
+               "details" => %{}
+             }
+    end
+
+    test "a relationship given a boolean is invalid_filter at the relationship" do
+      assert run_error(%{"action" => "list_posts", "filter" => %{"comments" => true}}) ==
+               invalid_filter(["filter", "comments"])
+    end
+
+    test "input on a field that is not a calculation is unknown_filter_operator at the field" do
+      error = filter_error(%{"title" => %{"input" => %{}}})
+
+      assert error["type"] == "unknown_filter_operator"
+      assert error["fields"] == ["input"]
+      assert error["path"] == ["filter", "title"]
+    end
+
+    test "an unknown field under a relationship is unknown_field at the relationship" do
+      error = filter_error(%{"author" => %{"posts" => %{"bogus" => 1}}})
+
+      assert error["type"] == "unknown_field"
+      assert error["fields"] == ["bogus"]
+      assert error["vars"] == %{"field" => "bogus"}
+      assert error["path"] == ["filter", "author", "posts"]
+    end
+  end
+
+  describe "calculation arguments in filters" do
+    defp calc_arg_error(path, arg, message) do
+      %{
+        "type" => "invalid_calculation_argument",
+        "message" => message,
+        "shortMessage" => "Invalid calculation argument",
+        "vars" => %{"field" => arg},
+        "fields" => [arg],
+        "path" => path
+      }
+    end
+
+    defp comments_filter_error(filter),
+      do: run_error(%{"action" => "list_comments", "fields" => ["id"], "filter" => filter})
+
+    test "a value that doesn't cast names the full path through a relationship" do
+      filter = %{"post" => %{"excerpt" => %{"input" => %{"length" => "x"}, "eq" => "a"}}}
+
+      assert comments_filter_error(filter) ==
+               calc_arg_error(["filter", "post", "excerpt", "input"], "length", "is invalid")
+    end
+
+    test "a value that doesn't cast names the full path through or" do
+      filter = %{"or" => [%{"excerpt" => %{"input" => %{"length" => "x"}, "eq" => "a"}}]}
+
+      assert run_error(%{"action" => "list_posts", "filter" => filter}) ==
+               calc_arg_error(["filter", "or", 0, "excerpt", "input"], "length", "is invalid")
+    end
+
+    test "a missing required argument is reported without an input map" do
+      for filter <- [
+            %{"author" => %{"posts" => %{"excerpt" => %{"eq" => "x"}}}},
+            %{"author" => %{"posts" => %{"excerpt" => "x"}}},
+            %{"author" => %{"posts" => %{"excerpt" => %{"input" => %{"length" => nil}}}}}
+          ] do
+        assert run_error(%{"action" => "list_posts", "filter" => filter}) ==
+                 calc_arg_error(
+                   ["filter", "author", "posts", "excerpt", "input"],
+                   "length",
+                   "is required"
+                 )
+      end
+    end
+
+    test "a multi-word argument takes its client name" do
+      filter = %{
+        "excerpt" => %{"input" => %{"length" => 2, "omissionText" => %{"a" => 1}}, "eq" => "a"}
+      }
+
+      assert run_error(%{"action" => "list_posts", "filter" => filter}) ==
+               calc_arg_error(["filter", "excerpt", "input"], "omissionText", "is invalid")
+    end
+
+    test "valid arguments still filter" do
+      seed_posts()
+
+      filter = %{"excerpt" => %{"input" => %{"length" => 2}, "eq" => "Al"}}
+      assert list_titles(%{"filter" => filter}) == ["Alpha"]
+    end
+  end
+
+  describe "unsortable fields" do
+    defp unsortable(field, reason) do
+      %{
+        "type" => "unsortable_field",
+        "message" => "Cannot sort on %{field}",
+        "shortMessage" => "Unsortable field",
+        "vars" => %{"field" => field},
+        "fields" => [field],
+        "path" => ["sort"],
+        "details" => %{"reason" => reason}
+      }
+    end
+
+    test "a relationship is unsortable_field" do
+      for name <- ["author", "comments", "-author"] do
+        assert run_error(%{"action" => "list_posts", "sort" => name}) ==
+                 unsortable(String.trim_leading(name, "-"), "relationship")
+      end
+    end
+
+    test "a relationship to an unexposed resource is unknown_field" do
+      error = run_error(%{"action" => "list_posts", "sort" => "secret"})
+
+      assert error["type"] == "unknown_field"
+      assert error["fields"] == ["secret"]
+      assert error["path"] == ["sort"]
+    end
+
+    test "a calculation with required arguments is unsortable_field" do
+      assert run_error(%{"action" => "list_posts", "sort" => "excerpt"}) ==
+               unsortable("excerpt", "requires_arguments")
+    end
+
+    test "in a nested sort the path starts at the relationship" do
+      error =
+        run_error(%{
+          "action" => "list_posts",
+          "fields" => [%{"comments" => %{"fields" => ["id"], "sort" => "post"}}]
+        })
+
+      assert error == %{unsortable("post", "relationship") | "path" => ["comments", "sort"]}
+    end
+  end
+
+  describe "invalid filter shapes" do
+    defp invalid_filter(path) do
+      %{
+        "type" => "invalid_filter",
+        "message" => "Invalid filter statement",
+        "shortMessage" => "Invalid filter",
+        "vars" => %{},
+        "fields" => [],
+        "path" => path,
+        "details" => %{
+          "expected" =>
+            "A map of field names, relationships and and/or/not to conditions, or a list of such maps"
+        }
+      }
+    end
+
+    test "a filter that is not a map or a list is invalid_filter" do
+      for filter <- ["title", 5] do
+        assert run_error(%{"action" => "list_posts", "filter" => filter}) ==
+                 invalid_filter(["filter"])
+      end
+    end
+
+    test "a filter list entry that is not a map is invalid_filter at its index" do
+      assert run_error(%{"action" => "list_posts", "filter" => [%{"title" => "a"}, "title"]}) ==
+               invalid_filter(["filter", 1])
+    end
+
+    test "and/or/not given a scalar is invalid_filter at the operator" do
+      assert run_error(%{"action" => "list_posts", "filter" => %{"and" => "x"}}) ==
+               invalid_filter(["filter", "and"])
+
+      assert run_error(%{"action" => "list_posts", "filter" => %{"not" => nil}}) ==
+               invalid_filter(["filter", "not"])
+
+      assert run_error(%{"action" => "list_posts", "filter" => %{"or" => [nil]}}) ==
+               invalid_filter(["filter", "or", 0])
+    end
+
+    test "an empty and/or is invalid_filter at the operator" do
+      for op <- ["and", "or"], value <- [[], %{}, ["x"]] do
+        assert run_error(%{"action" => "list_posts", "filter" => %{op => value}}) ==
+                 invalid_filter(if value == ["x"], do: ["filter", op, 0], else: ["filter", op])
+      end
+    end
+
+    test "a calculation input that is not a map is invalid_calculation_args at input" do
+      for input <- [[1], "x"] do
+        filter = %{"excerpt" => %{"input" => input, "eq" => "x"}}
+
+        assert run_error(%{"action" => "list_posts", "filter" => filter}) == %{
+                 "type" => "invalid_calculation_args",
+                 "message" => "Calculation input must be a map",
+                 "shortMessage" => "Invalid calculation arguments",
+                 "vars" => %{},
+                 "fields" => [],
+                 "path" => ["filter", "excerpt", "input"],
+                 "details" => %{"expected" => "Map of argument names to values"}
+               }
+      end
+    end
+
+    test "a relationship given a scalar is invalid_filter at the relationship" do
+      assert run_error(%{"action" => "list_posts", "filter" => %{"author" => "x"}}) ==
+               invalid_filter(["filter", "author"])
+    end
+
+    test "a nested filter that is not a map is invalid_filter under the relationship" do
+      for filter <- ["x", ["x"]] do
+        error =
+          run_error(%{
+            "action" => "list_posts",
+            "fields" => [%{"comments" => %{"fields" => ["id"], "filter" => filter}}]
+          })
+
+        expected_path =
+          if is_list(filter), do: ["comments", "filter", 0], else: ["comments", "filter"]
+
+        assert error == invalid_filter(expected_path)
+      end
+    end
+
+    test "a boolean filter still passes to Ash" do
+      seed_posts()
+      assert "Alpha" in list_titles(%{"filter" => true})
     end
   end
 

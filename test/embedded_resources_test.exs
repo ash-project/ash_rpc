@@ -219,8 +219,7 @@ defmodule AshRpc.EmbeddedResourcesTest do
                "fields" => ["metadata.internalNotes"],
                "path" => ["metadata"],
                "vars" => %{
-                 "field" => "metadata.internalNotes",
-                 "resource" => "AshRpc.Test.ProjectMeta"
+                 "field" => "metadata.internalNotes"
                }
              } = single_error(get_project([%{"metadata" => ["internalNotes"]}]))
     end
@@ -288,8 +287,7 @@ defmodule AshRpc.EmbeddedResourcesTest do
                "fields" => ["metadata.invalidField"],
                "path" => ["metadata"],
                "vars" => %{
-                 "field" => "metadata.invalidField",
-                 "resource" => "AshRpc.Test.ProjectMeta"
+                 "field" => "metadata.invalidField"
                }
              } = single_error(get_project([%{"metadata" => ["invalidField"]}]))
     end
@@ -315,8 +313,7 @@ defmodule AshRpc.EmbeddedResourcesTest do
                "fields" => ["metadata.detail.nope"],
                "path" => ["metadata", "detail"],
                "vars" => %{
-                 "field" => "metadata.detail.nope",
-                 "resource" => "AshRpc.Test.ProjectMetaDetail"
+                 "field" => "metadata.detail.nope"
                }
              } = single_error(get_project([%{"metadata" => [%{"detail" => ["note", "nope"]}]}]))
     end
@@ -374,7 +371,7 @@ defmodule AshRpc.EmbeddedResourcesTest do
                "type" => "requires_field_selection",
                "fields" => ["metadata"],
                "path" => [],
-               "vars" => %{"field" => "metadata", "fieldType" => "Embedded_resource"}
+               "vars" => %{"field" => "metadata", "fieldType" => "Embedded resource"}
              } = single_error(get_project(["metadata"]))
     end
 
@@ -392,7 +389,7 @@ defmodule AshRpc.EmbeddedResourcesTest do
                "type" => "invalid_field_selection",
                "fields" => ["metadata.adjustedPriority"],
                "path" => ["metadata"],
-               "vars" => %{"field" => "metadata.adjustedPriority", "fieldType" => ":calculation"}
+               "vars" => %{"field" => "metadata.adjustedPriority", "fieldType" => "calculation"}
              } =
                single_error(
                  get_project([%{"metadata" => [%{"adjustedPriority" => wire_selection}]}])

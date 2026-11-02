@@ -130,6 +130,67 @@ defmodule AshRpc.MultitenancyTest do
     end
   end
 
+  # A tenant that isn't a string, integer or atom used to reach Ash and come
+  # back as unknown_error.
+  describe "a tenant param that is not a scalar" do
+    defp invalid_tenant(tenant, key) do
+      %{
+        "type" => "invalid_tenant_type",
+        "message" => "#{key} parameter must be a string or an integer",
+        "shortMessage" => "Invalid #{key} type",
+        "vars" => %{"received" => inspect(tenant)},
+        "path" => [key],
+        "fields" => [],
+        "details" => %{"expected" => "A string or an integer"}
+      }
+    end
+
+    test "is invalid_tenant_type in run_action and validate_action" do
+      for tenant <- [%{"id" => "w1"}, ["w1"], 1.5] do
+        params = %{"action" => "list_notes", "fields" => ["title"], "tenant" => tenant}
+
+        assert parse(ctx(), params) == {:error, {:invalid_tenant_type, tenant}}
+
+        assert %{"success" => false, "errors" => [error]} = run(params)
+        assert error == invalid_tenant(tenant, "tenant")
+
+        assert %{"success" => false, "errors" => [^error]} =
+                 AshRpc.validate_action(@profile, ctx(), params)
+      end
+    end
+
+    test "path and message use the formatted tenant key" do
+      manifest = AshRpc.Test.ManifestBuilder.build(output_formatter: :pascal_case)
+      params = %{"Action" => "list_notes", "Fields" => ["Title"], "Tenant" => %{}}
+
+      assert %{"Success" => false, "Errors" => [error]} =
+               AshRpc.run_action(@profile, ctx(), params, manifest: manifest)
+
+      assert %{
+               "Type" => "invalid_tenant_type",
+               "Message" => "Tenant parameter must be a string or an integer",
+               "Path" => ["Tenant"]
+             } = error
+    end
+
+    test "string, integer and boolean tenants still reach the request" do
+      params = %{"action" => "list_posts", "fields" => ["title"]}
+
+      for tenant <- ["org_1", 7, true] do
+        assert {:ok, %AshRpc.Request{tenant: ^tenant}} =
+                 parse(ctx(), Map.put(params, "tenant", tenant))
+      end
+    end
+
+    test "the transport tenant is not checked" do
+      tenant = %{"org" => 1}
+      params = %{"action" => "list_posts", "fields" => ["title"]}
+
+      assert {:ok, %AshRpc.Request{tenant: ^tenant}} =
+               parse(%AshRpc.Context{tenant: tenant}, params)
+    end
+  end
+
   describe "nested envelope" do
     test "a paged replies envelope stays inside the tenant" do
       note = seed_note("n", "w1")

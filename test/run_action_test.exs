@@ -65,22 +65,33 @@ defmodule AshRpc.RunActionTest do
   describe "exceptions raised while handling a request" do
     import ExUnit.CaptureLog
 
-    # A non-string `action` raises inside parse_request; any raise works here.
+    # An `entrypoint:` option naming an action the manifest doesn't have makes
+    # `Introspection.get_action!/3` raise inside parse_request.
+    @missing_entrypoint %AshRpc.Entrypoint{
+      name: "missing",
+      resource: AshRpc.Test.Post,
+      action: :not_in_manifest
+    }
+
     test "run_action logs them with a stacktrace and returns unknown_error" do
       {response, log} =
-        with_log(fn -> AshRpc.run_action(@profile, ctx(), %{"action" => 123}) end)
+        with_log(fn ->
+          AshRpc.run_action(@profile, ctx(), %{}, entrypoint: @missing_entrypoint)
+        end)
 
       assert %{"success" => false, "errors" => [%{"type" => "unknown_error"}]} = response
-      assert log =~ "CaseClauseError"
+      assert log =~ "** (RuntimeError) action :not_in_manifest not found on AshRpc.Test.Post"
       assert log =~ "lib/ash_rpc/pipeline.ex"
     end
 
     test "validate_action logs them with a stacktrace and returns unknown_error" do
       {response, log} =
-        with_log(fn -> AshRpc.validate_action(@profile, ctx(), %{"action" => 123}) end)
+        with_log(fn ->
+          AshRpc.validate_action(@profile, ctx(), %{}, entrypoint: @missing_entrypoint)
+        end)
 
       assert %{"success" => false, "errors" => [%{"type" => "unknown_error"}]} = response
-      assert log =~ "CaseClauseError"
+      assert log =~ "** (RuntimeError) action :not_in_manifest not found on AshRpc.Test.Post"
       assert log =~ "lib/ash_rpc/pipeline.ex"
     end
   end
@@ -396,6 +407,127 @@ defmodule AshRpc.RunActionTest do
                  "action" => "list_posts",
                  "fields" => ["id"],
                  "page" => %{"Limit" => 1, "pageSize" => 2}
+               })
+    end
+  end
+
+  # Each shape used to crash (unknown_error / internal_error) or be ignored.
+  describe "malformed request params" do
+    defp only_error(params) do
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.run_action(@profile, ctx(), params)
+
+      error
+    end
+
+    test "a getBy that is not a map is invalid_get_by" do
+      for get_by <- ["alpha", ["alpha"], 5] do
+        params = %{"action" => "get_post_by_slug", "getBy" => get_by, "fields" => ["id"]}
+
+        assert parse(params) == {:error, {:invalid_get_by_format, get_by}}
+
+        assert only_error(params) == %{
+                 "type" => "invalid_get_by",
+                 "message" => "getBy parameter must be a map",
+                 "shortMessage" => "Invalid getBy value",
+                 "vars" => %{"received" => inspect(get_by)},
+                 "path" => ["getBy"],
+                 "fields" => [],
+                 "details" => %{"expected" => "Map of getBy field names to values"}
+               }
+      end
+    end
+
+    test "fields that is not a list is invalid_fields_type on a mutation" do
+      for fields <- ["title", %{"title" => true}] do
+        params = %{"action" => "create_post", "input" => %{"title" => "t"}, "fields" => fields}
+
+        assert parse(params) == {:error, {:invalid_fields_type, fields}}
+
+        assert %{
+                 "type" => "invalid_fields_type",
+                 "message" => "Fields parameter must be an array",
+                 "vars" => %{"received" => received},
+                 "path" => []
+               } = only_error(params)
+
+        assert received == inspect(fields)
+      end
+    end
+
+    test "fields that is not a list is invalid_fields_type in validate_action" do
+      assert %{"success" => false, "errors" => [%{"type" => "invalid_fields_type"}]} =
+               AshRpc.validate_action(@profile, ctx(), %{
+                 "action" => "create_post",
+                 "input" => %{"title" => "t"},
+                 "fields" => "title"
+               })
+    end
+
+    test "metadataFields that is not a list is invalid_metadata_fields_type" do
+      for {action, extra} <- [
+            {"read_posts_with_metadata", %{"fields" => ["id"]}},
+            {"create_post_with_metadata", %{"input" => %{"title" => "t"}}}
+          ],
+          metadata_fields <- ["totalScore", %{}] do
+        params = Map.merge(extra, %{"action" => action, "metadataFields" => metadata_fields})
+
+        assert parse(params) == {:error, {:invalid_metadata_fields_type, metadata_fields}}
+
+        assert only_error(params) == %{
+                 "type" => "invalid_metadata_fields_type",
+                 "message" => "metadataFields parameter must be an array",
+                 "shortMessage" => "Invalid metadataFields type",
+                 "vars" => %{"received" => inspect(metadata_fields)},
+                 "path" => ["metadataFields"],
+                 "fields" => [],
+                 "details" => %{"expected" => "Array of metadata field names"}
+               }
+      end
+    end
+
+    test "an action that is not a string is invalid_action_type" do
+      for action <- [123, ["list_posts"], %{"name" => "list_posts"}] do
+        params = %{"action" => action, "fields" => ["id"]}
+
+        assert parse(params) == {:error, {:invalid_action_type, action}}
+
+        expected = %{
+          "type" => "invalid_action_type",
+          "message" => "action parameter must be a string",
+          "shortMessage" => "Invalid action type",
+          "vars" => %{"received" => inspect(action)},
+          "path" => ["action"],
+          "fields" => [],
+          "details" => %{"expected" => "The name of an RPC action"}
+        }
+
+        assert only_error(params) == expected
+
+        assert %{"success" => false, "errors" => [^expected]} =
+                 AshRpc.validate_action(@profile, ctx(), params)
+      end
+    end
+
+    test "path and message use the formatted action key" do
+      manifest = AshRpc.Test.ManifestBuilder.build(output_formatter: :pascal_case)
+
+      assert %{"Success" => false, "Errors" => [error]} =
+               AshRpc.run_action(@profile, ctx(), %{"Action" => 5}, manifest: manifest)
+
+      assert %{
+               "Type" => "invalid_action_type",
+               "Message" => "Action parameter must be a string",
+               "Path" => ["Action"]
+             } = error
+    end
+
+    test "a metadataFields list still resolves" do
+      assert %{"success" => true} =
+               AshRpc.run_action(@profile, ctx(), %{
+                 "action" => "read_posts_with_metadata",
+                 "metadataFields" => ["totalScore"],
+                 "fields" => ["id"]
                })
     end
   end

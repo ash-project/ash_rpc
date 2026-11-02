@@ -131,7 +131,7 @@ defmodule AshRpc.AggregatesTest do
 
         assert %{
                  "type" => "invalid_field_selection",
-                 "vars" => %{"field" => ^name, "fieldType" => ":aggregate"},
+                 "vars" => %{"field" => ^name, "fieldType" => "aggregate"},
                  "path" => [],
                  "fields" => [^name]
                } = error
@@ -144,7 +144,7 @@ defmodule AshRpc.AggregatesTest do
 
       assert %{
                "type" => "unknown_field",
-               "vars" => %{"field" => "nopeCount", "resource" => "AshRpc.Test.Post"},
+               "vars" => %{"field" => "nopeCount"},
                "fields" => ["nopeCount"]
              } = error
 

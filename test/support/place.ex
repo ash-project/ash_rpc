@@ -33,10 +33,15 @@ defmodule AshRpc.Test.Place do
       ]
 
     attribute :location, AshRpc.Test.GeoPoint, public?: true
+    attribute :route, {:array, AshRpc.Test.GeoPoint}, public?: true
+  end
+
+  calculations do
+    calculate :origin, AshRpc.Test.GeoPoint, AshRpc.Test.Calculations.Origin, public?: true
   end
 
   actions do
-    defaults [:read, create: [:options, :coordinates, :location]]
+    defaults [:read, create: [:options, :coordinates, :location, :route]]
 
     action :keyword_options, :keyword do
       constraints fields: [
@@ -63,6 +68,10 @@ defmodule AshRpc.Test.Place do
                   ]
 
       run fn _input, _context -> {:ok, {37.7749, -122.4194, 50}} end
+    end
+
+    action :geo_point, AshRpc.Test.GeoPoint do
+      run fn _input, _context -> {:ok, {3.0, 4.0, true}} end
     end
   end
 end

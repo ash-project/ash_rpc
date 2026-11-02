@@ -16,8 +16,8 @@ defmodule AshRpc.ResultProcessor do
      │
      ├─> untyped data (Introspection.untyped_data_type?/2) → the value as is
      ├─> extract_resource_value/4    (Ash Resources)
-     ├─> extract_typed_struct_value/4 (TypedStruct/NewType with field name mapping)
-     ├─> extract_typed_map_value/4   (Map/Struct/Tuple/Keyword with fields)
+     ├─> extract_typed_struct_value/4 (TypedStruct/NewType with field name mapping, not tuples)
+     ├─> extract_typed_map_value/4   (Map/Struct/Tuple/Keyword with fields; every tuple)
      ├─> extract_union_value/4       (Ash.Type.Union)
      ├─> extract_array_value/5       (Arrays - recurse)
      └─> normalize_primitive/2       (Primitives)
@@ -202,6 +202,7 @@ defmodule AshRpc.ResultProcessor do
       {:array, item_type} -> extract_array_value(value, item_type, template, rt)
       {:resource, resource} -> extract_resource_value(value, resource, template, rt)
       {:union, type} -> extract_union_value(value, type, template, rt)
+      {_, %Type{kind: :tuple} = type} -> extract_typed_map_value(value, type, template, rt)
       {:typed_struct, type} -> extract_typed_struct_value(value, type, template, rt)
       {:fields, type} -> extract_typed_map_value(value, type, template, rt)
       {:other, _type} -> normalize_primitive(value, rt)

@@ -450,6 +450,54 @@ defmodule AshRpc.FieldNameTranslationTest do
     end
   end
 
+  # Ash reports a cast error inside a union member at the union attribute,
+  # with the member's field but not the member itself.
+  describe "cast errors inside a union member" do
+    defp cast_error(action, input) do
+      assert %{"success" => false, "errors" => [error]} =
+               AshRpc.run_action(AshRpc.Test.Profile, %AshRpc.Context{}, %{
+                 "action" => action,
+                 "input" => input,
+                 "fields" => ["id"]
+               })
+
+      Map.take(error, ["type", "path", "fields"])
+    end
+
+    test "a typed-map member field takes its client name" do
+      input = %{
+        "userName" => "u",
+        "content" => %{"data" => %{"itemCount" => 1, "isCached" => "zz"}}
+      }
+
+      assert cast_error("create_intake", input) == %{
+               "type" => "invalid_attribute",
+               "path" => ["content"],
+               "fields" => ["isCached"]
+             }
+    end
+
+    test "an embedded resource member field takes its client name" do
+      input = %{"content" => %{"checklist" => %{"title" => "t", "isActive" => "zz"}}}
+
+      assert cast_error("create_widget", input) == %{
+               "type" => "invalid_attribute",
+               "path" => ["content"],
+               "fields" => ["isActive"]
+             }
+    end
+
+    test "a tagged member field takes its client name" do
+      input = %{"userName" => "u", "status" => %{"active" => %{"isFinal" => "zz"}}}
+
+      assert cast_error("create_intake", input) == %{
+               "type" => "invalid_attribute",
+               "path" => ["status"],
+               "fields" => ["isFinal"]
+             }
+    end
+  end
+
   describe "wire round trip" do
     for f <- @round_trip_formatters do
       @f f

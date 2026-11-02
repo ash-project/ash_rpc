@@ -122,7 +122,7 @@ defmodule AshRpc.TypedStructTest do
       assert %{"type" => "requires_field_selection", "fields" => ["stats"], "path" => []} =
                error = single_error(get_project(["stats"]))
 
-      assert error["vars"] == %{"field" => "stats", "fieldType" => "Field_constrained_type"}
+      assert error["vars"] == %{"field" => "stats", "fieldType" => "Typed value"}
       assert error["details"]["hint"] == @hint
     end
 
@@ -130,7 +130,7 @@ defmodule AshRpc.TypedStructTest do
       assert %{"type" => "requires_field_selection", "fields" => ["stats"], "path" => []} =
                error = single_error(get_project([%{"stats" => []}]))
 
-      assert error["vars"] == %{"field" => "stats", "fieldType" => "Field_constrained_type"}
+      assert error["vars"] == %{"field" => "stats", "fieldType" => "Typed value"}
     end
 
     test "an unknown nested map field is unknown_map_field with the full path" do

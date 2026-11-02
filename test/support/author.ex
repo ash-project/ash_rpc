@@ -35,6 +35,13 @@ defmodule AshRpc.Test.Author do
   actions do
     defaults [:read, :destroy, create: [:name, :is_active?], update: [:name, :is_active?]]
 
+    # Metadata named like the `is_active?` attribute, whose client name is
+    # overridden ("isActive"): the metadata's own client name is "isActive?".
+    read :read_with_activity_meta do
+      metadata :is_active?, :string
+      prepare AshRpc.Test.Changes.PutActivityMetadata
+    end
+
     read :me do
       filter expr(id == ^actor(:id))
     end

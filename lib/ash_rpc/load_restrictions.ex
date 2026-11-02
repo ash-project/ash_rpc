@@ -34,7 +34,9 @@ defmodule AshRpc.LoadRestrictions do
 
   Throws `{:load_not_allowed, [path]}` or `{:load_denied, [path]}` — the same
   tuples `AshRpc.ErrorBuilder` already handles — so callers inside
-  field selection need no extra error plumbing.
+  field selection need no extra error plumbing. `path` is the internal
+  field-selection path (atoms); `AshRpc.ErrorBuilder` names it for the client
+  from the selection root.
   """
   @spec check!([atom()], t()) :: :ok
   def check!(_path, :none), do: :ok
@@ -43,13 +45,13 @@ defmodule AshRpc.LoadRestrictions do
     if path_allowed?(path, allowed_paths) do
       :ok
     else
-      throw({:load_not_allowed, [format_path(path)]})
+      throw({:load_not_allowed, [path]})
     end
   end
 
   def check!(path, {:deny, denied_paths}) do
     if path_denied?(path, denied_paths) do
-      throw({:load_denied, [format_path(path)]})
+      throw({:load_denied, [path]})
     else
       :ok
     end
@@ -104,9 +106,5 @@ defmodule AshRpc.LoadRestrictions do
       # 2. It starts with a denied path (loading something under a denied field)
       path == denied_path or List.starts_with?(path, denied_path)
     end)
-  end
-
-  defp format_path(path) do
-    Enum.map_join(path, ".", &to_string/1)
   end
 end

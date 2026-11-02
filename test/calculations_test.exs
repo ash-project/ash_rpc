@@ -149,6 +149,95 @@ defmodule AshRpc.CalculationsTest do
                  single_error(list_posts([%{"excerpt" => %{"args" => %{key => 1}}}]))
       end
     end
+
+    test "args that are not a map are invalid_calculation_args" do
+      for args <- [[1], "x", 5] do
+        assert {:error, {:invalid_calculation_args, :excerpt, []}} =
+                 parse(%{
+                   "action" => "list_posts",
+                   "fields" => [%{"excerpt" => %{"args" => args}}]
+                 })
+
+        assert %{
+                 "type" => "invalid_calculation_args",
+                 "fields" => ["excerpt"],
+                 "vars" => %{"field" => "excerpt"},
+                 "path" => []
+               } = single_error(list_posts([%{"excerpt" => %{"args" => args}}]))
+      end
+    end
+  end
+
+  # Ash.Error.Query.InvalidCalculationArgument: a value Ash rejects for a
+  # calculation argument, or a missing required one.
+  describe "invalid_calculation_argument" do
+    test "a value Ash can't cast" do
+      assert single_error(list_posts([%{"excerpt" => %{"args" => %{"length" => "abc"}}}])) ==
+               %{
+                 "type" => "invalid_calculation_argument",
+                 "message" => "is invalid",
+                 "shortMessage" => "Invalid calculation argument",
+                 "vars" => %{"field" => "length"},
+                 "fields" => ["length"],
+                 "path" => ["excerpt", "args"]
+               }
+    end
+
+    test "a missing required argument" do
+      assert %{
+               "type" => "invalid_calculation_argument",
+               "message" => "is required",
+               "fields" => ["length"],
+               "path" => ["excerpt", "args"]
+             } = single_error(list_posts([%{"excerpt" => %{"args" => %{"omissionText" => "x"}}}]))
+    end
+
+    test "a multi-word argument takes its client name" do
+      args = %{"length" => 3, "omissionText" => %{"a" => 1}}
+
+      assert %{
+               "type" => "invalid_calculation_argument",
+               "fields" => ["omissionText"],
+               "vars" => %{"field" => "omissionText"},
+               "path" => ["excerpt", "args"]
+             } = single_error(list_posts([%{"excerpt" => %{"args" => args}}]))
+    end
+
+    test "a calculation with a typed return" do
+      selection = %{"scoredStats" => %{"args" => %{"boost" => "x"}, "fields" => ["wordCount1"]}}
+
+      assert %{
+               "type" => "invalid_calculation_argument",
+               "fields" => ["boost"],
+               "path" => ["scoredStats", "args"]
+             } = single_error(list_posts([selection]))
+    end
+
+    test "a calculation through a relationship" do
+      fields = ["id", %{"post" => [%{"excerpt" => %{"args" => %{"length" => "abc"}}}]}]
+
+      assert %{
+               "type" => "invalid_calculation_argument",
+               "fields" => ["length"],
+               "path" => ["post", "excerpt", "args"]
+             } = single_error(run(%{"action" => "list_comments", "fields" => fields}))
+    end
+
+    test "a calculation input in a filter" do
+      for {filter, field, arg} <- [
+            {%{"excerpt" => %{"input" => %{"length" => "x"}, "eq" => "a"}}, "excerpt", "length"},
+            {%{"echoStats" => %{"eq" => %{}}}, "echoStats", "probe"}
+          ] do
+        assert %{
+                 "type" => "invalid_calculation_argument",
+                 "fields" => [^arg],
+                 "path" => ["filter", ^field, "input"]
+               } =
+                 single_error(
+                   run(%{"action" => "list_posts", "fields" => ["id"], "filter" => filter})
+                 )
+      end
+    end
   end
 
   test "calculation_requires_args: a calculation with arguments requested as a bare name" do
@@ -162,6 +251,16 @@ defmodule AshRpc.CalculationsTest do
              "fields" => ["excerpt"],
              "vars" => %{"field" => "excerpt"}
            } = single_error(run(params))
+  end
+
+  test "calculation_requires_args suggests the calculation's client name" do
+    assert %{
+             "type" => "invalid_field_format",
+             "details" => %{
+               "suggestion" =>
+                 "Provide arguments in the format: {\"scoredStats\": {\"args\": {...}}}"
+             }
+           } = single_error(list_posts(["scoredStats"]))
   end
 
   test "invalid_field_selection: a fields key on a scalar calculation" do
@@ -465,5 +564,85 @@ defmodule AshRpc.CalculationsTest do
 
     assert %{"success" => false, "errors" => [%{"type" => "invalid_calculation_args"}]} =
              list_posts([%{"excerpt" => %{"args" => %{"length" => 2, "omission_text" => "~"}}}])
+  end
+
+  describe "structured calculation arguments" do
+    setup do
+      seed_post()
+    end
+
+    test "a typed-map argument value takes internal names" do
+      assert %{"success" => true, "data" => [row]} =
+               list_posts([
+                 %{
+                   "echoStats" => %{
+                     "args" => %{"probe" => %{"wordCount1" => 3, "isFeatured" => true}},
+                     "fields" => ["wordCount1", "isFeatured"]
+                   }
+                 }
+               ])
+
+      assert row == %{"echoStats" => %{"wordCount1" => 3, "isFeatured" => true}}
+    end
+
+    test "each key of an argument value that is not a client name is unknown_input" do
+      hint = AshRpc.Profile.default_stale_client_hint()
+
+      assert %{"success" => false, "errors" => errors} =
+               list_posts([
+                 %{
+                   "echoStats" => %{
+                     "args" => %{"probe" => %{"bogus" => 3, "word_count_1" => 2}},
+                     "fields" => ["wordCount1"]
+                   }
+                 }
+               ])
+
+      assert Enum.sort_by(errors, & &1["fields"]) == [
+               %{
+                 "type" => "unknown_input",
+                 "message" => "Unknown input %{field}",
+                 "shortMessage" => "Unknown input",
+                 "vars" => %{"field" => "bogus"},
+                 "fields" => ["bogus"],
+                 "path" => ["echoStats", "args", "probe"],
+                 "details" => %{"hint" => hint}
+               },
+               %{
+                 "type" => "unknown_input",
+                 "message" => "Unknown input %{field}",
+                 "shortMessage" => "Unknown input",
+                 "vars" => %{"field" => "word_count_1"},
+                 "fields" => ["word_count_1"],
+                 "path" => ["echoStats", "args", "probe"],
+                 "details" => %{"hint" => hint}
+               }
+             ]
+    end
+
+    test "the path runs through relationships to the calculation" do
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{
+                 "action" => "list_authors",
+                 "fields" => [
+                   %{
+                     "posts" => [
+                       %{
+                         "echoStats" => %{
+                           "args" => %{"probe" => %{"isFeatured" => true, "bogus" => 1}},
+                           "fields" => ["isFeatured"]
+                         }
+                       }
+                     ]
+                   }
+                 ]
+               })
+
+      assert %{
+               "type" => "unknown_input",
+               "fields" => ["bogus"],
+               "path" => ["posts", "echoStats", "args", "probe"]
+             } = error
+    end
   end
 end

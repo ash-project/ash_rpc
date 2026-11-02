@@ -364,8 +364,7 @@ defmodule AshRpc.UnionOutputTest do
                "fields" => ["content.text.invalidField"],
                "path" => ["content", "text"],
                "vars" => %{
-                 "field" => "content.text.invalidField",
-                 "resource" => "AshRpc.Test.TextBlock"
+                 "field" => "content.text.invalidField"
                }
              } = list_error([%{"content" => [%{"text" => ["text", "invalidField"]}]}])
     end
@@ -384,7 +383,7 @@ defmodule AshRpc.UnionOutputTest do
                "type" => "requires_field_selection",
                "fields" => ["content"],
                "path" => [],
-               "vars" => %{"field" => "content", "fieldType" => "Union_attribute"}
+               "vars" => %{"field" => "content", "fieldType" => "Union"}
              } = list_error(["content"])
     end
 
@@ -393,14 +392,14 @@ defmodule AshRpc.UnionOutputTest do
                "type" => "requires_field_selection",
                "fields" => ["content.text"],
                "path" => ["content"],
-               "vars" => %{"field" => "content.text", "fieldType" => "Complex_type"}
+               "vars" => %{"field" => "content.text", "fieldType" => "Union member"}
              } = list_error([%{"content" => ["text"]}])
 
       assert %{
                "type" => "requires_field_selection",
                "fields" => ["attachments.file"],
                "path" => ["attachments"],
-               "vars" => %{"field" => "attachments.file", "fieldType" => "Complex_type"}
+               "vars" => %{"field" => "attachments.file", "fieldType" => "Union member"}
              } = list_error([%{"attachments" => ["file"]}])
     end
 
@@ -418,7 +417,7 @@ defmodule AshRpc.UnionOutputTest do
                "type" => "requires_field_selection",
                "fields" => ["content.text"],
                "path" => ["content"],
-               "vars" => %{"field" => "content.text", "fieldType" => "Complex_type"}
+               "vars" => %{"field" => "content.text", "fieldType" => "Union member"}
              } = list_error([%{"content" => [%{"text" => []}]}])
     end
 
@@ -427,8 +426,27 @@ defmodule AshRpc.UnionOutputTest do
                "type" => "requires_field_selection",
                "fields" => ["attachments.file"],
                "path" => ["attachments"],
-               "vars" => %{"field" => "attachments.file", "fieldType" => "Complex_type"}
+               "vars" => %{"field" => "attachments.file", "fieldType" => "Union member"}
              } = list_error([%{"attachments" => [%{"file" => []}]}])
+    end
+
+    test "a member selection that is not a list is unsupported_field_combination" do
+      for {selection, spec} <- [
+            {%{"text" => "x"}, ~s("x")},
+            {%{"text" => 5}, "5"},
+            {[%{"text" => "x"}], ~s("x")},
+            {[%{"text" => %{"text" => 1}}], ~s(%{"text" => 1})}
+          ] do
+        assert %{
+                 "type" => "unsupported_field_combination",
+                 "message" =>
+                   "Unsupported combination of field type and specification for %{field}",
+                 "fields" => ["content.text"],
+                 "path" => ["content"],
+                 "vars" => %{"field" => "content.text", "fieldType" => "union member"},
+                 "details" => %{"fieldSpec" => ^spec}
+               } = list_error([%{"content" => selection}])
+      end
     end
 
     test "a member listed twice is duplicate_field without a hint" do
@@ -502,6 +520,121 @@ defmodule AshRpc.UnionOutputTest do
       assert select == [:id, :attachments]
       assert load == []
       assert template == [:id, attachments: [:url, file: [:filename, :size]]]
+    end
+  end
+
+  describe "generic action returning a union" do
+    @invalid_union_return %{
+      "type" => "invalid_union_return",
+      "message" => "Action %{action} must return an Ash.Union value, not a bare member value",
+      "shortMessage" => "Invalid union return",
+      "vars" => %{"action" => "payload"},
+      "path" => [],
+      "fields" => [],
+      "details" => %{}
+    }
+
+    test "an Ash.Union value comes back under its member name" do
+      assert %{"success" => true, "data" => %{"stats" => %{"wordCount1" => 3}}} ==
+               run(%{
+                 "action" => "payload",
+                 "input" => %{"shape" => "union"},
+                 "fields" => [%{"stats" => ["wordCount1"]}]
+               })
+    end
+
+    test "a bare member value is invalid_union_return" do
+      assert %{"success" => false, "errors" => [@invalid_union_return]} ==
+               run(%{"action" => "payload", "fields" => ["text"]})
+    end
+
+    test "a member selection that is not a list is unsupported_field_combination" do
+      assert %{
+               "success" => false,
+               "errors" => [
+                 %{
+                   "type" => "unsupported_field_combination",
+                   "fields" => ["stats"],
+                   "path" => [],
+                   "vars" => %{"field" => "stats", "fieldType" => "union member"},
+                   "details" => %{"fieldSpec" => ~s("x")}
+                 }
+               ]
+             } =
+               run(%{
+                 "action" => "payload",
+                 "input" => %{"shape" => "union"},
+                 "fields" => [%{"stats" => "x"}]
+               })
+    end
+
+    test "an empty or missing selection is requires_field_selection" do
+      expected = %{
+        "type" => "requires_field_selection",
+        "message" => "%{fieldType} requires field selection",
+        "shortMessage" => "Field selection required",
+        "vars" => %{"fieldType" => "Union"},
+        "path" => [],
+        "fields" => [],
+        "details" => %{
+          "suggestion" => "Specify which fields to select from this union",
+          "hint" => AshRpc.Profile.default_stale_client_hint()
+        }
+      }
+
+      assert %{"success" => false, "errors" => [^expected]} =
+               run(%{"action" => "payload", "fields" => []})
+
+      assert %{"success" => false, "errors" => [^expected]} = run(%{"action" => "payload"})
+    end
+
+    test "invalid_union_return is logged with the value's type, not the value" do
+      for {params, kind} <- [
+            {%{"action" => "payload", "fields" => ["text"]}, "a string"},
+            {%{"action" => "payload", "input" => %{"shape" => "map"}, "fields" => ["text"]},
+             "a map"},
+            {%{"action" => "payloads", "input" => %{"bare" => true}, "fields" => ["text"]},
+             "a string"}
+          ] do
+        log = ExUnit.CaptureLog.capture_log(fn -> run(params) end)
+
+        assert log =~
+                 "Generic action #{inspect(AshRpc.Test.Post)}.#{params["action"]} " <>
+                   "(entrypoint #{params["action"]}) returned #{kind} where its union return " <>
+                   "type needs an %Ash.Union{}"
+
+        refute log =~ "hello"
+        refute log =~ "word_count_1"
+      end
+    end
+
+    test "a bare map is invalid_union_return" do
+      assert %{"success" => false, "errors" => [@invalid_union_return]} ==
+               run(%{
+                 "action" => "payload",
+                 "input" => %{"shape" => "map"},
+                 "fields" => [%{"stats" => ["wordCount1"]}]
+               })
+    end
+
+    test "the value formatter gives a bare member value no member" do
+      rt = AshRpc.Runtime.new(@profile)
+      returns = Map.fetch!(rt.action_lookup, {AshRpc.Test.Post, :payload}).returns
+
+      assert AshRpc.ValueFormatter.format("hello", returns, [], :output, rt) == %{}
+    end
+
+    test "an array of Ash.Union values comes back per item" do
+      assert %{"success" => true, "data" => [%{"text" => "hi"}, %{"text" => "yo"}]} ==
+               run(%{"action" => "payloads", "fields" => ["text"]})
+    end
+
+    test "a bare item in an array is invalid_union_return" do
+      assert %{
+               "success" => false,
+               "errors" => [%{@invalid_union_return | "vars" => %{"action" => "payloads"}}]
+             } ==
+               run(%{"action" => "payloads", "input" => %{"bare" => true}, "fields" => ["text"]})
     end
   end
 end

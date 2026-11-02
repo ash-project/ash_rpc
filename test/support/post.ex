@@ -86,6 +86,12 @@ defmodule AshRpc.Test.Post do
       argument :boost, :integer, allow_nil?: false
     end
 
+    # A structured (typed-map) argument, returned as is.
+    calculate :echo_stats, AshRpc.Test.PostStats, Calculations.EchoStats do
+      public? true
+      argument :probe, AshRpc.Test.PostStats, allow_nil?: false
+    end
+
     calculate :self_post, :struct, Calculations.SelfPost do
       public? true
       constraints instance_of: __MODULE__
@@ -255,7 +261,39 @@ defmodule AshRpc.Test.Post do
                     stats: [type: AshRpc.Test.PostStats]
                   ]
 
-      run fn _input, _context -> {:ok, "hello"} end
+      # `shape` picks the return: a bare member value (the default), a bare
+      # map, or a proper `%Ash.Union{}`.
+      argument :shape, :string, default: "bare"
+
+      run fn input, _context ->
+        case input.arguments.shape do
+          "union" ->
+            {:ok, %Ash.Union{type: :stats, value: %{word_count_1: 3, is_featured?: true}}}
+
+          "map" ->
+            {:ok, %{word_count_1: 3, is_featured?: true}}
+
+          _ ->
+            {:ok, "hello"}
+        end
+      end
+    end
+
+    action :payloads, {:array, :union} do
+      constraints items: [
+                    types: [
+                      text: [type: :string],
+                      stats: [type: AshRpc.Test.PostStats]
+                    ]
+                  ]
+
+      argument :bare, :boolean, default: false
+
+      run fn input, _context ->
+        first = %Ash.Union{type: :text, value: "hi"}
+        second = if input.arguments.bare, do: "hello", else: %Ash.Union{type: :text, value: "yo"}
+        {:ok, [first, second]}
+      end
     end
 
     action :ping do

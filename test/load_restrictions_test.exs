@@ -36,7 +36,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "an unlisted relationship is load_not_allowed" do
-      assert {:error, {:load_not_allowed, ["comments"]}} =
+      assert {:error, {:load_not_allowed, [[:comments]]}} =
                parse(%{
                  "action" => "list_posts_allow_author",
                  "fields" => ["id", %{"comments" => ["id"]}]
@@ -44,10 +44,10 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "top-level calculations and aggregates count as loads" do
-      assert {:error, {:load_not_allowed, ["title_length"]}} =
+      assert {:error, {:load_not_allowed, [[:title_length]]}} =
                parse(%{"action" => "list_posts_allow_author", "fields" => ["id", "titleLength"]})
 
-      assert {:error, {:load_not_allowed, ["comment_count"]}} =
+      assert {:error, {:load_not_allowed, [[:comment_count]]}} =
                parse(%{"action" => "list_posts_allow_author", "fields" => ["id", "commentCount"]})
     end
 
@@ -81,7 +81,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "a child of an allowed relationship is not implicitly allowed" do
-      assert {:error, {:load_not_allowed, ["author.posts"]}} =
+      assert {:error, {:load_not_allowed, [[:author, :posts]]}} =
                parse(%{
                  "action" => "list_posts_allow_author",
                  "fields" => ["id", %{"author" => ["id", %{"posts" => ["id"]}]}]
@@ -89,7 +89,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "a relationship outside an allowed nested path is load_not_allowed" do
-      assert {:error, {:load_not_allowed, ["author"]}} =
+      assert {:error, {:load_not_allowed, [[:author]]}} =
                parse(%{
                  "action" => "list_posts_allow_nested",
                  "fields" => ["id", %{"author" => ["id"]}]
@@ -118,7 +118,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "a denied relationship is load_denied" do
-      assert {:error, {:load_denied, ["author"]}} =
+      assert {:error, {:load_denied, [[:author]]}} =
                parse(%{
                  "action" => "list_posts_deny_author",
                  "fields" => ["id", %{"author" => ["id"]}]
@@ -127,7 +127,7 @@ defmodule AshRpc.LoadRestrictionsTest do
 
     test "children of a denied relationship are denied" do
       # The nested path is checked before its parent, so the child path is reported
-      assert {:error, {:load_denied, ["author.posts"]}} =
+      assert {:error, {:load_denied, [[:author, :posts]]}} =
                parse(%{
                  "action" => "list_posts_deny_author",
                  "fields" => ["id", %{"author" => ["id", %{"posts" => ["id"]}]}]
@@ -145,7 +145,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "a denied nested path is load_denied" do
-      assert {:error, {:load_denied, ["comments.post"]}} =
+      assert {:error, {:load_denied, [[:comments, :post]]}} =
                parse(%{
                  "action" => "list_posts_deny_nested",
                  "fields" => ["id", %{"comments" => ["id", %{"post" => ["id"]}]}]
@@ -194,11 +194,48 @@ defmodule AshRpc.LoadRestrictionsTest do
                "details" => %{"deniedPaths" => ["author"]}
              } = error
     end
+
+    test "a denied nested calculation is named by its client names" do
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{
+                 "action" => "list_posts_deny_nested_calc",
+                 "fields" => ["id", %{"author" => ["id", "isProlific"]}]
+               })
+
+      assert %{
+               "type" => "load_denied",
+               "fields" => ["author.isProlific"],
+               "vars" => %{"fields" => "author.isProlific"},
+               "details" => %{"deniedPaths" => ["author.isProlific"]}
+             } = error
+    end
+
+    test "a disallowed aggregate is named by its client name" do
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{"action" => "list_posts_allow_author", "fields" => ["id", "commentCount"]})
+
+      assert %{
+               "type" => "load_not_allowed",
+               "fields" => ["commentCount"],
+               "vars" => %{"fields" => "commentCount"},
+               "details" => %{"disallowedPaths" => ["commentCount"]}
+             } = error
+    end
+
+    test "a disallowed union member calculation is named by its client names" do
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{
+                 "action" => "list_comments_allow_post",
+                 "fields" => ["id", %{"attachment" => [%{"file" => ["url", "label"]}]}]
+               })
+
+      assert %{"fields" => ["attachment.file.label"]} = error
+    end
   end
 
   describe "nested calculations" do
     test "a calculation on an allowed relationship is load_not_allowed" do
-      assert {:error, {:load_not_allowed, ["author.is_prolific?"]}} =
+      assert {:error, {:load_not_allowed, [[:author, :is_prolific?]]}} =
                parse(%{
                  "action" => "list_posts_allow_author",
                  "fields" => ["id", %{"author" => ["id", "isProlific"]}]
@@ -223,7 +260,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "allowing one nested calculation does not allow a sibling aggregate" do
-      assert {:error, {:load_not_allowed, ["author.post_count"]}} =
+      assert {:error, {:load_not_allowed, [[:author, :post_count]]}} =
                parse(%{
                  "action" => "list_posts_allow_nested_calc",
                  "fields" => ["id", %{"author" => ["id", "postCount"]}]
@@ -231,7 +268,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "a denied nested calculation is load_denied" do
-      assert {:error, {:load_denied, ["author.is_prolific?"]}} =
+      assert {:error, {:load_denied, [[:author, :is_prolific?]]}} =
                parse(%{
                  "action" => "list_posts_deny_nested_calc",
                  "fields" => ["id", %{"author" => ["id", "isProlific"]}]
@@ -261,7 +298,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     test "an embedded resource calculation is a load" do
       fields = ["id", %{"settings" => ["themeName", "themeLabel"]}]
 
-      assert {:error, {:load_not_allowed, ["settings.theme_label"]}} =
+      assert {:error, {:load_not_allowed, [[:settings, :theme_label]]}} =
                parse(%{"action" => "list_posts_allow_author", "fields" => fields})
 
       assert {:ok, request} = parse(%{"action" => "list_posts_deny_author", "fields" => fields})
@@ -269,7 +306,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "a union member calculation is a load" do
-      assert {:error, {:load_not_allowed, ["attachment.file.label"]}} =
+      assert {:error, {:load_not_allowed, [[:attachment, :file, :label]]}} =
                parse(%{
                  "action" => "list_comments_allow_post",
                  "fields" => ["id", %{"attachment" => [%{"file" => ["url", "label"]}]}]
@@ -297,12 +334,15 @@ defmodule AshRpc.LoadRestrictionsTest do
         "fields" => ["id", %{"comments" => %{"fields" => ["id", attachment]}}]
       }
 
-      assert {:error, {:load_not_allowed, ["comments.attachment.file.label"]}} = parse(plain)
-      assert {:error, {:load_not_allowed, ["comments.attachment.file.label"]}} = parse(envelope)
+      assert {:error, {:load_not_allowed, [[:comments, :attachment, :file, :label]]}} =
+               parse(plain)
+
+      assert {:error, {:load_not_allowed, [[:comments, :attachment, :file, :label]]}} =
+               parse(envelope)
     end
 
     test "a calculation inside a limit envelope is a load" do
-      assert {:error, {:load_not_allowed, ["comments.weighted_rating"]}} =
+      assert {:error, {:load_not_allowed, [[:comments, :weighted_rating]]}} =
                parse(%{
                  "action" => "list_posts_allow_nested",
                  "fields" => [
@@ -315,7 +355,7 @@ defmodule AshRpc.LoadRestrictionsTest do
 
   describe "query envelopes" do
     test "a denied path inside an envelope is load_denied" do
-      assert {:error, {:load_denied, ["comments.post"]}} =
+      assert {:error, {:load_denied, [[:comments, :post]]}} =
                parse(%{
                  "action" => "list_posts_deny_nested",
                  "fields" => [
@@ -339,7 +379,7 @@ defmodule AshRpc.LoadRestrictionsTest do
     end
 
     test "an envelope on an unlisted relationship is load_not_allowed" do
-      assert {:error, {:load_not_allowed, ["comments"]}} =
+      assert {:error, {:load_not_allowed, [[:comments]]}} =
                parse(%{
                  "action" => "list_posts_allow_author",
                  "fields" => ["id", %{"comments" => %{"limit" => 2, "fields" => ["id"]}}]
@@ -386,7 +426,7 @@ defmodule AshRpc.LoadRestrictionsTest do
 
       assert %{
                "success" => false,
-               "errors" => [%{"type" => "load_not_allowed", "fields" => ["weighted_rating"]}]
+               "errors" => [%{"type" => "load_not_allowed", "fields" => ["weightedRating"]}]
              } =
                run(%{
                  "action" => "list_comments_allow_post",

@@ -12,7 +12,7 @@ defmodule AshRpc.Errors do
 
   require Logger
 
-  alias AshRpc.{ClientPath, ErrorBuilder, FieldFormatter}
+  alias AshRpc.{ClientPath, ErrorBuilder}
   alias AshRpc.Error, as: ErrorProtocol
   alias AshRpc.FilterInput.InvalidValue, as: InvalidFilterValue
 
@@ -93,7 +93,7 @@ defmodule AshRpc.Errors do
     transformed_error =
       cond do
         match?(%InvalidFilterValue{}, error) ->
-          invalid_filter_value(error, runtime)
+          invalid_filter_value(error, runtime, resource)
 
         profile_show_raised_errors?(runtime, domain) and is_exception(error) ->
           raised_error(error)
@@ -124,24 +124,15 @@ defmodule AshRpc.Errors do
 
   # A request error, not a raised one: the same wire error the reason gets
   # for an action input, under the value's filter path.
-  defp invalid_filter_value(
-         %InvalidFilterValue{reason: {:unknown_input, key, rel_path}, path: path},
-         runtime
-       ),
-       do: ErrorBuilder.build_error_response(runtime, {:unknown_input, key, path ++ rel_path})
+  # The path's atoms (Ash's `[:load, relationship]` prefix for a nested
+  # filter, `:filter`) are named from the resource first; the keys as sent
+  # follow unchanged.
+  defp invalid_filter_value(%InvalidFilterValue{reason: reason, path: path}, runtime, resource) do
+    {client_path, _leaf} =
+      ClientPath.resolve(path, ClientPath.root(runtime, resource, nil), runtime)
 
-  defp invalid_filter_value(%InvalidFilterValue{reason: reason, path: path}, runtime) do
-    formatter = runtime.output_formatter
-
-    runtime
-    |> ErrorBuilder.build_error_response(reason)
-    |> Map.put(:path, Enum.map(path, &filter_path_segment(&1, formatter)))
+    ErrorBuilder.input_error_at(runtime, reason, client_path)
   end
-
-  defp filter_path_segment(segment, formatter) when is_atom(segment),
-    do: FieldFormatter.format_field_name(segment, formatter)
-
-  defp filter_path_segment(segment, _formatter), do: segment
 
   # show_raised_errors? exposes the actual exception message
   defp raised_error(error) do

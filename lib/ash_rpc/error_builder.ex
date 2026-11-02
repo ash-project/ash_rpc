@@ -21,17 +21,23 @@ defmodule AshRpc.ErrorBuilder do
   - `action_not_found` *(hint)*: the `action` param names no entrypoint.
   - `missing_required_parameter` *(hint)*: the `action` or `fields` param is
     missing or empty.
+  - `invalid_action_type`: `action` is not a string.
+  - `invalid_tenant_type`: `tenant` is not a string, an integer or an atom.
+    The message asks for a string or an integer: atoms come only from
+    server-side callers.
   - `invalid_input_format`: `input` is not a map.
   - `unknown_input` *(hint)*: an `input` key is not one of the action's
     client input names, or a nested key is not a client name of its type
     (`path` locates it). One error per key.
+  - `invalid_metadata_fields_type`: `metadataFields` is not a list.
   - `unknown_metadata_fields` *(hint)*: a `metadataFields` entry is not the
     client name of a metadata field the entrypoint exposes. One error lists
     every miss in `fields` and the allowed names in `details.allowedFields`.
 
   Field selection:
 
-  - `invalid_fields_type`: `fields` is not a list.
+  - `invalid_fields_type`: `fields` is not a list (on any action that is
+    sent it).
   - `empty_fields_array`: `fields` is an empty list.
   - `unknown_field` *(hint)*: the field is not a public field of the resource
     or typed value, the relationship's destination is not exposed, or a
@@ -53,9 +59,19 @@ defmodule AshRpc.ErrorBuilder do
   - `invalid_field_format` *(hint)*: `args` were given inside a typed value,
     tuple or union member, or a calculation that requires arguments was
     selected by name only.
-  - `invalid_calculation_args` *(hint)*: a calculation's `args` are missing or
-    empty when required, given to a calculation that takes none, contain a key
-    the calculation doesn't define, or are replaced by a nested field map.
+  - `invalid_calculation_args` *(hint)*: a calculation's `args` are not a map,
+    are missing or empty when required, given to a calculation that takes
+    none, contain a key the calculation doesn't define, or are replaced by a
+    nested field map. Without the hint: a calculation `input` in a filter is
+    not a map (`path` ends at `input`).
+  - `invalid_calculation_argument`: a calculation argument in a filter is
+    missing when required (`is required`) or its type rejects the value (`is
+    invalid`); `fields` names the argument, `path` ends at the calculation's
+    `input` (whether or not one was sent). The same type comes from Ash for
+    field selection `args`.
+  - `unknown_input` *(hint)* / `invalid_union_input`: a calculation argument's
+    value has a key that is not a client name of its type, or is a malformed
+    union value. `path` runs through the calculation, `args` and the argument.
 
   Union input:
 
@@ -83,7 +99,20 @@ defmodule AshRpc.ErrorBuilder do
     type rejects.
   - `invalid_query_opts`: a query-option envelope on a field that is not a
     has_many/many_to_many relationship *(hint)*, `args` combined with query
-    options, or `page` combined with bare `limit`/`offset`.
+    options, `page` combined with bare `limit`/`offset`, a bare `limit` /
+    `offset` that is not a non-negative integer (`path` ends at the key), or
+    a relationship envelope key that is not an envelope option (`vars.keys`
+    as sent, `path` ends at the relationship).
+  - `invalid_filter`: a filter statement (the `filter` param, a list entry,
+    an `and`/`or`/`not` operand or a relationship's condition) is a string,
+    number or null, a relationship's condition is a boolean, or an `and`/`or`
+    is empty. `path` locates it.
+  - `invalid_filter_value`: an operator value has the wrong shape: a list
+    operator (`in`) given a non-list (`details.expected` `A list`), or a value
+    an operator's own type (`isNil`, `contains`) can't cast (`A boolean
+    value`, `A string value`). `path` ends at the operator. The same type,
+    with `path` `filter` and no `details.expected`, comes from Ash for a value
+    the field's type can't cast.
 
   Identity and `getBy`:
 
@@ -95,7 +124,16 @@ defmodule AshRpc.ErrorBuilder do
   - `missing_required_input` *(hint)*: required `getBy` fields are missing.
   - `unexpected_get_by_fields` *(hint)*: `getBy` contains fields the
     entrypoint does not allow.
-  - `invalid_get_by`: a `getBy` value is not a scalar.
+  - `get_by_not_supported` *(hint)*: `getBy` sent (an empty map included) to
+    an entrypoint that declares no `get_by` fields.
+  - `invalid_get_by`: `getBy` is not a map, or a `getBy` value is not a
+    scalar.
+
+  Results:
+
+  - `invalid_union_return`: a generic action declared to return a union (or
+    an array of unions) returned a value, or an item, that is not an
+    `%Ash.Union{}`. A server-side bug, not a request error.
 
   Fallbacks:
 
@@ -130,15 +168,32 @@ defmodule AshRpc.ErrorBuilder do
   """
   @spec build_error_response(AshRpc.Runtime.t(), term(), map() | nil) :: map() | list(map())
   def build_error_response(runtime, error, scope \\ nil) do
-    ctx = %{
+    error |> build(context(runtime, scope)) |> drop_nil_hint()
+  end
+
+  @doc false
+  # The error a `AshRpc.ValueFormatter.format_input/3` reason gets, moved under
+  # `prefix` (atoms take the formatter, strings and indexes are kept as sent).
+  # An unknown key's own path within the value is appended to the prefix.
+  @spec input_error_at(AshRpc.Runtime.t(), term(), list()) :: map()
+  def input_error_at(runtime, reason, prefix) do
+    reason |> build_at(prefix, context(runtime, nil)) |> drop_nil_hint()
+  end
+
+  defp build_at({:unknown_input, key, rel_path}, prefix, ctx),
+    do: build({:unknown_input, key, prefix ++ rel_path}, ctx)
+
+  defp build_at(reason, prefix, ctx),
+    do: reason |> build(ctx) |> Map.put(:path, Enum.map(prefix, &path_segment(&1, ctx.formatter)))
+
+  defp context(runtime, scope) do
+    %{
       runtime: runtime,
       scope: scope,
       formatter: runtime.output_formatter,
       selection: (scope && scope[:selection]) || :none,
       hint: Errors.stale_client_hint(runtime)
     }
-
-    error |> build(ctx) |> drop_nil_hint()
   end
 
   # Error constructors. `drift/5` marks errors a client generated from an older
@@ -176,8 +231,30 @@ defmodule AshRpc.ErrorBuilder do
     ]
   end
 
+  # A load-restriction path: an internal selection path is named from the
+  # selection root and dotted; a string is kept as given.
+  defp load_path(path, ctx) when is_list(path),
+    do: path |> selection_path(ctx) |> Enum.join(".")
+
+  defp load_path(path, _ctx), do: path
+
   defp selection_path(path, ctx),
     do: path |> ClientPath.resolve(ctx.selection, ctx.runtime) |> elem(0)
+
+  # A request param of the wrong JSON type: `path` is the param's client name,
+  # `vars.received` the value as inspected.
+  defp param_type_error(ctx, param, type, must_be, received, opts) do
+    name = param_name(param, ctx.formatter)
+
+    malformed(
+      type,
+      "#{name} parameter must be #{must_be}",
+      Keyword.get(opts, :short_message, "Invalid #{name} type"),
+      vars: %{received: inspect(received)},
+      path: [name],
+      details: %{expected: Keyword.fetch!(opts, :expected)}
+    )
+  end
 
   # Action discovery errors
   defp build({:action_not_found, action_name}, ctx) do
@@ -238,13 +315,15 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
-  defp build({:unknown_field, field, resource, path}, ctx) when is_list(path) do
+  # The resource (third element) is internal: `path` already names where the
+  # field was looked up.
+  defp build({:unknown_field, field, _resource, path}, ctx) when is_list(path) do
     drift(
       ctx,
       "unknown_field",
-      "Unknown field %{field} for resource %{resource}",
+      "Unknown field %{field}",
       "Unknown field",
-      field_opts(path, field, ctx, %{resource: inspect(resource)}) ++
+      field_opts(path, field, ctx) ++
         [
           details: %{
             suggestion:
@@ -256,6 +335,10 @@ defmodule AshRpc.ErrorBuilder do
 
   # Calculation errors
   defp build({:calculation_requires_args, field, path}, ctx) when is_list(path) do
+    {_client_path, leaf} = ClientPath.resolve(path, ctx.selection, ctx.runtime)
+    name = ClientPath.name(leaf, field, ctx.runtime)
+    args = param_name(:args, ctx.formatter)
+
     drift(
       ctx,
       "invalid_field_format",
@@ -264,7 +347,7 @@ defmodule AshRpc.ErrorBuilder do
       field_opts(path, field, ctx) ++
         [
           details: %{
-            suggestion: "Provide arguments in the format: {\"#{field}\": {\"args\": {...}}}"
+            suggestion: "Provide arguments in the format: {\"#{name}\": {\"#{args}\": {...}}}"
           }
         ]
     )
@@ -296,6 +379,16 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
+  # A calculation argument value that ValueFormatter.format_input/3 rejected:
+  # the error the reason gets for an action input, under the argument's path
+  # (`calc_path` is the selection path ending at the calculation, `key` the
+  # argument as sent).
+  defp build({:invalid_calculation_arg_value, reason, calc_path, key}, ctx)
+       when is_list(calc_path) do
+    prefix = selection_path(calc_path, ctx) ++ [param_name(:args, ctx.formatter), key]
+    build_at(reason, prefix, ctx)
+  end
+
   # Field selection requirement errors - accepts raw path and field_name
   defp build({:requires_field_selection, field_type, field, path}, ctx)
        when is_list(path) and is_atom(field) do
@@ -304,8 +397,12 @@ defmodule AshRpc.ErrorBuilder do
       "requires_field_selection",
       "%{field_type} %{field} requires field selection",
       "Field selection required",
-      field_opts(path, field, ctx, %{field_type: String.capitalize(to_string(field_type))}) ++
-        [details: %{suggestion: "Specify which fields to select from this #{field_type}"}]
+      field_opts(path, field, ctx, %{field_type: capitalize(field_kind(field_type))}) ++
+        [
+          details: %{
+            suggestion: "Specify which fields to select from this #{field_kind(field_type)}"
+          }
+        ]
     )
   end
 
@@ -322,8 +419,8 @@ defmodule AshRpc.ErrorBuilder do
       "requires_field_selection",
       "%{field_type} requires field selection",
       "Field selection required",
-      vars: %{field_type: String.capitalize(to_string(field_type))},
-      details: %{suggestion: "Specify which fields to select from this #{field_type}"}
+      vars: %{field_type: capitalize(field_kind(field_type))},
+      details: %{suggestion: "Specify which fields to select from this #{field_kind(field_type)}"}
     )
   end
 
@@ -393,7 +490,7 @@ defmodule AshRpc.ErrorBuilder do
       "unsupported_field_combination",
       "Unsupported combination of field type and specification for %{field}",
       "Unsupported field combination",
-      field_opts(path, field, ctx, %{field_type: to_string(field_type)}) ++
+      field_opts(path, field, ctx, %{field_type: field_kind(field_type)}) ++
         [
           details: %{
             field_spec: inspect(field_spec),
@@ -458,6 +555,16 @@ defmodule AshRpc.ErrorBuilder do
   end
 
   # === INPUT AND SYSTEM VALIDATION ERRORS ===
+
+  # A server-side bug: the generic action's run returned a bare member value.
+  defp build({:invalid_union_return, action_name}, _ctx) do
+    malformed(
+      "invalid_union_return",
+      "Action %{action} must return an Ash.Union value, not a bare member value",
+      "Invalid union return",
+      vars: %{action: action_name}
+    )
+  end
 
   defp build({:missing_required_parameter, parameter}, ctx) do
     drift(
@@ -528,6 +635,29 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
+  defp build({:invalid_action_type, action}, ctx),
+    do:
+      param_type_error(ctx, :action, "invalid_action_type", "a string", action,
+        expected: "The name of an RPC action"
+      )
+
+  defp build({:invalid_tenant_type, tenant}, ctx),
+    do:
+      param_type_error(ctx, :tenant, "invalid_tenant_type", "a string or an integer", tenant,
+        expected: "A string or an integer"
+      )
+
+  defp build({:invalid_metadata_fields_type, metadata_fields}, ctx),
+    do:
+      param_type_error(
+        ctx,
+        :metadata_fields,
+        "invalid_metadata_fields_type",
+        "an array",
+        metadata_fields,
+        expected: "Array of metadata field names"
+      )
+
   defp build({:empty_fields_array, _fields}, _ctx) do
     malformed("empty_fields_array", "Fields array cannot be empty", "Empty fields array",
       details: %{suggestion: "Provide at least one field name in the fields array"}
@@ -536,7 +666,9 @@ defmodule AshRpc.ErrorBuilder do
 
   # === LOAD RESTRICTION ERRORS ===
 
-  defp build({:load_not_allowed, disallowed_paths}, ctx) do
+  defp build({:load_not_allowed, paths}, ctx) do
+    disallowed_paths = Enum.map(paths, &load_path(&1, ctx))
+
     drift(
       ctx,
       "load_not_allowed",
@@ -552,7 +684,9 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
-  defp build({:load_denied, denied_paths}, ctx) do
+  defp build({:load_denied, paths}, ctx) do
+    denied_paths = Enum.map(paths, &load_path(&1, ctx))
+
     drift(
       ctx,
       "load_denied",
@@ -602,6 +736,54 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
+  # A filter statement (the filter, a list entry, an and/or/not operand or a
+  # relationship's condition) that is not a map or a list. Reported through
+  # `AshRpc.FilterInput.InvalidValue`, which supplies the path.
+  defp build(:invalid_filter_statement, _ctx) do
+    malformed("invalid_filter", "Invalid filter statement", "Invalid filter",
+      details: %{
+        expected:
+          "A map of field names, relationships and and/or/not to conditions, or a list of such maps"
+      }
+    )
+  end
+
+  # A filter operator value of the wrong shape for the operator (`in` takes a
+  # list, `isNil` a boolean). Reported through `AshRpc.FilterInput.InvalidValue`,
+  # which supplies the path. Ash's own `InvalidFilterValue` gets the same type.
+  defp build({:invalid_filter_value, expected}, _ctx) do
+    malformed("invalid_filter_value", "Invalid filter value", "Invalid filter value",
+      details: %{expected: expected}
+    )
+  end
+
+  # A calculation argument in a filter that is missing or that its type
+  # rejects (`problem` `:required` / `:invalid`), `arg` its client name.
+  # Reported through `AshRpc.FilterInput.InvalidValue`, which supplies the path
+  # (the calculation's `input`). Same shape as the `AshRpc.Error` impl for
+  # `Ash.Error.Query.InvalidCalculationArgument`, so no `details`.
+  defp build({:invalid_calculation_argument, arg, problem}, _ctx) do
+    %{
+      type: "invalid_calculation_argument",
+      message: if(problem == :required, do: "is required", else: "is invalid"),
+      short_message: "Invalid calculation argument",
+      vars: %{field: arg},
+      fields: [arg],
+      path: []
+    }
+  end
+
+  # A calculation `input` in a filter that is not a map. Reported through
+  # `AshRpc.FilterInput.InvalidValue`, which supplies the path.
+  defp build(:invalid_calculation_input, _ctx) do
+    malformed(
+      "invalid_calculation_args",
+      "Calculation input must be a map",
+      "Invalid calculation arguments",
+      details: %{expected: "Map of argument names to values"}
+    )
+  end
+
   defp build({:invalid_pagination, invalid_value}, _ctx) do
     malformed(
       "invalid_pagination",
@@ -637,6 +819,53 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
+  # A scalar identity for a composite primary key; `keys` are the key's client
+  # names.
+  defp build({:invalid_identity, %{composite_primary_key: keys}}, ctx) do
+    keys_str = Enum.join(keys, ", ")
+
+    drift(
+      ctx,
+      "invalid_identity",
+      "Identity must be a map of the primary key fields for a composite primary key: [%{expected_keys}]",
+      "Invalid identity",
+      vars: %{expected_keys: keys_str},
+      path: format_path([:identity], ctx.formatter),
+      details: %{
+        expected_keys: keys,
+        suggestion: "Provide the identity as a map of #{keys_str}"
+      }
+    )
+  end
+
+  # Identity / getBy values that are not scalar equality operands; `keys` are
+  # client names.
+  defp build({:invalid_identity, %{non_scalar_keys: keys}}, ctx) do
+    malformed(
+      "invalid_identity",
+      "Identity values must be scalar equality operands. Non-scalar value provided for: %{fields}",
+      "Invalid identity",
+      vars: %{fields: Enum.join(keys, ", ")},
+      fields: keys,
+      path: format_path([:identity], ctx.formatter),
+      details: %{suggestion: "Provide a scalar value for each identity field"}
+    )
+  end
+
+  defp build({:invalid_get_by, %{non_scalar_keys: keys}}, ctx) do
+    get_by = param_name(:get_by, ctx.formatter)
+
+    malformed(
+      "invalid_get_by",
+      "#{get_by} values must be scalar equality operands. Non-scalar value provided for: %{fields}",
+      "Invalid #{get_by} value",
+      vars: %{fields: Enum.join(keys, ", ")},
+      fields: keys,
+      path: format_path([:get_by], ctx.formatter),
+      details: %{suggestion: "Provide a scalar value for each #{get_by} field"}
+    )
+  end
+
   defp build({:invalid_identity, %{message: message}}, ctx) do
     malformed("invalid_identity", message, "Invalid identity",
       path: format_path([:identity], ctx.formatter),
@@ -650,6 +879,15 @@ defmodule AshRpc.ErrorBuilder do
     malformed("invalid_get_by", message, "Invalid #{get_by} value",
       path: format_path([:get_by], ctx.formatter),
       details: %{suggestion: "Provide a scalar value for each #{get_by} field"}
+    )
+  end
+
+  defp build({:invalid_get_by_format, get_by_value}, ctx) do
+    get_by = param_name(:get_by, ctx.formatter)
+
+    param_type_error(ctx, :get_by, "invalid_get_by", "a map", get_by_value,
+      expected: "Map of #{get_by} field names to values",
+      short_message: "Invalid #{get_by} value"
     )
   end
 
@@ -730,6 +968,42 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
+  # Keys in a relationship envelope that are not envelope options, as sent;
+  # `path` ends at the relationship.
+  defp build({:unknown_query_opts, field, keys, path}, ctx) when is_list(path) do
+    keys = Enum.map(keys, &client_name(&1, ctx.formatter))
+
+    expected =
+      [:fields, :page, :filter, :sort, :limit, :offset]
+      |> Enum.map_join(", ", &param_name(&1, ctx.formatter))
+
+    malformed(
+      "invalid_query_opts",
+      "Unknown query option keys for relationship %{field}: %{keys}",
+      "Invalid query options",
+      path
+      |> field_opts(field, ctx, %{keys: Enum.join(keys, ", ")})
+      |> Keyword.put(:path, selection_path(path ++ [field], ctx))
+      |> Keyword.put(:details, %{expected: expected})
+    )
+  end
+
+  # A bare `limit` / `offset` in a relationship envelope that is not a
+  # non-negative integer; `path` ends at the key.
+  defp build({:invalid_query_opt_value, field, key, path}, ctx) when is_list(path) do
+    key = client_name(key, ctx.formatter)
+
+    malformed(
+      "invalid_query_opts",
+      "%{key} for relationship %{field} must be a non-negative integer",
+      "Invalid query options",
+      path
+      |> field_opts(field, ctx, %{key: key})
+      |> Keyword.put(:path, selection_path(path ++ [field], ctx) ++ [key])
+      |> Keyword.put(:details, %{expected: "A non-negative integer"})
+    )
+  end
+
   defp build({:nested_pagination_not_supported, field, path}, ctx) when is_list(path) do
     drift(
       ctx,
@@ -744,6 +1018,23 @@ defmodule AshRpc.ErrorBuilder do
               "The relationship's read action has no pagination configured. Use bare limit/offset, or add pagination to the destination read action"
           }
         ]
+    )
+  end
+
+  defp build({:get_by_not_supported, :top_level, reason}, ctx) do
+    get_by = param_name(:get_by, ctx.formatter)
+
+    drift(
+      ctx,
+      "get_by_not_supported",
+      "This action does not support the #{get_by} parameter",
+      "#{get_by} not supported",
+      path: format_path([:get_by], ctx.formatter),
+      details: %{
+        reason: to_string(reason),
+        suggestion:
+          "Remove the #{get_by} parameter. It is only available on entrypoints that declare get_by fields"
+      }
     )
   end
 
@@ -906,10 +1197,27 @@ defmodule AshRpc.ErrorBuilder do
 
   defp drop_nil_hint(error), do: error
 
-  defp format_field_type(:primitive_type), do: "primitive type"
   defp format_field_type(%Ash.Info.Manifest.Type{name: name}) when is_binary(name), do: name
-  defp format_field_type(other) when is_atom(other) or is_binary(other), do: inspect(other)
+  defp format_field_type(other) when is_atom(other) or is_binary(other), do: field_kind(other)
   defp format_field_type(_), do: "unknown"
+
+  # The kind of field, in client wording, for a field selector category.
+  defp field_kind(:primitive_type), do: "primitive type"
+  defp field_kind(:embedded_resource), do: "embedded resource"
+  defp field_kind(kind) when kind in [:union, :union_attribute], do: "union"
+  defp field_kind(:field_constrained_type), do: "typed value"
+
+  defp field_kind(kind)
+       when kind in [:calculation, :calculation_complex, :calculation_with_args],
+       do: "calculation"
+
+  defp field_kind(kind) when is_atom(kind),
+    do: kind |> Atom.to_string() |> String.replace("_", " ")
+
+  defp field_kind(kind), do: to_string(kind)
+
+  defp capitalize(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
+  defp capitalize(other), do: other
 
   # Fixed-vocabulary paths (`getBy`, `identity`, `metadataFields`, `page`).
   defp format_path(path, formatter) when is_list(path) do

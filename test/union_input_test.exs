@@ -37,6 +37,93 @@ defmodule AshRpc.UnionInputTest do
     end
   end
 
+  describe "invalid_union_input in calculation arguments and filter values" do
+    defp run(params), do: AshRpc.run_action(@profile, %AshRpc.Context{}, params)
+
+    defp no_member_key(path) do
+      %{
+        "type" => "invalid_union_input",
+        "message" => "Union input map does not contain any valid member key",
+        "shortMessage" => "Invalid union input",
+        "vars" => %{"expectedMembers" => "number, label"},
+        "fields" => [],
+        "path" => path,
+        "details" => %{
+          "expectedMembers" => ["number", "label"],
+          "suggestion" => "Provide exactly one of the following keys: %{expectedMembers}",
+          "hint" => AshRpc.Profile.default_stale_client_hint()
+        }
+      }
+    end
+
+    defp multiple_member_keys(path) do
+      %{
+        "type" => "invalid_union_input",
+        "message" => "Union input map contains multiple member keys: %{foundKeys}",
+        "shortMessage" => "Invalid union input",
+        "vars" => %{"expectedMembers" => "number, label", "foundKeys" => "number, label"},
+        "fields" => [],
+        "path" => path,
+        "details" => %{
+          "suggestion" =>
+            "Provide exactly one member key, not multiple. Choose one of: %{expectedMembers}"
+        }
+      }
+    end
+
+    test "a calculation argument value in field selection" do
+      for {choice, expected} <- [
+            {%{"bogus" => 1}, no_member_key(["choiceLabel", "args", "choice"])},
+            {%{"number" => 1, "label" => "x"},
+             multiple_member_keys(["choiceLabel", "args", "choice"])}
+          ] do
+        fields = ["id", %{"choiceLabel" => %{"args" => %{"choice" => choice}}}]
+
+        assert %{"success" => false, "errors" => [^expected]} =
+                 run(%{"action" => "list_ledgers", "fields" => fields})
+      end
+    end
+
+    test "a calculation argument value in a filter input" do
+      for {choice, expected} <- [
+            {%{"bogus" => 1}, no_member_key(["filter", "choiceLabel", "input", "choice"])},
+            {%{"number" => 1, "label" => "x"},
+             multiple_member_keys(["filter", "choiceLabel", "input", "choice"])}
+          ] do
+        filter = %{"choiceLabel" => %{"input" => %{"choice" => choice}, "eq" => "1"}}
+
+        assert %{"success" => false, "errors" => [^expected]} =
+                 run(%{"action" => "list_ledgers", "fields" => ["id"], "filter" => filter})
+      end
+    end
+
+    test "a filter operator value" do
+      for {value, expected} <- [
+            {%{"bogus" => 1}, no_member_key(["filter", "count", "eq"])},
+            {%{"number" => 1, "label" => "x"}, multiple_member_keys(["filter", "count", "eq"])}
+          ] do
+        filter = %{"count" => %{"eq" => value}}
+
+        assert %{"success" => false, "errors" => [^expected]} =
+                 run(%{"action" => "list_ledgers", "fields" => ["id"], "filter" => filter})
+      end
+    end
+
+    test "valid union values select and filter" do
+      create_ledger(%{"number" => 3})
+
+      fields = ["id", %{"choiceLabel" => %{"args" => %{"choice" => %{"label" => "x"}}}}]
+
+      assert %{"success" => true, "data" => [%{"choiceLabel" => "x"} | _]} =
+               run(%{"action" => "list_ledgers", "fields" => fields})
+
+      filter = %{"choiceLabel" => %{"input" => %{"choice" => %{"number" => 7}}, "eq" => "7"}}
+
+      assert %{"success" => true, "data" => [_ | _]} =
+               run(%{"action" => "list_ledgers", "fields" => ["id"], "filter" => filter})
+    end
+  end
+
   describe "invalid_union_input" do
     test "a bare value is not_a_map" do
       assert %{"success" => false, "errors" => [error]} = create_ledger(3)

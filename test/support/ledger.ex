@@ -29,6 +29,17 @@ defmodule AshRpc.Test.Ledger do
       ]
   end
 
+  calculations do
+    # A union argument, for union-input errors in calculation args and inputs.
+    calculate :choice_label, :string, AshRpc.Test.Calculations.ChoiceLabel do
+      public? true
+
+      argument :choice, :union,
+        allow_nil?: false,
+        constraints: [types: [number: [type: :integer], label: [type: :string]]]
+    end
+  end
+
   actions do
     defaults [:read, create: [:count, :labels, :entries]]
 

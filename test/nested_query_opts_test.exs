@@ -758,6 +758,94 @@ defmodule AshRpc.NestedQueryOptsTest do
              }
     end
 
+    test "a limit or offset that is not a non-negative integer is invalid_query_opts at the key" do
+      for {key, value} <- [{"limit", "abc"}, {"limit", -1}, {"limit", 1.5}, {"offset", "x"}] do
+        nested = %{"comments" => %{key => value, "fields" => ["id"]}}
+
+        assert {:error, {:invalid_query_opt_value, :comments, atom_key, []}} =
+                 parse(%{"action" => "list_posts", "fields" => ["id", nested]})
+
+        assert atom_key == String.to_existing_atom(key)
+
+        assert gate_error("list_posts", nested) == %{
+                 "type" => "invalid_query_opts",
+                 "message" => "%{key} for relationship %{field} must be a non-negative integer",
+                 "shortMessage" => "Invalid query options",
+                 "vars" => %{"field" => "comments", "key" => key},
+                 "fields" => ["comments"],
+                 "path" => ["comments", key],
+                 "details" => %{"expected" => "A non-negative integer"}
+               }
+      end
+    end
+
+    # Unknown envelope keys used to be dropped silently.
+    test "unknown envelope keys are invalid_query_opts, as sent, at the relationship" do
+      for {nested, keys} <- [
+            {%{"comments" => %{"fields" => ["id"], "bogus" => 5}}, ["bogus"]},
+            {%{"comments" => %{"limit" => 1, "fields" => ["id"], "Sort" => "x", "zap" => 1}},
+             ["Sort", "zap"]}
+          ] do
+        assert {:error, {:unknown_query_opts, :comments, ^keys, []}} =
+                 parse(%{"action" => "list_posts", "fields" => ["id", nested]})
+
+        assert gate_error("list_posts", nested) == %{
+                 "type" => "invalid_query_opts",
+                 "message" => "Unknown query option keys for relationship %{field}: %{keys}",
+                 "shortMessage" => "Invalid query options",
+                 "vars" => %{"field" => "comments", "keys" => Enum.join(keys, ", ")},
+                 "fields" => ["comments"],
+                 "path" => ["comments"],
+                 "details" => %{
+                   "expected" => "fields, page, filter, sort, limit, offset"
+                 }
+               }
+      end
+    end
+
+    test "unknown envelope keys two relationships deep name the whole path" do
+      nested = %{"author" => [%{"posts" => %{"fields" => ["id"], "bogus" => 1}}]}
+
+      assert Map.take(gate_error("list_posts", nested), ~w(fields path vars)) == %{
+               "fields" => ["author.posts"],
+               "path" => ["author", "posts"],
+               "vars" => %{"field" => "author.posts", "keys" => "bogus"}
+             }
+    end
+
+    test "a bad limit two relationships deep names the whole path" do
+      nested = %{
+        "author" => [%{"posts" => %{"limit" => "x", "fields" => ["id"]}}]
+      }
+
+      error = gate_error("list_posts", nested)
+
+      assert Map.take(error, ~w(fields path vars)) == %{
+               "fields" => ["author.posts"],
+               "path" => ["author", "posts", "limit"],
+               "vars" => %{"field" => "author.posts", "key" => "limit"}
+             }
+    end
+
+    test "limit and offset of 0 are accepted" do
+      seed_post(2)
+
+      assert %{"comments" => []} =
+               list_post_with(%{"comments" => %{"limit" => 0, "offset" => 0, "fields" => ["id"]}})
+    end
+
+    test "an envelope whose fields is not a list is unsupported_field_combination" do
+      for fields <- ["id", %{"id" => true}] do
+        nested = %{"comments" => %{"fields" => fields, "limit" => 1}}
+
+        assert parse(%{"action" => "list_posts", "fields" => ["id", nested]}) ==
+                 {:error, {:unsupported_field_combination, :relationship, :comments, fields, []}}
+      end
+
+      assert %{"type" => "unsupported_field_combination", "fields" => ["comments"]} =
+               gate_error("list_posts", %{"comments" => %{"fields" => "id"}})
+    end
+
     test "page on a relationship whose read action has no pagination is pagination_not_supported" do
       # Every to-many fixture relationship reads through a paginated action, so
       # the decoration of Author.posts is changed to an unpaginated read.
@@ -996,7 +1084,7 @@ defmodule AshRpc.NestedQueryOptsTest do
                "type" => "unknown_field",
                "fields" => ["secrets"],
                "path" => [],
-               "vars" => %{"field" => "secrets", "resource" => "AshRpc.Test.Post"}
+               "vars" => %{"field" => "secrets"}
              }
 
       assert error["details"]["hint"] == hint()
@@ -1229,6 +1317,28 @@ defmodule AshRpc.NestedQueryOptsTest do
                  },
                  manifest: manifest
                )
+
+      # Next to a client-named key, a lowercase one is an unknown envelope key
+      assert %{"SUCCESS" => false, "ERRORS" => [error]} =
+               AshRpc.run_action(
+                 @profile,
+                 ctx(),
+                 %{
+                   "ACTION" => "list_posts",
+                   "FIELDS" => [
+                     "ID",
+                     %{"COMMENTS" => %{"FIELDS" => ["RATING"], "sort" => "-RATING"}}
+                   ]
+                 },
+                 manifest: manifest
+               )
+
+      assert %{
+               "TYPE" => "invalid_query_opts",
+               "VARS" => %{"FIELD" => "COMMENTS", "KEYS" => "sort"},
+               "PATH" => ["COMMENTS"],
+               "DETAILS" => %{"EXPECTED" => "FIELDS, PAGE, FILTER, SORT, LIMIT, OFFSET"}
+             } = error
     end
   end
 end

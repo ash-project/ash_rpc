@@ -44,6 +44,8 @@ defmodule AshRpc.Pipeline do
 
   alias AshRpc.{ErrorFormatter, FieldFormatter, Introspection, LoadRestrictions}
 
+  require Logger
+
   @page_keys [:limit, :offset, :count, :after, :before]
 
   @doc """
@@ -62,12 +64,12 @@ defmodule AshRpc.Pipeline do
       |> resolve_param_keys(runtime)
       |> Map.put_new(:input, %{})
 
-    ctx = AshRpc.Context.put_tenant_param(ctx, normalized_params[:tenant])
-    actor = ctx.actor
-    tenant = ctx.tenant
-    context = ctx.context
-
     with {:ok, entrypoint} <- discover_entrypoint(runtime, normalized_params, opts),
+         :ok <- validate_tenant_param(normalized_params[:tenant]),
+         ctx = AshRpc.Context.put_tenant_param(ctx, normalized_params[:tenant]),
+         actor = ctx.actor,
+         tenant = ctx.tenant,
+         context = ctx.context,
          resource = entrypoint.resource,
          action =
            runtime
@@ -168,9 +170,11 @@ defmodule AshRpc.Pipeline do
   def process_result({:error, error}, %Request{}), do: {:error, error}
 
   def process_result(ash_result, %Request{} = request) do
-    if untyped_return?(request.action, request.runtime),
-      do: {:ok, ash_result},
-      else: process_typed_result(ash_result, request)
+    cond do
+      untyped_return?(request.action, request.runtime) -> {:ok, ash_result}
+      union_return(request.action, request.runtime) -> process_union_result(ash_result, request)
+      true -> process_typed_result(ash_result, request)
+    end
   end
 
   # A generic action whose declared return has no shape: its value is the response.
@@ -178,6 +182,69 @@ defmodule AshRpc.Pipeline do
     do: Introspection.untyped_data_type?(returns, runtime.type_lookup)
 
   defp untyped_return?(_action, _runtime), do: false
+
+  # A generic action returning a union (`:single`) or an array of unions (`:array`).
+  defp union_return(%{type: :action, returns: returns}, runtime) do
+    case Introspection.classify_type(returns, runtime) do
+      {:union, _type} ->
+        :single
+
+      {:array, item_type} ->
+        if match?({:union, _}, Introspection.classify_type(item_type, runtime)), do: :array
+
+      _ ->
+        nil
+    end
+  end
+
+  defp union_return(_action, _runtime), do: nil
+
+  # The run must return `%Ash.Union{}` values: a bare member value doesn't say
+  # which member it is, so it is reported instead of guessed.
+  # A server-side bug, so it is logged; with the value's type only, since the
+  # value may hold data the client must not see.
+  defp process_union_result(result, %Request{} = request) do
+    values =
+      case union_return(request.action, request.runtime) do
+        :single -> [result]
+        :array -> if is_list(result), do: result, else: []
+      end
+
+    case Enum.filter(values, &bare_union_value?/1) do
+      [value | _] ->
+        Logger.error(
+          "Generic action #{inspect(request.resource)}.#{request.action.name} " <>
+            "(entrypoint #{request.entrypoint.name}) returned #{value_kind(value)} where its " <>
+            "union return type needs an %Ash.Union{}"
+        )
+
+        {:error, {:invalid_union_return, request.entrypoint.name}}
+
+      [] ->
+        {:ok,
+         ResultProcessor.extract_value(
+           result,
+           request.action.returns,
+           [],
+           request.extraction_template,
+           request.runtime
+         )}
+    end
+  end
+
+  defp bare_union_value?(nil), do: false
+  defp bare_union_value?(%Ash.Union{}), do: false
+  defp bare_union_value?(_value), do: true
+
+  defp value_kind(%module{}), do: "a #{inspect(module)} struct"
+  defp value_kind(value) when is_binary(value), do: "a string"
+  defp value_kind(value) when is_integer(value), do: "an integer"
+  defp value_kind(value) when is_float(value), do: "a float"
+  defp value_kind(value) when is_atom(value), do: "an atom"
+  defp value_kind(value) when is_map(value), do: "a map"
+  defp value_kind(value) when is_list(value), do: "a list"
+  defp value_kind(value) when is_tuple(value), do: "a tuple"
+  defp value_kind(_value), do: "a non-union value"
 
   defp process_typed_result(ash_result, %Request{} = request) do
     case ash_result do
@@ -334,9 +401,21 @@ defmodule AshRpc.Pipeline do
               {:ok, entrypoint} -> {:ok, entrypoint}
               :error -> {:error, {:action_not_found, name}}
             end
+
+          name ->
+            {:error, {:invalid_action_type, name}}
         end
     end
   end
+
+  # The `tenant` request param is passed to Ash, which converts strings,
+  # integers and atoms (`Ash.ToTenant`); anything else can't be a tenant.
+  # The transport tenant is not a request param and is not checked.
+  defp validate_tenant_param(tenant)
+       when is_binary(tenant) or is_integer(tenant) or is_atom(tenant),
+       do: :ok
+
+  defp validate_tenant_param(tenant), do: {:error, {:invalid_tenant_type, tenant}}
 
   defp augment_action(action, %AshRpc.Entrypoint{get?: get?, get_by: get_by}) do
     if get? or get_by != [], do: %{action | get?: true}, else: action
@@ -392,6 +471,10 @@ defmodule AshRpc.Pipeline do
     end
   end
 
+  defp resolve_show_metadata(requested, _entrypoint, _action, _runtime)
+       when not is_list(requested) and not is_nil(requested),
+       do: {:error, {:invalid_metadata_fields_type, requested}}
+
   defp resolve_show_metadata(_requested, entrypoint, action, _runtime) do
     exposed = entrypoint.exposed_metadata_fields
 
@@ -414,8 +497,12 @@ defmodule AshRpc.Pipeline do
     end)
   end
 
-  # Atom names come from server-side callers that already hold internal names
-  defp metadata_field(field, _names) when is_atom(field), do: {:ok, field}
+  # Atom names come from server-side callers that already hold internal names.
+  # JSON null and booleans decode to atoms but are not names.
+  defp metadata_field(field, _names)
+       when is_atom(field) and not is_boolean(field) and not is_nil(field),
+       do: {:ok, field}
+
   defp metadata_field(field, names) when is_binary(field), do: Map.fetch(names, field)
   defp metadata_field(_field, _names), do: :error
 
@@ -554,65 +641,80 @@ defmodule AshRpc.Pipeline do
   defp parse_get_by(params, entrypoint, resource, runtime) do
     rpc_get_by = entrypoint.get_by
 
-    if rpc_get_by == [] do
-      {:ok, nil}
-    else
-      raw_get_by = params[:get_by] || %{}
+    cond do
+      rpc_get_by == [] and is_nil(params[:get_by]) ->
+        {:ok, nil}
 
-      output_formatter = runtime.output_formatter
-      res_struct = Map.get(runtime.resource_lookup, resource)
+      # Present (an empty map included) where the entrypoint has no get_by
+      # fields: it would otherwise be ignored.
+      rpc_get_by == [] ->
+        {:error, {:get_by_not_supported, :top_level, :unsupported}}
 
-      {parsed_get_by, unknown} =
-        resolve_keys(raw_get_by, &ClientNames.resource_field(runtime, resource, &1))
+      true ->
+        case params[:get_by] || %{} do
+          raw_get_by when is_map(raw_get_by) and not is_struct(raw_get_by) ->
+            resolve_get_by(raw_get_by, rpc_get_by, resource, runtime)
 
-      allowed_fields = MapSet.new(rpc_get_by)
-      provided_fields = parsed_get_by |> Map.keys() |> MapSet.new()
+          raw_get_by ->
+            {:error, {:invalid_get_by_format, raw_get_by}}
+        end
+    end
+  end
 
-      missing_fields = MapSet.difference(allowed_fields, provided_fields) |> MapSet.to_list()
+  defp resolve_get_by(raw_get_by, rpc_get_by, resource, runtime) do
+    output_formatter = runtime.output_formatter
+    res_struct = Map.get(runtime.resource_lookup, resource)
 
-      extra_fields =
-        (MapSet.difference(provided_fields, allowed_fields) |> MapSet.to_list()) ++ unknown
+    {parsed_get_by, unknown} =
+      resolve_keys(raw_get_by, &ClientNames.resource_field(runtime, resource, &1))
 
-      cond do
-        not Enum.empty?(extra_fields) ->
-          # Unknown keys are reported as sent.
-          formatted_extra =
-            Enum.map(extra_fields, fn
-              name when is_binary(name) -> name
-              name -> FieldFormatter.format_field_for_client(name, res_struct, output_formatter)
-            end)
+    allowed_fields = MapSet.new(rpc_get_by)
+    provided_fields = parsed_get_by |> Map.keys() |> MapSet.new()
 
-          formatted_allowed =
-            Enum.map(
-              rpc_get_by,
-              &FieldFormatter.format_field_for_client(&1, res_struct, output_formatter)
-            )
+    missing_fields = MapSet.difference(allowed_fields, provided_fields) |> MapSet.to_list()
 
-          {:error, {:unexpected_get_by_fields, formatted_extra, formatted_allowed}}
+    extra_fields =
+      (MapSet.difference(provided_fields, allowed_fields) |> MapSet.to_list()) ++ unknown
 
-        not Enum.empty?(missing_fields) ->
-          formatted_missing =
-            Enum.map(
-              missing_fields,
-              &FieldFormatter.format_field_for_client(&1, res_struct, output_formatter)
-            )
+    cond do
+      not Enum.empty?(extra_fields) ->
+        # Unknown keys are reported as sent.
+        formatted_extra =
+          Enum.map(extra_fields, fn
+            name when is_binary(name) -> name
+            name -> FieldFormatter.format_field_for_client(name, res_struct, output_formatter)
+          end)
 
-          {:error, {:missing_get_by_fields, formatted_missing}}
+        formatted_allowed =
+          Enum.map(
+            rpc_get_by,
+            &FieldFormatter.format_field_for_client(&1, res_struct, output_formatter)
+          )
 
-        true ->
-          validated_get_by =
-            Enum.reduce(rpc_get_by, %{}, fn field, acc ->
-              value = Map.get(parsed_get_by, field)
+        {:error, {:unexpected_get_by_fields, formatted_extra, formatted_allowed}}
 
-              if lookup_field_exists?(resource, field, runtime) do
-                Map.put(acc, field, value)
-              else
-                acc
-              end
-            end)
+      not Enum.empty?(missing_fields) ->
+        formatted_missing =
+          Enum.map(
+            missing_fields,
+            &FieldFormatter.format_field_for_client(&1, res_struct, output_formatter)
+          )
 
-          validate_scalar_get_by(validated_get_by, output_formatter)
-      end
+        {:error, {:missing_get_by_fields, formatted_missing}}
+
+      true ->
+        validated_get_by =
+          Enum.reduce(rpc_get_by, %{}, fn field, acc ->
+            value = Map.get(parsed_get_by, field)
+
+            if lookup_field_exists?(resource, field, runtime) do
+              Map.put(acc, field, value)
+            else
+              acc
+            end
+          end)
+
+        validate_scalar_get_by(validated_get_by, res_struct, output_formatter)
     end
   end
 
@@ -718,7 +820,7 @@ defmodule AshRpc.Pipeline do
   end
 
   defp execute_update_action(%Request{} = request, opts) do
-    with {:ok, query} <- bulk_target_query(request, opts) do
+    with {:ok, query} <- target_query(request, opts) do
       case Ash.bulk_update(query, request.action.name, request.input, bulk_opts(request, opts)) do
         %Ash.BulkResult{status: :success, records: [record]} ->
           {:ok, record}
@@ -733,7 +835,7 @@ defmodule AshRpc.Pipeline do
   end
 
   defp execute_destroy_action(%Request{} = request, opts) do
-    with {:ok, query} <- bulk_target_query(request, opts) do
+    with {:ok, query} <- target_query(request, opts) do
       case Ash.bulk_destroy(query, request.action.name, request.input, bulk_opts(request, opts)) do
         %Ash.BulkResult{status: :success, records: [record]} -> {:ok, record}
         %Ash.BulkResult{status: :success, records: []} -> not_found(request)
@@ -742,9 +844,13 @@ defmodule AshRpc.Pipeline do
     end
   end
 
-  # Single-record update/destroy runs as a bulk action over a query narrowed to
-  # the requested identity.
-  defp bulk_target_query(%Request{} = request, opts) do
+  @doc false
+  # The single-record update/destroy target: a query narrowed to the requested
+  # identity (none for an `identities: []` entrypoint, whose read action scopes
+  # it). `run_action` runs the bulk action over it; `AshRpc.Validation` reads
+  # the record from it. `{:error, reason}` is a pipeline reason.
+  @spec target_query(Request.t(), keyword()) :: {:ok, Ash.Query.t()} | {:error, term()}
+  def target_query(%Request{} = request, opts) do
     request.resource
     |> Ash.Query.set_tenant(opts[:tenant])
     |> Ash.Query.set_context(opts[:context] || %{})
@@ -850,18 +956,10 @@ defmodule AshRpc.Pipeline do
   end
 
   # See non_scalar_keys/2: get_by lookups are equality-only.
-  defp validate_scalar_get_by(get_by, output_formatter) do
-    case non_scalar_keys(get_by, output_formatter) do
-      nil ->
-        {:ok, get_by}
-
-      formatted_keys ->
-        {:error,
-         {:invalid_get_by,
-          %{
-            message:
-              "#{FieldFormatter.format_field_name("get_by", output_formatter)} values must be scalar equality operands. Non-scalar value provided for: #{formatted_keys}"
-          }}}
+  defp validate_scalar_get_by(get_by, res_struct, output_formatter) do
+    case non_scalar_keys(get_by, res_struct, output_formatter) do
+      [] -> {:ok, get_by}
+      keys -> {:error, {:invalid_get_by, %{non_scalar_keys: keys}}}
     end
   end
 
@@ -898,21 +996,9 @@ defmodule AshRpc.Pipeline do
       nil ->
         base_response
 
+      # Already keyed by client names and formatted (format_metadata/2).
       meta when is_map(meta) ->
-        # Values were already formatted via ValueFormatter in add_mutation_metadata,
-        # and mapped metadata keys are already binary client names from format_metadata/2,
-        # so only unmapped atom keys need to be formatted here.
-        formatted_metadata =
-          Enum.into(meta, %{}, fn
-            {key, value} when is_binary(key) -> {key, value}
-            {key, value} -> {FieldFormatter.format_field_name(key, formatter), value}
-          end)
-
-        Map.put(
-          base_response,
-          FieldFormatter.format_field_name("metadata", formatter),
-          formatted_metadata
-        )
+        Map.put(base_response, FieldFormatter.format_field_name("metadata", formatter), meta)
     end
   end
 
@@ -1044,7 +1130,13 @@ defmodule AshRpc.Pipeline do
     RequestedFieldsProcessor.process(runtime, resource, action_name, requested_fields, opts)
   end
 
-  defp validate_fields_if_needed(_params, false), do: :ok
+  # `fields` is optional here, but when sent it must be a list.
+  defp validate_fields_if_needed(params, false) do
+    case params[:fields] do
+      fields when is_nil(fields) or is_list(fields) -> :ok
+      fields -> {:error, {:invalid_fields_type, fields}}
+    end
+  end
 
   defp validate_fields_if_needed(params, true) do
     fields = params[:fields]
@@ -1064,18 +1156,6 @@ defmodule AshRpc.Pipeline do
     end
   end
 
-  defp primary_key_filter(resource, primary_key_value, runtime) do
-    primary_key_fields = lookup_primary_key(resource, runtime)
-
-    if is_map(primary_key_value) do
-      Enum.map(primary_key_fields, fn field ->
-        {field, Map.get(primary_key_value, field)}
-      end)
-    else
-      [{List.first(primary_key_fields), primary_key_value}]
-    end
-  end
-
   defp maybe_apply_identity_filter(query, _identity, [], _runtime), do: {:ok, query}
 
   defp maybe_apply_identity_filter(query, identity, identities, runtime)
@@ -1083,7 +1163,7 @@ defmodule AshRpc.Pipeline do
     resource = query.resource
 
     with {:ok, filter} <- build_identity_filter(resource, identity, identities, runtime),
-         :ok <- validate_scalar_identity_filter(filter, runtime) do
+         :ok <- validate_scalar_identity_filter(filter, resource, runtime) do
       {:ok, Ash.Query.do_filter(query, filter)}
     end
   end
@@ -1107,8 +1187,11 @@ defmodule AshRpc.Pipeline do
       }}}
   end
 
+  # The keys must be exactly one identity's keys (by client name): a key that
+  # is not a client name, or one outside the identity, matches none.
   defp build_identity_filter(resource, identity, identities, runtime) when is_map(identity) do
     parsed_identity = parse_identity_input(resource, identity, runtime)
+    provided = parsed_identity |> Map.keys() |> MapSet.new()
 
     result =
       Enum.find_value(identities, fn
@@ -1116,8 +1199,8 @@ defmodule AshRpc.Pipeline do
           primary_key_attrs = lookup_primary_key(resource, runtime)
 
           if length(primary_key_attrs) > 1 &&
-               Enum.all?(primary_key_attrs, &Map.has_key?(parsed_identity, &1)) do
-            {:ok, primary_key_filter(resource, parsed_identity, runtime)}
+               MapSet.equal?(provided, MapSet.new(primary_key_attrs)) do
+            {:ok, Enum.map(primary_key_attrs, &{&1, Map.fetch!(parsed_identity, &1)})}
           else
             nil
           end
@@ -1125,8 +1208,8 @@ defmodule AshRpc.Pipeline do
         identity_name ->
           identity_info = lookup_identity(resource, identity_name, runtime)
 
-          if identity_info && Enum.all?(identity_info.keys, &Map.has_key?(parsed_identity, &1)) do
-            {:ok, build_named_identity_filter(identity_info, parsed_identity)}
+          if identity_info && MapSet.equal?(provided, MapSet.new(identity_info.keys)) do
+            {:ok, Enum.map(identity_info.keys, &{&1, Map.fetch!(parsed_identity, &1)})}
           else
             nil
           end
@@ -1140,12 +1223,14 @@ defmodule AshRpc.Pipeline do
         output_formatter = runtime.output_formatter
         res_struct = Map.get(runtime.resource_lookup, resource)
 
+        # The keys as sent; an atom key (a server-side caller) takes its
+        # decorated client name.
         provided_keys =
-          parsed_identity
+          identity
           |> Map.keys()
           |> Enum.map(fn
             key when is_binary(key) -> key
-            key -> FieldFormatter.format_field_name(key, output_formatter)
+            key -> FieldFormatter.format_field_for_client(key, res_struct, output_formatter)
           end)
 
         expected_keys =
@@ -1163,18 +1248,34 @@ defmodule AshRpc.Pipeline do
     end
   end
 
-  # Primary key passed directly (non-composite) or as object (composite)
+  # A primary key passed directly. A composite primary key must be a map: a
+  # scalar would match on its first field only.
   defp build_identity_filter(resource, identity, identities, runtime)
        when not is_nil(identity) do
-    if :_primary_key in identities do
-      {:ok, primary_key_filter(resource, identity, runtime)}
-    else
-      {:error,
-       {:invalid_identity,
-        %{
-          message: "Primary key identity not allowed for this action",
-          identities: identities
-        }}}
+    primary_key = lookup_primary_key(resource, runtime)
+
+    cond do
+      :_primary_key in identities and length(primary_key) > 1 ->
+        res_struct = Map.get(runtime.resource_lookup, resource)
+
+        expected_keys =
+          Enum.map(
+            primary_key,
+            &FieldFormatter.format_field_for_client(&1, res_struct, runtime.output_formatter)
+          )
+
+        {:error, {:invalid_identity, %{composite_primary_key: expected_keys}}}
+
+      :_primary_key in identities ->
+        {:ok, [{List.first(primary_key), identity}]}
+
+      true ->
+        {:error,
+         {:invalid_identity,
+          %{
+            message: "Primary key identity not allowed for this action",
+            identities: identities
+          }}}
     end
   end
 
@@ -1215,7 +1316,7 @@ defmodule AshRpc.Pipeline do
   end
 
   # Identity keys resolve to resource fields by client name; a miss keeps the
-  # client's string and fails the identity match.
+  # client's string, so it matches no identity.
   defp parse_identity_input(resource, identity, runtime) when is_map(identity) do
     Map.new(identity, fn {key, value} ->
       case ClientNames.resource_field(runtime, resource, key) do
@@ -1226,18 +1327,12 @@ defmodule AshRpc.Pipeline do
   end
 
   # See non_scalar_keys/2: identity lookups are equality-only.
-  defp validate_scalar_identity_filter(filter, runtime) do
-    case non_scalar_keys(filter, runtime.output_formatter) do
-      nil ->
-        :ok
+  defp validate_scalar_identity_filter(filter, resource, runtime) do
+    res_struct = Map.get(runtime.resource_lookup, resource)
 
-      formatted_keys ->
-        {:error,
-         {:invalid_identity,
-          %{
-            message:
-              "Identity values must be scalar equality operands. Non-scalar value provided for: #{formatted_keys}"
-          }}}
+    case non_scalar_keys(filter, res_struct, runtime.output_formatter) do
+      [] -> :ok
+      keys -> {:error, {:invalid_identity, %{non_scalar_keys: keys}}}
     end
   end
 
@@ -1248,37 +1343,15 @@ defmodule AshRpc.Pipeline do
   # an arbitrary predicate. JSON input only ever yields
   # string/number/boolean/nil/list/map, so "not a map and not a list" cleanly
   # rejects operator maps while preserving legitimate operands (including false).
-  # Returns the offending keys formatted for the client, or nil if all are scalar.
-  defp non_scalar_keys(pairs, output_formatter) do
-    case Enum.reject(pairs, fn {_key, value} -> scalar_identity_value?(value) end) do
-      [] ->
-        nil
-
-      invalid ->
-        Enum.map_join(
-          invalid,
-          ", ",
-          &FieldFormatter.format_field_name(elem(&1, 0), output_formatter)
-        )
+  # Returns the offending keys by their decorated client names ([] if all are
+  # scalar).
+  defp non_scalar_keys(pairs, res_struct, output_formatter) do
+    for {key, value} <- pairs, not scalar_identity_value?(value) do
+      FieldFormatter.format_field_for_client(key, res_struct, output_formatter)
     end
   end
 
   defp scalar_identity_value?(value), do: not (is_map(value) or is_list(value))
-
-  defp build_named_identity_filter(identity, parsed_identity) when is_map(parsed_identity) do
-    # Build filter from the identity's keys using values from parsed_identity.
-    # Map.fetch, not ||: a legitimate `false` identity value must not fall
-    # through to the other key form.
-    Enum.map(identity.keys, fn key ->
-      value =
-        case Map.fetch(parsed_identity, key) do
-          {:ok, value} -> value
-          :error -> Map.get(parsed_identity, Atom.to_string(key))
-        end
-
-      {key, value}
-    end)
-  end
 
   defp authorize_bulk_with(runtime, resource) do
     case AshRpc.Manifest.Custom.authorize_bulk_strategy(
@@ -1371,20 +1444,22 @@ defmodule AshRpc.Pipeline do
   # type-driven dispatch as attribute/calculation values: typed maps get their
   # nested keys camelized, unconstrained `:map` / `{:array, :map}` metadata
   # passes through unchanged (so caller-provided keys like `_id` survive).
+  # Each field is keyed by its client name, a binary key that goes out as-is:
+  # read metadata merged into a record never takes the key of a field it
+  # shares an internal name with.
   defp format_metadata(metadata_map, %Request{} = request) do
     metadata_defs = request.action.metadata || []
 
-    Enum.reduce(request.show_metadata, %{}, fn metadata_field, acc ->
-      mapped_field_name =
-        case Map.get(request.entrypoint.metadata_field_names, metadata_field) do
-          mapped when is_binary(mapped) -> mapped
-          _ -> metadata_field
-        end
+    client_names =
+      request.entrypoint
+      |> client_metadata_names(request.runtime)
+      |> Map.new(fn {client, field} -> {field, client} end)
 
+    Enum.reduce(request.show_metadata, %{}, fn metadata_field, acc ->
       value = Map.get(metadata_map, metadata_field)
       type = Enum.find_value(metadata_defs, &(&1.name == metadata_field && &1.type))
       formatted_value = ValueFormatter.format(value, type, [], :output, request.runtime)
-      Map.put(acc, mapped_field_name, formatted_value)
+      Map.put(acc, Map.fetch!(client_names, metadata_field), formatted_value)
     end)
   end
 end

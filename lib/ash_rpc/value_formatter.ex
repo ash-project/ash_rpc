@@ -18,6 +18,7 @@ defmodule AshRpc.ValueFormatter do
   `%Ash.Info.Manifest.Type{}` which contains all type information needed.
   """
 
+  alias Ash.Info.Manifest
   alias Ash.Info.Manifest.Type
   alias AshRpc.{ClientNames, ClientPath, FieldFormatter, Introspection}
   alias AshRpc.Manifest.Custom
@@ -81,6 +82,47 @@ defmodule AshRpc.ValueFormatter do
     :throw, reason when is_tuple(reason) and elem(reason, 0) == :invalid_union_input ->
       {:error, [reason]}
   end
+
+  @doc """
+  Formats a calculation's argument map as client input: each key resolves
+  with `AshRpc.ClientNames.calc_arg/4` and each value goes through
+  `format_input/3` with its argument's manifest type.
+
+  Returns `{args, errors}`. A key that is not a client name is kept as sent
+  (as `ClientNames.calc_args/4` does), for the caller to reject. `errors` are
+  `{key_as_sent, reason}` pairs for the values `format_input/3` rejected; their
+  arguments keep the value as sent. A non-map `args` is returned unchanged.
+  """
+  @spec format_calculation_args(AshRpc.Runtime.t(), module(), Manifest.Field.t(), term()) ::
+          {term(), [{term(), input_error()}]}
+  def format_calculation_args(rt, resource, %Manifest.Field{} = calc, args)
+      when is_map(args) and not is_struct(args) do
+    types = Map.new(calc.arguments || [], &{&1.name, &1.type})
+
+    {formatted, errors} =
+      Enum.reduce(args, {%{}, []}, fn {key, value}, {formatted, errors} ->
+        with {:ok, name} <- ClientNames.calc_arg(rt, resource, calc.name, key),
+             %Type{} = type <- Map.get(types, name) do
+          case format_input(value, type, rt) do
+            {:ok, value} ->
+              {Map.put(formatted, name, value), errors}
+
+            {:error, reasons} ->
+              {Map.put(formatted, name, value), add_arg_errors(reasons, key, errors)}
+          end
+        else
+          {:ok, name} -> {Map.put(formatted, name, value), errors}
+          :error -> {Map.put(formatted, key, value), errors}
+        end
+      end)
+
+    {formatted, Enum.reverse(errors)}
+  end
+
+  def format_calculation_args(_rt, _resource, _calc, args), do: {args, []}
+
+  defp add_arg_errors(reasons, key, errors),
+    do: Enum.reduce(reasons, errors, &[{key, &1} | &2])
 
   defp do_format(nil, _type, _constraints, _formatter, _direction, _rt), do: nil
   defp do_format(value, nil, _constraints, _formatter, _direction, _rt), do: value
@@ -486,10 +528,13 @@ defmodule AshRpc.ValueFormatter do
   # Keyword Handler
   # ---------------------------------------------------------------------------
 
+  # A list that is not a keyword list (e.g. a JSON array sent as input)
+  # passes through for Ash to reject.
   defp format_keyword(value, type_info, formatter, direction, rt)
        when is_list(value) do
-    map_value = Enum.into(value, %{})
-    format_container(map_value, type_info, formatter, direction, rt)
+    if Keyword.keyword?(value),
+      do: format_container(Map.new(value), type_info, formatter, direction, rt),
+      else: value
   end
 
   defp format_keyword(value, type_info, formatter, direction, rt)
@@ -646,10 +691,13 @@ defmodule AshRpc.ValueFormatter do
   end
 
   # Find union member for output (matches on map keys by member name)
-  defp find_union_member_spec(data, members) do
+  defp find_union_member_spec(data, members) when is_map(data) do
     map_keys = MapSet.new(Map.keys(data))
     Enum.find(members, fn member -> MapSet.member?(map_keys, member.name) end)
   end
+
+  # A bare member value names no member.
+  defp find_union_member_spec(_data, _members), do: nil
 
   defp extract_union_member_data_spec(data, member, storage_type, formatter, rt) do
     case storage_type do
