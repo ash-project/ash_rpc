@@ -346,7 +346,7 @@ Lookup calls:
 | Type fields | `AshRpc.Manifest.Custom.type_field_name_overrides_pair/1`, else `AshRpc.Introspection.type_field_name_overrides/2` |
 | Client → internal, type field / union member / calc arg / vocabulary | `AshRpc.ClientNames.type_field/3`, `union_member/3`, `calc_arg/4`, `vocabulary/3`: pure map lookups returning `{:ok, atom}` or `:error`; atoms pass through, and no atom is ever created from a client string. `calc_args/4` resolves a whole argument map; action input keys go through `AshRpc.InputFormatter.expected_keys/3` |
 | Whether a node is strict on input | `AshRpc.ClientNames.resource_named?/2`, `type_named?/2`: true when the resource or type (or its type lookup entry) carries decorated client names |
-| Filter statements and sort strings | `AshRpc.FilterInput.parse/3` and `parse_sort/3`: keep `+`, `++`, `-`, `--` and comma lists; a name that isn't a client name is dropped and reported as `Ash.Error.Query.NoSuchField` / `NoSuchFilterPredicate` with the name as sent |
+| Filter statements and sort strings | `AshRpc.FilterInput.parse/3` and `parse_sort/3`: keep `+`, `++`, `-`, `--` and comma lists; a name that isn't a client name is dropped and reported as `Ash.Error.Query.NoSuchField` / `NoSuchFilterPredicate` with the name as sent; operator values go through `ValueFormatter.format_input/3` with the operator's `rhs` type, and a rejected one is `AshRpc.FilterInput.InvalidValue` |
 
 The readers are asserted in `test/client_names_test.exs` (every formatter,
 a custom one included) and `test/filter_input_test.exs`.

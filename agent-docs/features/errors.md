@@ -120,6 +120,15 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   (`test/filter_sort_test.exs` "unknown names" describe). Before these impls
   existed, both fell through to `unknown_error` with a "no protocol
   implementation" warning.
+- An operator value `AshRpc.FilterInput` rejects (an unknown key, a malformed
+  union) is an `AshRpc.FilterInput.InvalidValue` carrying the
+  `format_input/3` reason and the filter path as sent (`[:filter, "stats",
+  "eq"]`, relationships, `and`/`or`/`not` and list indexes included).
+  `AshRpc.Errors` renders it with `ErrorBuilder`, ahead of
+  `show_raised_errors?`: an unknown key is `unknown_input` with the stale-client
+  hint, `path` the filter path plus the key's parents in the value
+  (`["filter", "stats", "eq"]`), `fields` the key as sent
+  (`test/filter_sort_test.exs` "an unknown key in a filter value").
 - `AshRpc.Errors` formats atom field names for the client and leaves string
   ones as sent: a string in `fields` or `vars.field` is a name the client sent.
 - A `required` message is a template naming the field through `vars.field`,

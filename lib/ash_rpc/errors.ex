@@ -12,8 +12,9 @@ defmodule AshRpc.Errors do
 
   require Logger
 
-  alias AshRpc.ClientPath
+  alias AshRpc.{ClientPath, ErrorBuilder, FieldFormatter}
   alias AshRpc.Error, as: ErrorProtocol
+  alias AshRpc.FilterInput.InvalidValue, as: InvalidFilterValue
 
   @doc """
   Transforms errors into standardized RPC error responses.
@@ -22,7 +23,9 @@ defmodule AshRpc.Errors do
   1. Convert to Ash error class using Ash.Error.to_error_class
   2. Unwrap nested error structures and clear their bread crumbs
   3. Transform via Error protocol (or expose the raised message when the
-     profile's `show_raised_errors?/1` is true for the domain)
+     profile's `show_raised_errors?/1` is true for the domain). An
+     `AshRpc.FilterInput.InvalidValue` is rendered by `AshRpc.ErrorBuilder`
+     from its reason instead
   4. Replace policy messages with a breakdown when the profile's
      `show_policy_breakdowns?/0` is true, and add the profile's
      `stale_client_hint/0` to unknown inputs, filter/sort fields and filter
@@ -88,10 +91,15 @@ defmodule AshRpc.Errors do
 
   defp process_single_error(error, runtime, domain, resource, context) do
     transformed_error =
-      if profile_show_raised_errors?(runtime, domain) and is_exception(error) do
-        raised_error(error)
-      else
-        protocol_error(error)
+      cond do
+        match?(%InvalidFilterValue{}, error) ->
+          invalid_filter_value(error, runtime)
+
+        profile_show_raised_errors?(runtime, domain) and is_exception(error) ->
+          raised_error(error)
+
+        true ->
+          protocol_error(error)
       end
 
     transformed_error =
@@ -113,6 +121,27 @@ defmodule AshRpc.Errors do
     if resource && function_exported?(resource, :handle_rpc_error, 2),
       do: {resource, :handle_rpc_error, []}
   end
+
+  # A request error, not a raised one: the same wire error the reason gets
+  # for an action input, under the value's filter path.
+  defp invalid_filter_value(
+         %InvalidFilterValue{reason: {:unknown_input, key, rel_path}, path: path},
+         runtime
+       ),
+       do: ErrorBuilder.build_error_response(runtime, {:unknown_input, key, path ++ rel_path})
+
+  defp invalid_filter_value(%InvalidFilterValue{reason: reason, path: path}, runtime) do
+    formatter = runtime.output_formatter
+
+    runtime
+    |> ErrorBuilder.build_error_response(reason)
+    |> Map.put(:path, Enum.map(path, &filter_path_segment(&1, formatter)))
+  end
+
+  defp filter_path_segment(segment, formatter) when is_atom(segment),
+    do: FieldFormatter.format_field_name(segment, formatter)
+
+  defp filter_path_segment(segment, _formatter), do: segment
 
   # show_raised_errors? exposes the actual exception message
   defp raised_error(error) do

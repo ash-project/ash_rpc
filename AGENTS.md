@@ -119,7 +119,7 @@ formatter.
 | **Value formatting** | `lib/ash_rpc/value_formatter.ex` (`input_formatter.ex` delegates to it; the pipeline formats output through it directly) |
 | **Field-name casing** | `lib/ash_rpc/field_formatter.ex`, `lib/ash_rpc/case.ex` |
 | **Client-name resolution** | `lib/ash_rpc/client_names.ex` |
-| **Filter/sort name rewriting** | `lib/ash_rpc/filter_input.ex` |
+| **Filter/sort name rewriting, filter value formatting** | `lib/ash_rpc/filter_input.ex`, `lib/ash_rpc/filter_input/invalid_value.ex` |
 | **Load-restriction normalization** | `lib/ash_rpc/load_restrictions.ex` (`normalize/1` in `parse_request`, `check!/2` from the field selector) |
 | **Error protocol + impls** | `lib/ash_rpc/error.ex` |
 | **Error pipeline** | `lib/ash_rpc/errors.ex` (Ash errors), `error_builder.ex` (pipeline reasons), `error_formatter.ex` |
@@ -290,7 +290,7 @@ stacktrace and returned as `unknown_error`.
 | Test sees unexpected data/state | `ManifestBuilder.manifest/0` is cached in `:persistent_term` | Use `build/1` for a variant manifest. Don't mutate the cached one |
 | `action_not_found` | Wire name not in `@entrypoints`, or `entrypoint/1` returned `nil` | Add it to `manifest_builder.ex` |
 | `unknown_field` through a relationship | Destination resource not exposed | Add it to `@exposed` in the test mapping source (not `Secret`, which stays unexposed on purpose) |
-| `unknown_input` | An input key that isn't one of the action's client names (a misspelling, another casing, or a private `public? false` argument), or a nested key that isn't a client name of its type (`path` locates it); raised by ash_rpc before Ash runs | Send the client name from the manifest, or drop the key |
+| `unknown_input` | An input key that isn't one of the action's client names (a misspelling, another casing, or a private `public? false` argument), or a nested key that isn't a client name of its type (`path` locates it); raised by ash_rpc before Ash runs. Also a key in a structured filter operator value (`path` starts with `filter`) | Send the client name from the manifest, or drop the key |
 | `unknown_field` / sort or filter error for a correctly spelled name | The name is in a non-client casing (e.g. `view_count` under `:camel_case`) | Send the client name; names are matched exactly |
 | `UndefinedFunctionError` on `AshRpc.Plug` / `AshRpc.Channel` | plug/phoenix not in the consumer's deps | They're optional deps. Add them in the consumer |
 | `invalid_query_opts` | Query envelope on a non-relationship or to-one field, `args` mixed with query opts, or `page` mixed with bare `limit`/`offset` | Use the envelope only on has_many/many_to_many; pick `page` or `limit`/`offset` |

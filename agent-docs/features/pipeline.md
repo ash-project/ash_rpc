@@ -130,8 +130,9 @@ Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
    per key, before Ash runs (in `validate_action` too). Then resolves `getBy` keys (misses join
    `unexpected_get_by_fields`, reported as sent), `page` keys (misses are
    `unknown_page_keys`, as sent), rewrites `filter` and `sort` with
-   `AshRpc.FilterInput` (misses become `NoSuchField`/`NoSuchFilterPredicate`
-   on `Request.query_errors`, added to the read query), and resolves
+   `AshRpc.FilterInput` (misses become `NoSuchField`/`NoSuchFilterPredicate`,
+   rejected operator values `AshRpc.FilterInput.InvalidValue`, all on
+   `Request.query_errors`, added to the read query), and resolves
    `metadataFields` through the entrypoint's `client_metadata_field_names`
    against `entrypoint.exposed_metadata_fields`.
 
@@ -309,10 +310,19 @@ Filter keys and operators are rewritten to internal names by
 `AshRpc.FilterInput.parse/3` (field names per resource, recursing through
 relationships; operator and function names and `and`/`or`/`not` through the
 `:filter_ops` vocabulary; calculation `input` keys through the calculation's
-argument names) and applied with `Ash.Query.filter_input/2`. Operator
-right-hand sides are left as sent. A field miss is dropped and reported as
-`NoSuchField`, an operator miss as `NoSuchFilterPredicate`; a calc-arg miss stays
-a string for Ash to reject. Example: e.g. `%{"slug" => %{"isNil" => true}}`, also inside
+argument names) and applied with `Ash.Query.filter_input/2`. Each operator
+value is formatted as client input (`AshRpc.ValueFormatter.format_input/3`)
+with the type the field's operator takes, read from the manifest field's
+`filter_operators` / `filter_functions` `rhs`: `:same` / `:any` is the field's
+type (the element type for `has`), `{:array, rhs}` an array of it (`in`),
+`{:concrete, mod}` is left as sent. So an embedded resource, typed map or
+struct, or union value takes internal keys:
+`%{"settings" => %{"eq" => %{"allowComments" => false}}}` becomes
+`%{settings: %{eq: %{allow_comments: false}}}`. A field miss is dropped and
+reported as `NoSuchField`, an operator miss as `NoSuchFilterPredicate`; a
+calc-arg miss stays a string for Ash to reject. A rejected operator value
+drops that operator and is reported as `AshRpc.FilterInput.InvalidValue`
+(see [errors](errors.md)). Example: e.g. `%{"slug" => %{"isNil" => true}}`, also inside
 `and` / `or` ("filter with isNil"; "filter and sort reach the request with
 internal names" shows `request.filter == %{slug: %{is_nil: true}}`).
 

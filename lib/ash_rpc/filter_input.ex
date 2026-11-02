@@ -11,17 +11,26 @@ defmodule AshRpc.FilterInput do
   raises for an unknown name (`Ash.Error.Query.NoSuchField`,
   `Ash.Error.Query.NoSuchFilterPredicate`), carrying the name as sent.
   Ash would otherwise accept an internal name the client never sees (e.g.
-  `view_count` under `:camel_case`). Callers add the errors to the query.
+  `view_count` under `:camel_case`).
+
+  Operator values are formatted as client input with the type the field's
+  operator takes (its manifest `rhs`), so structured values (embedded
+  resources, typed maps and structs, unions) get internal keys. A value
+  `AshRpc.ValueFormatter.format_input/3` rejects drops its operator and is
+  reported as `AshRpc.FilterInput.InvalidValue`, one per reason. Callers add
+  the errors to the query.
   """
 
   alias Ash.Info.Manifest
-  alias AshRpc.ClientNames
+  alias Ash.Info.Manifest.Type
+  alias AshRpc.{ClientNames, ValueFormatter}
+  alias AshRpc.FilterInput.InvalidValue
 
   @spec parse(AshRpc.Runtime.t(), module(), term()) :: {term(), [Exception.t()]}
   def parse(_rt, _resource, nil), do: {nil, []}
 
   def parse(rt, resource, filter) do
-    {statement, errors} = walk(rt, resource, filter, [])
+    {statement, errors} = walk(rt, resource, filter, [:filter], [])
     {statement, Enum.reverse(errors)}
   end
 
@@ -63,44 +72,47 @@ defmodule AshRpc.FilterInput do
   defp split_modifier("-" <> name), do: {"-", name}
   defp split_modifier(name), do: {"", name}
 
-  # Resource level: field and relationship names, and and/or/not.
-  defp walk(rt, resource, filter, errors) when is_map(filter) and not is_struct(filter) do
+  # Resource level: field and relationship names, and and/or/not. `path` is
+  # where the node sits in the request, keys as sent (for value errors).
+  defp walk(rt, resource, filter, path, errors) when is_map(filter) and not is_struct(filter) do
     Enum.reduce(filter, {%{}, errors}, fn {key, value}, {acc, errors} ->
-      case resource_entry(rt, resource, key, value, errors) do
+      case resource_entry(rt, resource, key, value, path ++ [key], errors) do
         {:keep, name, value, errors} -> {Map.put(acc, name, value), errors}
         {:drop, errors} -> {acc, errors}
       end
     end)
   end
 
-  defp walk(rt, resource, list, errors) when is_list(list) do
+  defp walk(rt, resource, list, path, errors) when is_list(list) do
     {items, errors} =
-      Enum.reduce(list, {[], errors}, fn item, {items, errors} ->
-        {item, errors} = walk(rt, resource, item, errors)
+      list
+      |> Enum.with_index()
+      |> Enum.reduce({[], errors}, fn {item, index}, {items, errors} ->
+        {item, errors} = walk(rt, resource, item, path ++ [index], errors)
         {[item | items], errors}
       end)
 
     {Enum.reverse(items), errors}
   end
 
-  defp walk(_rt, _resource, other, errors), do: {other, errors}
+  defp walk(_rt, _resource, other, _path, errors), do: {other, errors}
 
-  defp resource_entry(rt, resource, key, value, errors) do
+  defp resource_entry(rt, resource, key, value, path, errors) do
     res = Map.get(rt.resource_lookup, resource)
 
     with {:ok, name} <- ClientNames.resource_field(rt, resource, key),
-         {:ok, kind} <- field_kind(res, name) do
-      {value, errors} = entry_value(rt, resource, name, kind, value, errors)
+         {:ok, entry} <- field_or_relationship(res, name) do
+      {value, errors} = entry_value(rt, resource, entry, value, path, errors)
       {:keep, name, value, errors}
     else
-      _ -> boolean_entry(rt, resource, key, value, errors)
+      _ -> boolean_entry(rt, resource, key, value, path, errors)
     end
   end
 
-  defp boolean_entry(rt, resource, key, value, errors) do
+  defp boolean_entry(rt, resource, key, value, path, errors) do
     case ClientNames.vocabulary(rt, :filter_ops, key) do
       {:ok, op} when op in [:and, :or, :not] ->
-        {value, errors} = walk(rt, resource, value, errors)
+        {value, errors} = walk(rt, resource, value, path, errors)
         {:keep, op, value, errors}
 
       _ when is_binary(key) ->
@@ -112,10 +124,10 @@ defmodule AshRpc.FilterInput do
   end
 
   # Fields take precedence over relationships, as in field selection.
-  defp field_kind(%Manifest.Resource{} = res, name) do
+  defp field_or_relationship(%Manifest.Resource{} = res, name) do
     case Map.get(res.fields, name) do
-      %Manifest.Field{kind: kind} ->
-        {:ok, kind}
+      %Manifest.Field{} = field ->
+        {:ok, field}
 
       nil ->
         case Map.get(res.relationships, name) do
@@ -125,27 +137,31 @@ defmodule AshRpc.FilterInput do
     end
   end
 
-  defp field_kind(_res, _name), do: :error
+  defp field_or_relationship(_res, _name), do: :error
 
-  defp entry_value(rt, _resource, _name, {:relationship, dest}, value, errors),
-    do: walk(rt, dest, value, errors)
+  defp entry_value(rt, _resource, {:relationship, dest}, value, path, errors),
+    do: walk(rt, dest, value, path, errors)
 
-  defp entry_value(rt, resource, name, :calculation, value, errors),
-    do: walk_ops(rt, resource, name, value, errors)
-
-  defp entry_value(rt, resource, _name, _kind, value, errors),
-    do: walk_ops(rt, resource, nil, value, errors)
+  defp entry_value(rt, resource, %Manifest.Field{} = field, value, path, errors),
+    do: walk_ops(rt, resource, field, value, path, errors)
 
   # Operator level: keys are operator/function names, or `input` for a
-  # calculation's arguments. Right-hand sides are left as sent.
-  defp walk_ops(rt, resource, calc, ops, errors) when is_map(ops) and not is_struct(ops) do
+  # calculation's arguments. Each right-hand side is formatted as input with
+  # the type the field's operator takes (`rhs`).
+  defp walk_ops(rt, resource, field, ops, path, errors) when is_map(ops) and not is_struct(ops) do
     Enum.reduce(ops, {%{}, errors}, fn {key, value}, {acc, errors} ->
       case ClientNames.vocabulary(rt, :filter_ops, key) do
-        {:ok, :input} when not is_nil(calc) ->
-          {Map.put(acc, :input, ClientNames.calc_args(rt, resource, calc, value)), errors}
+        {:ok, :input} when field.kind == :calculation ->
+          {Map.put(acc, :input, ClientNames.calc_args(rt, resource, field.name, value)), errors}
 
         {:ok, op} ->
-          {Map.put(acc, op, value), errors}
+          case format_rhs(rt, field, op, value) do
+            {:ok, value} ->
+              {Map.put(acc, op, value), errors}
+
+            {:error, reasons} ->
+              {acc, invalid_values(reasons, path ++ [key], errors)}
+          end
 
         :error ->
           {acc, [no_such_predicate(resource, key) | errors]}
@@ -153,7 +169,47 @@ defmodule AshRpc.FilterInput do
     end)
   end
 
-  defp walk_ops(_rt, _resource, _calc, value, errors), do: {value, errors}
+  defp walk_ops(_rt, _resource, _field, value, _path, errors), do: {value, errors}
+
+  defp format_rhs(rt, field, op, value) do
+    case rhs_type(rhs(field, op), same_type(field, op)) do
+      %Type{} = type -> ValueFormatter.format_input(value, type, rt)
+      nil -> {:ok, value}
+    end
+  end
+
+  # The manifest names operators by symbol (`:==`) and functions by name; the
+  # filter key is a predicate name or alias (`:eq`, `:equals`).
+  defp rhs(%Manifest.Field{} = field, op) do
+    name =
+      case Ash.Filter.get_operator(op) do
+        nil -> op
+        operator -> operator.operator()
+      end
+
+    Enum.find_value(
+      List.wrap(field.filter_operators) ++ List.wrap(field.filter_functions),
+      fn applicable -> if applicable.name == name, do: applicable.rhs end
+    )
+  end
+
+  # `:same` is the field's type, except for `has`, whose field is the array
+  # (`{:array, :same}`) and whose value is one element.
+  defp same_type(%Manifest.Field{type: %Type{item_type: item_type}}, :has), do: item_type
+  defp same_type(%Manifest.Field{type: type}, _op), do: type
+
+  defp rhs_type(rhs, same) when rhs in [:same, :any], do: same
+  defp rhs_type({:array, inner}, same), do: array_of(rhs_type(inner, same))
+  defp rhs_type(_rhs, _same), do: nil
+
+  defp array_of(nil), do: nil
+  defp array_of(%Type{} = item), do: %Type{kind: :array, item_type: item, constraints: []}
+
+  defp invalid_values(reasons, path, errors) do
+    Enum.reduce(reasons, errors, fn reason, errors ->
+      [InvalidValue.exception(reason: reason, path: path) | errors]
+    end)
+  end
 
   defp no_such_field(resource, name, path),
     do: Ash.Error.Query.NoSuchField.exception(resource: resource, field: name, path: [path])

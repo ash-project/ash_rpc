@@ -72,6 +72,30 @@ defmodule AshRpc.FilterSortTest do
       assert error["path"] == ["filter"]
     end
 
+    test "an unknown key in a filter value is unknown_input with the filter path" do
+      error =
+        run_error(%{
+          "action" => "list_posts",
+          "filter" => %{"stats" => %{"eq" => %{"isFeatured" => true, "word_count_1" => 1}}}
+        })
+
+      assert error["type"] == "unknown_input"
+      assert error["fields"] == ["word_count_1"]
+      assert error["vars"]["field"] == "word_count_1"
+      assert error["path"] == ["filter", "stats", "eq"]
+      assert error["details"]["hint"] == AshRpc.Profile.default_stale_client_hint()
+    end
+
+    # Ets never matches a structured value against a plain map, so this only
+    # shows the request succeeds; FilterInputTest asserts the statement.
+    test "an embedded resource filter value with client names runs" do
+      assert list_titles(%{
+               "filter" => %{
+                 "settings" => %{"eq" => %{"allowComments" => true, "themeName" => "x"}}
+               }
+             }) == []
+    end
+
     test "an unknown filter operator is unknown_filter_operator naming it as sent" do
       error =
         run_error(%{"action" => "list_posts", "filter" => %{"viewCount" => %{"bogusOp" => 1}}})
