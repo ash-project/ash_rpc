@@ -15,9 +15,14 @@ defmodule AshRpc.FilterInput do
   source doesn't expose is unknown too, as in field selection.
 
   Operator values are formatted as client input with the type the field's
-  operator takes (its manifest `rhs`), so structured values (embedded
-  resources, typed maps and structs, unions) get internal keys. A bare value
-  on a field is `eq` and is formatted the same way. A calculation's `input`
+  operator takes (its manifest `rhs`), so structured values (typed maps and
+  structs, keywords, tuples, unions) get internal keys, and are then cast and
+  their constraints applied as the same action input would be stored, since
+  Ash's `==` and `has` compare a value as given. A bare value on a field is
+  `eq` and is formatted the same way. An operator the field's values can't be
+  compared with (`AshRpc.Introspection.filter_operator_allowed?/3`: anything
+  but `isNil` on a record, ordering on a structured value) is reported as
+  `Ash.Error.Query.NoSuchFilterPredicate`. A calculation's `input`
   takes internal argument names, and each value is formatted with its
   argument's type. A value `AshRpc.ValueFormatter.format_input/3` rejects
   drops its operator (the field, for a bare value or a calculation `input`)
@@ -43,7 +48,7 @@ defmodule AshRpc.FilterInput do
 
   alias Ash.Info.Manifest
   alias Ash.Info.Manifest.Type
-  alias AshRpc.{ClientNames, ValueFormatter}
+  alias AshRpc.{ClientNames, Introspection, ValueFormatter}
   alias AshRpc.FilterInput.InvalidValue
   alias AshRpc.Manifest.Custom
 
@@ -262,9 +267,12 @@ defmodule AshRpc.FilterInput do
             {acc, [no_such_predicate(resource, key, path) | errors], keep?}
 
           {:ok, op} ->
-            case format_rhs(rt, field, op, value) do
+            case allowed_rhs(rt, field, op, value) do
               {:ok, value} ->
                 {Map.put(acc, op, value), errors, keep?}
+
+              {:error, :not_allowed} ->
+                {acc, [no_such_predicate(resource, key, path) | errors], keep?}
 
               {:error, reasons} ->
                 {acc, invalid_values(reasons, path ++ [key], errors), keep?}
@@ -289,10 +297,11 @@ defmodule AshRpc.FilterInput do
   # operators from server-side callers and pass through.
   defp walk_ops(rt, resource, field, value, path, errors)
        when not is_map(value) and not (is_list(value) and value != [] and is_tuple(hd(value))) do
-    with {:ok, value} <- format_rhs(rt, field, :eq, value),
+    with {:ok, value} <- allowed_rhs(rt, field, :eq, value),
          [] <- missing_input_errors(rt, resource, field, %{}, path) do
       {value, errors}
     else
+      {:error, :not_allowed} -> {:drop, [no_such_predicate(resource, "eq", path) | errors]}
       {:error, reasons} -> {:drop, invalid_values(reasons, path, errors)}
       input_errors -> {:drop, Enum.reverse(input_errors, errors)}
     end
@@ -387,9 +396,22 @@ defmodule AshRpc.FilterInput do
 
   defp unresolved_keys(input), do: input |> Map.keys() |> Enum.filter(&is_binary/1)
 
+  # An operator the field's values can't be compared with
+  # (`AshRpc.Introspection.filter_operator_allowed?/3`: anything but `isNil` on
+  # a record, ordering on a structured value) is unknown, as Ash would report
+  # an operator the field doesn't have.
+  defp allowed_rhs(rt, %Manifest.Field{type: %Type{} = type} = field, op, value) do
+    if Introspection.filter_operator_allowed?(type, manifest_name(op), rt),
+      do: format_rhs(rt, field, op, value),
+      else: {:error, :not_allowed}
+  end
+
+  defp allowed_rhs(rt, field, op, value), do: format_rhs(rt, field, op, value)
+
   # A list operator (`in`) takes a list, and an operator with a concrete
   # right-hand type (`isNil`, `contains`) a value of that type; Ash's error for
-  # either names internals. Values of the field's own type are formatted.
+  # either names internals. Values of the field's own type are formatted, and
+  # structured ones cast (`stored_value/3`).
   defp format_rhs(rt, field, op, value) do
     rhs = rhs(field, op)
 
@@ -401,10 +423,91 @@ defmodule AshRpc.FilterInput do
         concrete_value(module, value)
 
       {_, %Type{} = type} ->
-        ValueFormatter.format_input(value, type, rt)
+        with {:ok, formatted} <- ValueFormatter.format_input(value, type, rt),
+             do: stored_value(formatted, type, rt)
 
       {_, nil} ->
         {:ok, value}
+    end
+  end
+
+  # Ash's `==` and `has` compare a value as given, without casting it to the
+  # field's type, so a structured value is cast and its constraints applied,
+  # as the same action input would be stored: a union value becomes an
+  # `%Ash.Union{}`, a keyword a keyword list, a tuple a tuple. A value that
+  # fails is an error rather than a filter that matches nothing, and so is a
+  # union member that is a record. Scalars pass as sent.
+  defp stored_value(value, %Type{} = type, rt) do
+    if Introspection.filter_value_kind(type, rt) == :structured do
+      with {:ok, casted} <- cast_value(value, type),
+           :ok <- comparable_members(casted, type, rt) do
+        {:ok, casted}
+      else
+        {:error, :record_member} ->
+          {:error, [{:invalid_filter_value, "A value of a union member that is not a record"}]}
+
+        _ ->
+          {:error, [{:invalid_filter_value, "A value of the field's type"}]}
+      end
+    else
+      {:ok, value}
+    end
+  end
+
+  # A list is cast item by item, and its `nil` items kept: an `in` list may
+  # hold `nil`, and Ash's array constraints for a NewType's items don't
+  # honour `nil_items?`. A type with no Ash module passes as is.
+  defp cast_value(value, %Type{kind: :array, item_type: %Type{} = item}) when is_list(value) do
+    Enum.reduce_while(value, {:ok, []}, fn
+      nil, {:ok, acc} ->
+        {:cont, {:ok, [nil | acc]}}
+
+      item_value, {:ok, acc} ->
+        case cast_value(item_value, item) do
+          {:ok, casted} -> {:cont, {:ok, [casted | acc]}}
+          error -> {:halt, error}
+        end
+    end)
+    |> case do
+      {:ok, items} -> {:ok, Enum.reverse(items)}
+      error -> error
+    end
+  end
+
+  defp cast_value(value, %Type{} = type) do
+    case ash_type(type) do
+      {module, constraints} ->
+        with {:ok, casted} <- Ash.Type.cast_input(module, value, constraints),
+             do: Ash.Type.apply_constraints(module, casted, constraints)
+
+      nil ->
+        {:ok, value}
+    end
+  end
+
+  # Every union value under `type` (arrays included) is of a member whose type
+  # is not a record, so equality can hold.
+  defp comparable_members(value, %Type{} = type, rt) do
+    case Introspection.resolve_named_type(type, rt) do
+      %Type{kind: :array, item_type: %Type{} = item} when is_list(value) ->
+        Enum.reduce_while(value, :ok, fn item_value, :ok ->
+          case comparable_members(item_value, item, rt) do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+        end)
+
+      %Type{kind: :union, members: members} ->
+        with %Ash.Union{type: name} <- value,
+             %{type: %Type{} = member} <- Enum.find(members || [], &(&1.name == name)),
+             :record <- Introspection.filter_value_kind(member, rt) do
+          {:error, :record_member}
+        else
+          _ -> :ok
+        end
+
+      _ ->
+        :ok
     end
   end
 
@@ -421,16 +524,19 @@ defmodule AshRpc.FilterInput do
   # The manifest names operators by symbol (`:==`) and functions by name; the
   # filter key is a predicate name or alias (`:eq`, `:equals`).
   defp rhs(%Manifest.Field{} = field, op) do
-    name =
-      case Ash.Filter.get_operator(op) do
-        nil -> op
-        operator -> operator.operator()
-      end
+    name = manifest_name(op)
 
     Enum.find_value(
       List.wrap(field.filter_operators) ++ List.wrap(field.filter_functions),
       fn applicable -> if applicable.name == name, do: applicable.rhs end
     )
+  end
+
+  defp manifest_name(op) do
+    case Ash.Filter.get_operator(op) do
+      nil -> op
+      operator -> operator.operator()
+    end
   end
 
   # `:same` is the field's type, except for `has`, whose field is the array

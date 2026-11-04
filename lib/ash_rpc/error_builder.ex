@@ -110,7 +110,10 @@ defmodule AshRpc.ErrorBuilder do
   - `invalid_filter_value`: an operator value has the wrong shape: a list
     operator (`in`) given a non-list (`details.expected` `A list`), or a value
     an operator's own type (`isNil`, `contains`) can't cast (`A boolean
-    value`, `A string value`). `path` ends at the operator. The same type,
+    value`, `A string value`), a structured value its type can't cast or
+    whose constraints fail (`A value of the field's type`), or a union value
+    of a member that is a record (`A value of a union member that is not a
+    record`). `path` ends at the operator. The same type,
     with `path` `filter` and no `details.expected`, comes from Ash for a value
     the field's type can't cast.
 

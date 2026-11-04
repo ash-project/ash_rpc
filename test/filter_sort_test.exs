@@ -86,14 +86,15 @@ defmodule AshRpc.FilterSortTest do
       assert error["details"]["hint"] == AshRpc.Profile.default_stale_client_hint()
     end
 
-    # Ets never matches a structured value against a plain map, so this only
-    # shows the request succeeds; FilterInputTest asserts the statement.
-    test "an embedded resource filter value with client names runs" do
-      assert list_titles(%{
-               "filter" => %{
-                 "settings" => %{"eq" => %{"allowComments" => true, "themeName" => "x"}}
-               }
-             }) == []
+    test "eq on an embedded resource is unknown_filter_operator" do
+      error =
+        run_error(%{
+          "action" => "list_posts",
+          "filter" => %{"settings" => %{"eq" => %{"themeName" => "x"}}}
+        })
+
+      assert error["type"] == "unknown_filter_operator"
+      assert error["path"] == ["filter", "settings"]
     end
 
     test "an unknown filter operator is unknown_filter_operator naming it as sent" do
@@ -139,14 +140,14 @@ defmodule AshRpc.FilterSortTest do
     test "an unknown key in a bare filter value is unknown_input at the field" do
       error =
         run_error(%{
-          "action" => "list_projects",
+          "action" => "list_widgets",
           "fields" => ["id"],
-          "filter" => %{"history" => [%{"category" => "a", "priority_score" => 1}]}
+          "filter" => %{"attachments" => [%{"file" => %{"filename" => "a", "mime_type" => "x"}}]}
         })
 
       assert error["type"] == "unknown_input"
-      assert error["fields"] == ["priority_score"]
-      assert error["path"] == ["filter", "history", 0]
+      assert error["fields"] == ["mime_type"]
+      assert error["path"] == ["filter", "attachments", 0, "file"]
     end
 
     test "a filter through a relationship to an unexposed resource is unknown_field" do

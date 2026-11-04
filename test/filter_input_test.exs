@@ -61,11 +61,6 @@ defmodule AshRpc.FilterInputTest do
     end
 
     test "structured operator values take internal names", %{rt: rt} do
-      # Embedded resource
-      assert FilterInput.parse(rt, Post, %{
-               "settings" => %{"eq" => %{"allowComments" => false, "themeName" => "dark"}}
-             }) == {%{settings: %{eq: %{allow_comments: false, theme_name: "dark"}}}, []}
-
       # Typed map with decorated name overrides, under eq and in
       assert FilterInput.parse(rt, Post, %{
                "stats" => %{
@@ -87,21 +82,49 @@ defmodule AshRpc.FilterInputTest do
              }) == {%{scored_stats: %{input: %{boost: 1}, eq: %{is_featured?: true}}}, []}
     end
 
-    test "a union value takes its member's internal names", %{rt: rt} do
-      assert {%{content: %{eq: %{is_active?: true, title: "t"} = value}}, []} =
+    test "a union value takes its member's internal names and is cast to the union", %{rt: rt} do
+      assert {%{status: %{eq: %Ash.Union{type: :simple, value: value}}}, []} =
+               FilterInput.parse(rt, AshRpc.Test.Widget, %{
+                 "status" => %{"eq" => %{"simple" => %{"message" => "ok"}}}
+               })
+
+      assert value["message"] == "ok"
+    end
+
+    test "a value of a union member that is a record is reported", %{rt: rt} do
+      assert {%{content: %{}},
+              [
+                %AshRpc.FilterInput.InvalidValue{
+                  reason:
+                    {:invalid_filter_value, "A value of a union member that is not a record"},
+                  path: [:filter, "content", "eq"]
+                }
+              ]} =
                FilterInput.parse(rt, AshRpc.Test.Widget, %{
                  "content" => %{"eq" => %{"checklist" => %{"title" => "t", "isActive" => true}}}
                })
-
-      refute Map.has_key?(value, "isActive")
     end
 
-    test "has on an array field formats its value as one element", %{rt: rt} do
-      assert {%{attachments: %{has: %{mime_type: "text/plain", filename: "a"}}}, []} =
+    test "has on an array field formats and casts its value as one element", %{rt: rt} do
+      assert {%{
+                attachments: %{
+                  has: %Ash.Union{type: :file, value: %{mime_type: "text/plain", filename: "a"}}
+                }
+              }, []} =
                FilterInput.parse(rt, AshRpc.Test.Widget, %{
                  "attachments" => %{
                    "has" => %{"file" => %{"filename" => "a", "mimeType" => "text/plain"}}
                  }
+               })
+    end
+
+    test "an operator other than isNil on a record is NoSuchFilterPredicate", %{rt: rt} do
+      assert {%{settings: %{is_nil: false}},
+              [
+                %Ash.Error.Query.NoSuchFilterPredicate{key: "eq", path: [:filter, "settings"]}
+              ]} =
+               FilterInput.parse(rt, Post, %{
+                 "settings" => %{"eq" => %{"themeName" => "dark"}, "isNil" => false}
                })
     end
 
@@ -113,24 +136,16 @@ defmodule AshRpc.FilterInputTest do
     end
 
     test "an unknown key in an operator value drops the operator and is reported", %{rt: rt} do
-      assert {%{stats: %{}, settings: %{}},
+      assert {%{stats: %{in: [%{is_featured?: true}]}},
               [
                 %AshRpc.FilterInput.InvalidValue{
-                  reason: {:unknown_input, unknown, []},
-                  path: [:filter, field, "eq"]
-                },
-                %AshRpc.FilterInput.InvalidValue{
-                  reason: {:unknown_input, other_unknown, []},
-                  path: [:filter, other_field, "eq"]
+                  reason: {:unknown_input, "word_count_1", []},
+                  path: [:filter, "stats", "eq"]
                 }
               ]} =
                FilterInput.parse(rt, Post, %{
-                 "stats" => %{"eq" => %{"bogus" => 1}},
-                 "settings" => %{"eq" => %{"allowComments" => true, "theme_name" => "x"}}
+                 "stats" => %{"eq" => %{"word_count_1" => 1}, "in" => [%{"isFeatured" => true}]}
                })
-
-      assert Enum.sort([{field, unknown}, {other_field, other_unknown}]) ==
-               [{"settings", "theme_name"}, {"stats", "bogus"}]
     end
 
     test "an unknown key inside an in list carries the item index", %{rt: rt} do
@@ -174,7 +189,12 @@ defmodule AshRpc.FilterInputTest do
 
     test "values under a relationship take the destination's names", %{rt: rt} do
       assert {%{post: %{stats: %{eq: %{is_featured?: true}}, settings: %{}}},
-              [%AshRpc.FilterInput.InvalidValue{path: [:filter, "post", "settings", "eq"]}]} =
+              [
+                %Ash.Error.Query.NoSuchFilterPredicate{
+                  resource: Post,
+                  path: [:filter, "post", "settings"]
+                }
+              ]} =
                FilterInput.parse(rt, AshRpc.Test.Comment, %{
                  "post" => %{
                    "stats" => %{"eq" => %{"isFeatured" => true}},
@@ -239,21 +259,36 @@ defmodule AshRpc.FilterInputTest do
     end
 
     test "a bare value on a field is eq and takes internal names", %{rt: rt} do
-      assert FilterInput.parse(rt, Project, %{
-               "history" => [%{"category" => "a", "priorityScore" => 1}],
-               "dueDate" => "2026-01-01"
+      assert FilterInput.parse(rt, Project, %{"dueDate" => "2026-01-01"}) ==
+               {%{due_date: "2026-01-01"}, []}
+
+      assert FilterInput.parse(rt, AshRpc.Test.Widget, %{
+               "attachments" => [%{"file" => %{"filename" => "a", "mimeType" => "text/plain"}}]
              }) ==
-               {%{history: [%{category: "a", priority_score: 1}], due_date: "2026-01-01"}, []}
+               {%{
+                  attachments: [
+                    %Ash.Union{type: :file, value: %{filename: "a", mime_type: "text/plain"}}
+                  ]
+                }, []}
+    end
+
+    test "a bare value on a record is NoSuchFilterPredicate at the field", %{rt: rt} do
+      assert {%{},
+              [%Ash.Error.Query.NoSuchFilterPredicate{key: "eq", path: [:filter, "history"]}]} =
+               FilterInput.parse(rt, Project, %{"history" => [%{"category" => "a"}]})
     end
 
     test "an unknown key in a bare value drops it and is reported at the field", %{rt: rt} do
       assert {statement,
               [
                 %AshRpc.FilterInput.InvalidValue{
-                  reason: {:unknown_input, "priority_score", [0]},
-                  path: [:filter, "history"]
+                  reason: {:unknown_input, "mime_type", [0, "file"]},
+                  path: [:filter, "attachments"]
                 }
-              ]} = FilterInput.parse(rt, Project, %{"history" => [%{"priority_score" => 1}]})
+              ]} =
+               FilterInput.parse(rt, AshRpc.Test.Widget, %{
+                 "attachments" => [%{"file" => %{"filename" => "a", "mime_type" => "x"}}]
+               })
 
       assert statement == %{}
     end
