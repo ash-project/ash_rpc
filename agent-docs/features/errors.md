@@ -173,7 +173,13 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   `invalid_filter_value`, path at the operator): a list operator (`in`)
   given a non-list (`details.expected` `A list`), or a value an operator's
   concrete right-hand type can't cast (`isNil` → `A boolean value`,
-  `contains` → `A string value`). A relationship given a boolean is
+  `contains` → `A string value`), a structured value its type can't cast or
+  whose constraints fail (`A value of the field's type`), and a union value of
+  a member that is a record (`A value of a union member that is not a
+  record`). An operator a field's values can't be compared with (anything but
+  `isNil` on a record, ordering on a structured value;
+  `AshRpc.Introspection.filter_operator_allowed?/3`) is
+  `unknown_filter_operator` at the field. A relationship given a boolean is
   `invalid_filter` at the relationship. What still reaches Ash (a value the
   field's type can't cast, e.g. a map in an `in` list on a uuid) is
   `Ash.Error.Query.InvalidFilterValue`, rendered with a fixed message, no

@@ -352,12 +352,27 @@ value is formatted as client input (`AshRpc.ValueFormatter.format_input/3`)
 with the type the field's operator takes, read from the manifest field's
 `filter_operators` / `filter_functions` `rhs`: `:same` / `:any` is the field's
 type (the element type for `has`), `{:array, rhs}` an array of it (`in`),
-`{:concrete, mod}` is left as sent once `mod` casts it. So an embedded resource, typed map or
-struct, or union value takes internal keys:
-`%{"settings" => %{"eq" => %{"allowComments" => false}}}` becomes
-`%{settings: %{eq: %{allow_comments: false}}}`. A bare value on a field
-(`%{"history" => [%{"priorityScore" => 1}]}`) is `eq` and is formatted the
-same way. Calculation `input` values are formatted with each argument's type.
+`{:concrete, mod}` is left as sent once `mod` casts it. So a typed map or
+struct, keyword, tuple or union value takes internal keys:
+`%{"stats" => %{"eq" => %{"isFeatured" => true}}}` becomes
+`%{stats: %{eq: %{is_featured?: true}}}`. A bare value on a field
+(`%{"attachments" => [%{"url" => "https://a.example"}]}`) is `eq` and is
+formatted the same way.
+
+Which operators a field takes follows
+`AshRpc.Introspection.filter_value_kind/2` (`filter_operator_allowed?/3`): a
+record (a resource or embedded resource, anything containing one, or a union
+of only those) takes `isNil` only, since a record sent over the wire gets its
+own generated keys and defaults and never equals a stored one; a structured
+value (map, struct, keyword, tuple, union, not a declared custom type, or an
+array of one) takes no ordering operator. Any other operator is
+`NoSuchFilterPredicate` at the field. A structured value is then cast and its
+constraints applied (`Ash.Type.cast_input/3`, `apply_constraints/3`, a list
+item by item with its `nil`s kept), because Ash's `==` and `has` compare the
+value as given: a union value becomes an `%Ash.Union{}`, a keyword a keyword
+list, a tuple a tuple, as the same action input is stored. A value that fails,
+or a union value of a member that is a record, is `invalid_filter_value` at the
+operator (`test/structured_filter_test.exs`). Scalars pass as sent. Calculation `input` values are formatted with each argument's type.
 A field miss is dropped and reported as `NoSuchField` (`path` where it sits,
 e.g. `["filter", "author", "posts"]`), an operator miss as
 `NoSuchFilterPredicate` (`input` on a field that isn't a calculation
