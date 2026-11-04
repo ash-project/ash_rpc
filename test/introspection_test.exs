@@ -666,4 +666,64 @@ defmodule AshRpc.IntrospectionTest do
           do: refute(Introspection.untyped_data_type?(type, lookup), inspect(type))
     end
   end
+
+  describe "filter_value_kind/2 and filter_operator_allowed?/3" do
+    setup do
+      rt = AshRpc.Runtime.from_manifest(AshRpc.Test.ManifestBuilder.manifest())
+      type = fn resource, field -> rt.resource_lookup[resource].fields[field].type end
+      %{rt: rt, type: type}
+    end
+
+    test "records: embedded resources, resources and arrays of them", %{rt: rt, type: type} do
+      for {resource, field} <- [
+            {AshRpc.Test.Post, :settings},
+            {AshRpc.Test.Post, :self_post},
+            {AshRpc.Test.Project, :history}
+          ] do
+        t = type.(resource, field)
+        assert Introspection.filter_value_kind(t, rt) == :record, inspect(field)
+        assert Introspection.filter_operator_allowed?(t, :is_nil, rt)
+        refute Introspection.filter_operator_allowed?(t, :==, rt)
+        refute Introspection.filter_operator_allowed?(t, :in, rt)
+      end
+    end
+
+    test "structured values take equality but no ordering", %{rt: rt, type: type} do
+      for {resource, field} <- [
+            {AshRpc.Test.Widget, :content},
+            {AshRpc.Test.Widget, :status},
+            {AshRpc.Test.Widget, :attachments},
+            {AshRpc.Test.Place, :options},
+            {AshRpc.Test.Place, :coordinates},
+            {AshRpc.Test.Post, :stats}
+          ] do
+        t = type.(resource, field)
+        assert Introspection.filter_value_kind(t, rt) == :structured, inspect(field)
+
+        for op <- [:==, :!=, :in, :has, :is_nil],
+            do: assert(Introspection.filter_operator_allowed?(t, op, rt))
+
+        for op <- [:<, :>, :<=, :>=],
+            do: refute(Introspection.filter_operator_allowed?(t, op, rt))
+      end
+    end
+
+    test "a union whose every member is a record is a record", %{rt: rt} do
+      record = %Ash.Info.Manifest.Type{kind: :embedded_resource, module: AshRpc.Test.PostSettings}
+
+      union = %Ash.Info.Manifest.Type{
+        kind: :union,
+        module: Ash.Type.Union,
+        members: [%{name: :settings, type: record}]
+      }
+
+      assert Introspection.filter_value_kind(union, rt) == :record
+    end
+
+    test "scalars take every operator", %{rt: rt, type: type} do
+      t = type.(AshRpc.Test.Post, :view_count)
+      assert Introspection.filter_value_kind(t, rt) == :scalar
+      assert Introspection.filter_operator_allowed?(t, :<, rt)
+    end
+  end
 end

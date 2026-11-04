@@ -551,6 +551,89 @@ defmodule AshRpc.Introspection do
 
   def map_like_custom_type?(_module, _constraints), do: false
 
+  @structured_kinds [:map, :struct, :keyword, :tuple, :union]
+  @ordering_operators [:<, :>, :<=, :>=]
+
+  @typedoc "What a filter can compare a field's values with (`filter_value_kind/2`)."
+  @type filter_value_kind :: :record | :structured | :scalar
+
+  @doc """
+  What a filter on a field of manifest type `type` can compare values with, as
+  `AshRpc.FilterInput` enforces it:
+
+    * `:record`: the value is, or contains, a resource or embedded resource
+      (through arrays, named types and typed containers), or is a union whose
+      every member is one. A record value sent over the wire is a new record,
+      with its own generated keys and defaults, so it never equals a stored
+      one; the field takes `isNil` only.
+    * `:structured`: a map, struct, keyword, tuple or union that is not a
+      declared custom type (`AshRpc.Manifest.Custom.custom_type?/1`), or an
+      array of one. It takes equality (`eq`, `notEq`, `in`, `has`) and
+      `isNil`, but no ordering operator. A union member whose type is a
+      record can't be compared.
+    * `:scalar`: anything else, which takes every operator the manifest lists
+      for the field.
+
+  Named types resolve with `named_type_definition/2`. Reads only `lookups`.
+  """
+  @spec filter_value_kind(Ash.Info.Manifest.Type.t(), type_lookups()) :: filter_value_kind()
+  def filter_value_kind(%Ash.Info.Manifest.Type{} = type, lookups) do
+    resolved = resolve_named_type(type, lookups)
+
+    cond do
+      resolved.kind == :array and resolved.item_type != nil ->
+        filter_value_kind(resolved.item_type, lookups)
+
+      resolved.kind == :union ->
+        members = resolved.members || []
+
+        if members != [] and Enum.all?(members, &(filter_value_kind(&1.type, lookups) == :record)),
+          do: :record,
+          else: :structured
+
+      find_type(type, lookups, &Ash.Info.Manifest.Type.resource_kind?/1) != nil ->
+        :record
+
+      resolved.kind in @structured_kinds and not AshRpc.Manifest.Custom.custom_type?(resolved) ->
+        :structured
+
+      true ->
+        :scalar
+    end
+  end
+
+  @doc """
+  Whether a filter on a field of manifest type `type` takes the operator or
+  function the manifest names `name` (`:==`, `:<`, `:has`, `:is_nil`), by
+  `filter_value_kind/2`: a record takes `:is_nil` only, a structured value no
+  ordering operator. The field's own manifest operator list is not consulted.
+  """
+  @spec filter_operator_allowed?(Ash.Info.Manifest.Type.t(), atom(), type_lookups()) ::
+          boolean()
+  def filter_operator_allowed?(%Ash.Info.Manifest.Type{} = type, name, lookups) do
+    case filter_value_kind(type, lookups) do
+      :record -> name == :is_nil
+      :structured -> name not in @ordering_operators
+      :scalar -> true
+    end
+  end
+
+  @doc """
+  `type` with its named types (`:type_ref`) resolved to their definitions
+  (`named_type_definition/2`), repeatedly; a ref whose definition is itself a
+  ref is returned as is.
+  """
+  @spec resolve_named_type(Ash.Info.Manifest.Type.t(), type_lookups()) ::
+          Ash.Info.Manifest.Type.t()
+  def resolve_named_type(%Ash.Info.Manifest.Type{kind: :type_ref, module: module} = type, lookups) do
+    case named_type_definition(lookups.type_lookup, module) do
+      %Ash.Info.Manifest.Type{kind: :type_ref} -> type
+      %Ash.Info.Manifest.Type{} = definition -> resolve_named_type(definition, lookups)
+    end
+  end
+
+  def resolve_named_type(type, _lookups), do: type
+
   defp cycles_option(opts) do
     case Keyword.validate!(opts, cycles: :skip)[:cycles] do
       cycles when cycles in [:skip, :report] ->
