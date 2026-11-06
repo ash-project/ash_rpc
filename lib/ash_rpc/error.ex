@@ -171,11 +171,11 @@ defimpl AshRpc.Error, for: Ash.Error.Query.InvalidCalculationArgument do
   end
 end
 
-# A filter value Ash rejects. `AshRpc.FilterInput` reports the shapes it can
-# check (an `in` that is not a list, a value an operator's concrete type
-# can't cast, a relationship given a boolean) with their full path; what
-# remains (a value the field's type can't cast) has only Ash's `[:filter]`.
-# Ash's message names internal fields and echoes the value, so it is dropped.
+# A filter value Ash rejects. `AshRpc.FilterInput` reports what it can check
+# (an `in` that is not a list, a value the operator's or the field's type
+# can't cast, a boolean statement) with its full path; whatever Ash still
+# rejects has only Ash's `[:filter]`. Ash's message names internal fields and
+# echoes the value, so it is dropped.
 defimpl AshRpc.Error, for: Ash.Error.Query.InvalidFilterValue do
   def to_error(error) do
     %{

@@ -185,7 +185,7 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   `invalid_filter` at its path. An `Ash.Error.Query.InvalidFilterValue` Ash
   still raises is rendered with a fixed message, no `details.expected` and
   Ash's `["filter"]` path; Ash's message names internals and echoes the value
-  (`test/filter_sort_test.exs` "invalid filter values").
+  (`test/error_protocol_test.exs`, case `InvalidFilterValue`).
 - A sort on a relationship (`details.reason` `relationship`), on a
   calculation with required arguments (`requires_arguments`) or on a field
   the manifest marks unsortable is `Ash.Error.Query.UnsortableField` from

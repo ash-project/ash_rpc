@@ -513,4 +513,14 @@ defmodule AshRpc.LoadRestrictionsTest do
       assert %{"count" => 1, "results" => [%{"body" => "Nice"}]} = post["comments"]
     end
   end
+
+  # The restriction is checked while the value's selection is walked, before
+  # the aggregate rejects the calculation it can't load.
+  test "a calculation in a denied aggregate's value is load_denied" do
+    assert {:error, {:load_denied, [[:first_note_meta, :display_category]]}} =
+             parse(%{
+               "action" => "list_projects_deny_note_meta",
+               "fields" => ["id", %{"firstNoteMeta" => ["displayCategory"]}]
+             })
+  end
 end

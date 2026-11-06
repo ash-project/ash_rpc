@@ -362,11 +362,15 @@ defmodule AshRpc.AggregatesTest do
                  "fields" => [%{"firstNoteAuthorInfo" => %{"meta" => ["displayCategory"]}}]
                })
 
-      assert %{
+      assert error == %{
                "type" => "invalid_field_selection",
+               "message" => "Cannot load calculations of the value of aggregate %{field}",
+               "shortMessage" => "Invalid field selection",
                "vars" => %{"field" => "firstNoteAuthorInfo"},
-               "fields" => ["firstNoteAuthorInfo"]
-             } = error
+               "path" => [],
+               "fields" => ["firstNoteAuthorInfo"],
+               "details" => %{"suggestion" => "Select only attributes of the aggregate's value"}
+             }
     end
 
     test "both complex first aggregates load together", %{project: project} do

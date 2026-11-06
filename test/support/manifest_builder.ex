@@ -43,6 +43,8 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"list_posts_allow_nested_calc", AshRpc.Test.Post, :read,
      load_restrictions: {:allow, [author: [:is_prolific?]]}},
     {"list_posts_deny_author", AshRpc.Test.Post, :read, load_restrictions: {:deny, [:author]}},
+    {"list_projects_deny_note_meta", AshRpc.Test.Project, :read,
+     load_restrictions: {:deny, [:first_note_meta]}},
     {"list_posts_deny_nested", AshRpc.Test.Post, :read,
      load_restrictions: {:deny, [comments: [:post]]}},
     {"list_posts_deny_nested_calc", AshRpc.Test.Post, :read,
