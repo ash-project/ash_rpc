@@ -140,10 +140,12 @@ defmodule AshRpc.Pipeline do
   """
   @spec execute_ash_action(Request.t()) :: {:ok, term()} | {:error, term()}
   def execute_ash_action(%Request{} = request) do
+    # The entrypoint's domain, for a resource that doesn't name its own.
     opts = [
       actor: request.actor,
       tenant: request.tenant,
-      context: request.context
+      context: request.context,
+      domain: request.entrypoint.domain
     ]
 
     case request.action.type do
@@ -876,7 +878,7 @@ defmodule AshRpc.Pipeline do
       tenant: opts[:tenant],
       context: opts[:context] || %{},
       actor: opts[:actor],
-      domain: request.entrypoint.domain,
+      domain: opts[:domain],
       # The bulk action applies select/load to the returned records; select/load
       # set on the target query are not carried over to them.
       select: request.select,

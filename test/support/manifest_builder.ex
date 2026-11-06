@@ -91,6 +91,12 @@ defmodule AshRpc.Test.ManifestBuilder do
     {"create_post_tag", AshRpc.Test.PostTag, :create},
     {"update_post_tag", AshRpc.Test.PostTag, :update},
     {"destroy_post_tag", AshRpc.Test.PostTag, :destroy},
+    # A resource without a domain of its own
+    {"create_bookmark", AshRpc.Test.Bookmark, :create},
+    {"list_bookmarks", AshRpc.Test.Bookmark, :read},
+    {"update_bookmark", AshRpc.Test.Bookmark, :update},
+    {"destroy_bookmark", AshRpc.Test.Bookmark, :destroy},
+    {"echo_bookmark", AshRpc.Test.Bookmark, :echo},
     # Multitenancy
     {"list_notes", AshRpc.Test.Note, :read},
     {"create_note", AshRpc.Test.Note, :create},

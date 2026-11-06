@@ -146,7 +146,8 @@ Returns `{:ok, %AshRpc.Request{}}` or `{:error, reason}`. Fails fast; in order:
 
 ### 2. `Pipeline.execute_ash_action(request)`
 
-Runs the Ash call with the request's actor, tenant and context and returns the
+Runs the Ash call with the request's actor, tenant and context, and the
+entrypoint's domain (for a resource that names none itself), and returns the
 raw Ash result (`{:ok, result}` or `{:error, error}`).
 
 | Action type | What runs |

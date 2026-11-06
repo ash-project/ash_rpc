@@ -31,7 +31,12 @@ defmodule AshRpc.Validation do
 
   @spec validate(Request.t()) :: %{success: true} | %{success: false, errors: [map()]}
   def validate(%Request{} = request) do
-    opts = [actor: request.actor, tenant: request.tenant, context: request.context]
+    opts = [
+      actor: request.actor,
+      tenant: request.tenant,
+      context: request.context,
+      domain: request.entrypoint.domain
+    ]
 
     case build(request, opts) do
       {:ok, %{valid?: true}} -> %{success: true}

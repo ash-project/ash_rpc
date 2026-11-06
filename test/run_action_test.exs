@@ -621,4 +621,46 @@ defmodule AshRpc.RunActionTest do
       end
     end
   end
+
+  # Bookmark names no domain of its own; each action gets the entrypoint's.
+  describe "a resource without a domain of its own" do
+    defp run(params), do: AshRpc.run_action(@profile, ctx(), params)
+
+    defp seed_bookmark(url), do: Ash.Seed.seed!(AshRpc.Test.Bookmark, %{url: url}).id
+
+    test "create" do
+      assert %{"success" => true, "data" => %{"url" => "https://a.test"}} =
+               run(%{
+                 "action" => "create_bookmark",
+                 "input" => %{"url" => "https://a.test"},
+                 "fields" => ["url"]
+               })
+    end
+
+    test "read" do
+      seed_bookmark("https://a.test")
+
+      assert %{"success" => true, "data" => [%{"url" => "https://a.test"}]} =
+               run(%{"action" => "list_bookmarks", "fields" => ["url"]})
+    end
+
+    test "update and destroy" do
+      id = seed_bookmark("https://a.test")
+
+      assert %{"success" => true, "data" => %{"url" => "https://b.test"}} =
+               run(%{
+                 "action" => "update_bookmark",
+                 "identity" => id,
+                 "input" => %{"url" => "https://b.test"},
+                 "fields" => ["url"]
+               })
+
+      assert %{"success" => true} = run(%{"action" => "destroy_bookmark", "identity" => id})
+    end
+
+    test "generic action" do
+      assert %{"success" => true, "data" => "hi"} =
+               run(%{"action" => "echo_bookmark", "input" => %{"text" => "hi"}})
+    end
+  end
 end

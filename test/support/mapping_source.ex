@@ -9,6 +9,7 @@ defmodule AshRpc.Test.MappingSource do
   @exposed [
     AshRpc.Test.Account,
     AshRpc.Test.Author,
+    AshRpc.Test.Bookmark,
     AshRpc.Test.Catalog,
     AshRpc.Test.ChecklistBlock,
     AshRpc.Test.Comment,

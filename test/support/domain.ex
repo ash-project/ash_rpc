@@ -9,6 +9,7 @@ defmodule AshRpc.Test.Domain do
   resources do
     resource AshRpc.Test.Account
     resource AshRpc.Test.Author
+    resource AshRpc.Test.Bookmark
     resource AshRpc.Test.Catalog
     resource AshRpc.Test.Comment
     resource AshRpc.Test.Intake

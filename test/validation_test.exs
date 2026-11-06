@@ -394,4 +394,23 @@ defmodule AshRpc.ValidationTest do
              } = validate(%{"action" => "list_posts", "fields" => ["id", "unknown_field"]})
     end
   end
+
+  # Bookmark names no domain of its own; each action gets the entrypoint's.
+  describe "a resource without a domain of its own" do
+    setup do
+      %{id: Ash.Seed.seed!(AshRpc.Test.Bookmark, %{url: "https://a.test"}).id}
+    end
+
+    test "every action type validates", %{id: id} do
+      for params <- [
+            %{"action" => "create_bookmark", "input" => %{"url" => "https://b.test"}},
+            %{"action" => "list_bookmarks"},
+            %{"action" => "update_bookmark", "identity" => id, "input" => %{"url" => "x"}},
+            %{"action" => "destroy_bookmark", "identity" => id},
+            %{"action" => "echo_bookmark", "input" => %{"text" => "hi"}}
+          ] do
+        assert validate(params) == %{"success" => true}, inspect(params)
+      end
+    end
+  end
 end
