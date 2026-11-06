@@ -375,11 +375,13 @@ item by item with its `nil`s kept), because Ash's `==` and `has` compare the
 value as given: a union value becomes an `%Ash.Union{}`, a keyword a keyword
 list, a tuple a tuple, as the same action input is stored. A value that fails,
 or a union value of a member that is a record, is `invalid_filter_value` at the
-operator (`test/structured_filter_test.exs`). A scalar is cast too, without its
-constraints (`gt: -1` on a `min: 0` field stays valid), so `"2"` matches an
-integer `2` and `["a"]` for a string is `invalid_filter_value` at the operator
-("a value the field's type can't cast is invalid_filter_value at the
-operator"). Calculation `input` values are formatted with each argument's type.
+operator (`test/structured_filter_test.exs`). A scalar is coerced as Ash
+coerces filter values (`Ash.Type.coerce/3`): no constraints, a NewType's
+included (`gt: -1` on a `min: 0` field stays valid), and a string on an atom
+field stays a string, so no atom is created. So `"2"` matches an integer `2`,
+and `"abc"` for an integer, a list for a string, or a value whose cast raises
+is `invalid_filter_value` at the operator (describes "invalid filter values"
+and "filter value casting"). Calculation `input` values are formatted with each argument's type.
 A field miss is dropped and reported as `NoSuchField` (`path` where it sits,
 e.g. `["filter", "author", "posts"]`), an operator miss as
 `NoSuchFilterPredicate` (`input` on a field that isn't a calculation

@@ -27,6 +27,11 @@ defmodule AshRpc.Test.Ledger do
         nil_items?: true,
         items: [types: [number: [type: :integer], label: [type: :string]]]
       ]
+
+    # Filter values: a NewType with constraints, and an atom built from any
+    # string on write.
+    attribute :balance, AshRpc.Test.NonNegative, public?: true
+    attribute :code, :atom, public?: true, constraints: [unsafe_to_atom?: true]
   end
 
   calculations do
@@ -41,7 +46,7 @@ defmodule AshRpc.Test.Ledger do
   end
 
   actions do
-    defaults [:read, create: [:count, :labels, :entries]]
+    defaults [:read, create: [:count, :labels, :entries, :balance, :code]]
 
     read :paged do
       pagination offset?: true, countable: true, required?: false

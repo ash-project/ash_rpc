@@ -328,7 +328,7 @@ defmodule AshRpc.FilterSortTest do
       end
     end
 
-    test "a value the field's type casts is kept as sent" do
+    test "a value the field's type casts is cast to it" do
       seed_posts()
 
       assert list_titles(%{"filter" => %{"viewCount" => %{"eq" => "2"}}}) == ["Bravo"]
@@ -461,6 +461,74 @@ defmodule AshRpc.FilterSortTest do
         })
 
       assert error == %{unsortable("post", "relationship") | "path" => ["comments", "sort"]}
+    end
+  end
+
+  # Values are coerced as Ash coerces filter values (`Ash.Type.coerce/3`):
+  # no constraints, no new atoms, and a type that raises is an error.
+  describe "filter value casting" do
+    setup do
+      Ash.create!(AshRpc.Test.Ledger, %{balance: 0, code: :alpha})
+      :ok
+    end
+
+    defp ledger_count(filter) do
+      %{"action" => "list_ledgers", "fields" => ["id"], "filter" => filter}
+      |> list()
+      |> length()
+    end
+
+    test "a NewType's constraints don't apply to its filter values" do
+      assert ledger_count(%{"balance" => %{"greaterThan" => -1}}) == 1
+      assert ledger_count(%{"balance" => %{"in" => [-1, 0]}}) == 1
+    end
+
+    test "a string on an unsafe_to_atom? atom field creates no atom" do
+      name = "zz_filter_probe_#{System.unique_integer([:positive])}"
+
+      assert ledger_count(%{"code" => name}) == 0
+      assert_raise ArgumentError, fn -> String.to_existing_atom(name) end
+      assert ledger_count(%{"code" => "alpha"}) == 1
+    end
+
+    test "a list is a vector's value, not a string's" do
+      assert %{"success" => true} =
+               AshRpc.run_action(@profile, ctx(), %{
+                 "action" => "list_accounts",
+                 "fields" => ["id"],
+                 "filter" => %{"embedding" => [1.0, 2.0, 3.0]}
+               })
+    end
+
+    test "a value whose cast raises is invalid_filter_value" do
+      for filter <- [%{"embedding" => 5}, %{"embedding" => %{"in" => [5]}}] do
+        error = run_error(%{"action" => "list_accounts", "fields" => ["id"], "filter" => filter})
+
+        assert %{"type" => "invalid_filter_value", "details" => %{"expected" => expected}} = error
+        assert expected == "A value of the field's type"
+      end
+    end
+  end
+
+  describe "operators whose field side is the array" do
+    setup do
+      Ash.create!(AshRpc.Test.Ledger, %{labels: ["a", "b"]})
+      Ash.create!(AshRpc.Test.Ledger, %{labels: ["c"]})
+      :ok
+    end
+
+    defp ledger_labels(filter) do
+      %{"action" => "list_ledgers", "fields" => ["labels"], "filter" => filter}
+      |> list()
+      |> Enum.map(& &1["labels"])
+    end
+
+    test "intersects takes a list of the field's elements" do
+      assert ledger_labels(%{"labels" => %{"intersects" => ["a", "z"]}}) == [["a", "b"]]
+    end
+
+    test "has takes one element" do
+      assert ledger_labels(%{"labels" => %{"has" => "c"}}) == [["c"]]
     end
   end
 

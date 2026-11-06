@@ -235,7 +235,7 @@ Update `@golden` only for an intentional wire change; add a case to
 | `post_tag.ex` | `AshRpc.Test.PostTag`: join resource for `Post.tags`, with a composite primary key and a `position` attribute (`create_post_tag`, `update_post_tag`, `destroy_post_tag`) |
 | `note.ex` | `AshRpc.Test.Note`: attribute multitenancy (`workspace_id`), has_many `replies` |
 | `note_reply.ex` | `AshRpc.Test.NoteReply`: multitenant child of `Note` with a paginated read |
-| `ledger.ex` | `AshRpc.Test.Ledger`: union `count` and arrays allowing nil items; `count` deliberately collides with the page-map key (`page_ledgers`); `choice_label` calculation with a union `choice` argument (`Calculations.ChoiceLabel`) |
+| `ledger.ex` | `AshRpc.Test.Ledger`: union `count` and arrays allowing nil items; `count` deliberately collides with the page-map key (`page_ledgers`); `choice_label` calculation with a union `choice` argument (`Calculations.ChoiceLabel`); `balance` (the constrained NewType `NonNegative`) and `code` (`:atom`, `unsafe_to_atom?`) for filter value casting |
 | `secret.ex` | `AshRpc.Test.Secret`: in the domain but deliberately **not exposed**, for strict-exposure tests; `post_id` is the destination of `Post.secrets` |
 | `voucher.ex` | `AshRpc.Test.Voucher`: in the domain and **not exposed**, but taken as a struct input by `Catalog.redeem_voucher`, so it is decorated with formatter-only names and `exposed: false`; `post_id` is the destination of `Post.vouchers`, which stays `unknown_field` |
 | `unlisted_embed.ex` | `AshRpc.Test.UnlistedEmbed`: an embedded resource nothing references, so it is **outside the manifest**: resource structs of a module not in `resource_lookup` (`%{}` on output) |

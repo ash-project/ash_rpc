@@ -18,8 +18,9 @@ defmodule AshRpc.FilterInput do
   operator takes (its manifest `rhs`), so structured values (typed maps and
   structs, keywords, tuples, unions) get internal keys, and are then cast to
   that type, since Ash's `==` and `has` compare a value as given. Structured
-  values also get their constraints applied, as the same action input would
-  be stored; scalars don't. A value the type can't cast is
+  values are cast as input with their constraints applied, as the same action
+  input would be stored; scalars are coerced as Ash coerces filter values
+  (`Ash.Type.coerce/3`), without constraints or new atoms. A value the type can't cast is
   `AshRpc.FilterInput.InvalidValue`. A bare value on a field is
   `eq` and is formatted the same way. An operator the field's values can't be
   compared with (`AshRpc.Introspection.filter_operator_allowed?/3`: anything
@@ -442,10 +443,10 @@ defmodule AshRpc.FilterInput do
 
   # Ash's `==` and `has` compare a value as given, without casting it to the
   # field's type (ETS compares `2` with `"2"`), so a value is cast to the
-  # field's type. A structured one also gets its constraints applied, as the
-  # same action input would be stored: a union value becomes an
-  # `%Ash.Union{}`, a keyword a keyword list, a tuple a tuple. A scalar's
-  # constraints are not applied: `gt: -1` on a `min: 0` field is a valid
+  # field's type. A structured one is cast as input and gets its constraints
+  # applied, as the same action input would be stored: a union value becomes
+  # an `%Ash.Union{}`, a keyword a keyword list, a tuple a tuple. A scalar is
+  # only coerced (`cast_value/3`): `gt: -1` on a `min: 0` field is a valid
   # filter. A value that fails is an error rather than a filter that matches
   # nothing, and so is a union member that is a record.
   defp stored_value(value, %Type{} = type, rt) do
@@ -484,6 +485,11 @@ defmodule AshRpc.FilterInput do
     end
   end
 
+  # A scalar is coerced as Ash coerces a filter value (`Ash.Type.coerce/3`):
+  # no constraints (a NewType's `cast_input` would apply its own), and an
+  # atom field keeps a string rather than creating an atom. A type whose
+  # cast raises on the value is an error, not a crash, and so is a list for a
+  # string, which coerce would take as iodata (`["a"]` as `"a"`).
   defp cast_value(value, %Type{} = type, apply_constraints?) do
     case ash_type(type) do
       {module, constraints} when apply_constraints? ->
@@ -491,11 +497,19 @@ defmodule AshRpc.FilterInput do
              do: Ash.Type.apply_constraints(module, casted, constraints)
 
       {module, constraints} ->
-        Ash.Type.cast_input(module, value, constraints)
+        coerce_scalar(module, value, constraints)
 
       nil ->
         {:ok, value}
     end
+  end
+
+  defp coerce_scalar(module, value, constraints) do
+    if is_list(value) and Ash.Type.storage_type(module, constraints) in [:string, :ci_string],
+      do: :error,
+      else: Ash.Type.coerce(module, value, constraints)
+  rescue
+    _ -> :error
   end
 
   # Every union value under `type` (arrays included) is of a member whose type
