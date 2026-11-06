@@ -36,6 +36,7 @@ defmodule AshRpc.Test.ErrorCases do
        {:invalid_field_selection, :primitive_type, @integer_type, ["x"], []}},
       {"invalid_field_selection_primitive_nil",
        {:invalid_field_selection, :primitive_type, nil, ["x"], [:post]}},
+      {"invalid_field_selection_aggregate_value", {:aggregate_value_load, :first_note_meta, []}},
       {"field_does_not_support_nesting", {:field_does_not_support_nesting, :title, [:post]}},
       {"duplicate_field", {:duplicate_field, :view_count, [:post]}},
       {"unsupported_field_combination",

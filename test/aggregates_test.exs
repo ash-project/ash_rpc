@@ -312,6 +312,63 @@ defmodule AshRpc.AggregatesTest do
              }
     end
 
+    # Ash can't load through an aggregate (`first_note_meta: [...]` is not a
+    # valid load), so a calculation of its value would be missing from the
+    # result.
+    test "a calculation of an aggregate's value is invalid_field_selection" do
+      for fields <- [
+            ["category", "displayCategory"],
+            [%{"adjustedPriority" => %{"args" => %{"multiplier" => 2}}}]
+          ] do
+        assert %{"success" => false, "errors" => [error]} =
+                 run(%{
+                   "action" => "get_project",
+                   "fields" => ["id", %{"firstNoteMeta" => fields}]
+                 })
+
+        assert error == %{
+                 "type" => "invalid_field_selection",
+                 "message" => "Cannot load calculations of the value of aggregate %{field}",
+                 "shortMessage" => "Invalid field selection",
+                 "vars" => %{"field" => "firstNoteMeta"},
+                 "path" => [],
+                 "fields" => ["firstNoteMeta"],
+                 "details" => %{
+                   "suggestion" => "Select only attributes of the aggregate's value"
+                 }
+               }
+      end
+    end
+
+    test "a nested embedded attribute of an aggregate's value needs no load", %{
+      project: project
+    } do
+      assert %{"success" => true, "data" => data} =
+               run(%{
+                 "action" => "get_project",
+                 "fields" => ["id", %{"firstNoteMeta" => ["category", %{"detail" => ["note"]}]}]
+               })
+
+      assert data == %{
+               "id" => project.id,
+               "firstNoteMeta" => %{"category" => "note", "detail" => nil}
+             }
+    end
+
+    test "a calculation of a union aggregate member is invalid_field_selection" do
+      assert %{"success" => false, "errors" => [error]} =
+               run(%{
+                 "action" => "get_project",
+                 "fields" => [%{"firstNoteAuthorInfo" => %{"meta" => ["displayCategory"]}}]
+               })
+
+      assert %{
+               "type" => "invalid_field_selection",
+               "vars" => %{"field" => "firstNoteAuthorInfo"},
+               "fields" => ["firstNoteAuthorInfo"]
+             } = error
+    end
+
     test "both complex first aggregates load together", %{project: project} do
       assert %{"success" => true, "data" => data} =
                run(%{

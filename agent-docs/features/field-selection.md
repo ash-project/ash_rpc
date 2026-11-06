@@ -137,7 +137,7 @@ Asserted in `test/calculations_test.exs`:
 | `invalid_calculation_args` | `args` that are not a map, `args` on a calculation that takes none, an `args` key the calculation doesn't define, or a calculation with arguments sent without `args` | calculations_test "args on a calculation that takes none", "an args key the calculation doesn't define is invalid_calculation_args", "missing args on a calculation that takes arguments" |
 | `invalid_field_format` | A calculation with arguments requested as a bare name (internal reason `calculation_requires_args`) | calculations_test "calculation_requires_args: a calculation with arguments requested as a bare name" |
 | `unknown_input` | A key in a structured calculation argument value that isn't a client name of its type (`path` runs through the calculation, `args` and the argument) | calculations_test "structured calculation arguments" describe |
-| `invalid_field_selection` | A `fields` key on a scalar calculation, or a nested selection on a primitive aggregate | calculations_test "invalid_field_selection: a fields key on a scalar calculation"; aggregates_test "nested selection on a primitive aggregate is invalid_field_selection" |
+| `invalid_field_selection` | A `fields` key on a scalar calculation, a nested selection on a primitive aggregate, or a calculation selected in an aggregate's value | calculations_test "invalid_field_selection: a fields key on a scalar calculation"; aggregates_test "nested selection on a primitive aggregate is invalid_field_selection", "a calculation of an aggregate's value is invalid_field_selection" |
 | `field_does_not_support_nesting` | A nested list on a scalar calculation or attribute | calculations_test "field_does_not_support_nesting: nested fields on a scalar calculation" |
 | `unknown_field` | No such field on the resource or in a nested selection (`path` names the parent) | calculations_test "an unknown calculation name", "an unknown field inside a calculation's selection"; aggregates_test "an unknown aggregate is unknown_field, bare or with nested fields" |
 | `unknown_map_field` | Unknown key in a typed map without field-name overrides | calculations_test "unknown_map_field: an unknown key in a typed-map return" |
@@ -151,7 +151,11 @@ as `PostStats`) is `unknown_field` with `vars.kind` `"field constrained"`.
 Aggregates are selected by name (`"commentCount"`, `"hasComments"`,
 `"avgRating"`, `"firstCommentBody"`, `"commentBodies"`, …) and always count as
 loads. A nested selection on an aggregate with a primitive return is
-`invalid_field_selection` (`vars.fieldType` `"aggregate"`). Aggregates appear
+`invalid_field_selection` (`vars.fieldType` `"aggregate"`). An aggregate
+returning an embedded resource or a union takes a selection of its value's
+attributes; Ash can't load through an aggregate, so a calculation selected in
+it is `invalid_field_selection` naming the aggregate, without a hint ("a
+calculation of an aggregate's value is invalid_field_selection"). Aggregates appear
 in mutation results too, and the client can sort and filter by them. See
 `test/aggregates_test.exs`: "each Post aggregate is computed over its
 comments", "Author.post_count counts the author's posts", "create returns

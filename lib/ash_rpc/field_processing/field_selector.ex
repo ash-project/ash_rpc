@@ -382,9 +382,13 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
 
         {select, load ++ [load_spec], template ++ [{internal_name, nested_template}]}
 
+      # Ash can't load through an aggregate, so a calculation of its value
+      # (a nested load) is rejected rather than silently missing. The template
+      # extracts the selected attributes.
+      :aggregate when nested_load != [] ->
+        throw({:aggregate_value_load, internal_name, path})
+
       :aggregate ->
-        # Aggregates don't support nested loads - just load the aggregate itself
-        # The template will handle extracting nested fields from the result
         check_load_allowed!(path, internal_name, ctx)
         {select, load ++ [internal_name], template ++ [{internal_name, nested_template}]}
 

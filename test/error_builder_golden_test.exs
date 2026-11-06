@@ -661,6 +661,20 @@ defmodule AshRpc.ErrorBuilderGoldenTest do
       ],
       "success" => false
     },
+    "invalid_field_selection_aggregate_value" => %{
+      "errors" => [
+        %{
+          "details" => %{"suggestion" => "Select only attributes of the aggregate's value"},
+          "fields" => ["firstNoteMeta"],
+          "message" => "Cannot load calculations of the value of aggregate %{field}",
+          "path" => [],
+          "shortMessage" => "Invalid field selection",
+          "type" => "invalid_field_selection",
+          "vars" => %{"field" => "firstNoteMeta"}
+        }
+      ],
+      "success" => false
+    },
     "invalid_identity_message" => %{
       "errors" => [
         %{

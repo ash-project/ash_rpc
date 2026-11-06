@@ -50,7 +50,8 @@ defmodule AshRpc.ErrorBuilder do
     empty one.
   - `invalid_field_selection` *(hint)*: a nested field list was given for an
     aggregate or calculation with a primitive type, or for an action whose
-    return type is primitive.
+    return type is primitive. Also, without the hint: a calculation selected in
+    an aggregate's value, which Ash can't load.
   - `field_does_not_support_nesting` *(hint)*: a nested specification was
     given for a primitive attribute or calculation.
   - `unsupported_field_combination` *(hint)*: a relationship's nested
@@ -459,6 +460,17 @@ defmodule AshRpc.ErrorBuilder do
         requested_fields: requested_fields,
         suggestion: "Remove the field selection for this primitive type"
       }
+    )
+  end
+
+  # Not a drift hint: no generated client offers this selection.
+  defp build({:aggregate_value_load, aggregate, path}, ctx) when is_list(path) do
+    malformed(
+      "invalid_field_selection",
+      "Cannot load calculations of the value of aggregate %{field}",
+      "Invalid field selection",
+      field_opts(path, aggregate, ctx) ++
+        [details: %{suggestion: "Select only attributes of the aggregate's value"}]
     )
   end
 
