@@ -756,6 +756,17 @@ defmodule AshRpc.IntrospectionTest do
       assert Introspection.filter_operator_value_type(breaks, :has) == breaks.type.item_type
     end
 
+    test "intersects takes the array field's own type", %{field: field} do
+      breaks = field.(AshRpc.Test.Project, :breaks)
+
+      assert Introspection.filter_operator_value_type(breaks, :intersects) ==
+               %Ash.Info.Manifest.Type{
+                 kind: :array,
+                 item_type: breaks.type.item_type,
+                 constraints: []
+               }
+    end
+
     test "an operator with a concrete type takes that type", %{field: field} do
       title = field.(AshRpc.Test.Post, :title)
 

@@ -628,8 +628,10 @@ defmodule AshRpc.Introspection do
   it:
 
     * a `%Ash.Info.Manifest.Type{}`: the field's own type (`rhs` `:same` or
-      `:any`), one element of it for `has`, or an array of either for a list
-      operator (`in`, `{:array, :same}`);
+      `:any`), or an array of it for a list operator (`in`, `{:array, :same}`).
+      When Ash's signature takes the field as an array (`has`, `intersects`),
+      `:same` is one element of it: `has` takes an element, `intersects` a
+      list of them;
     * `{:concrete, module}`: an operator with a type of its own (`is_nil`
       takes `Ash.Type.Boolean`, `contains` `Ash.Type.String`);
     * `nil`: the field has no such operator or function, or its value has no
@@ -651,7 +653,7 @@ defmodule AshRpc.Introspection do
 
     case rhs do
       {:concrete, _module} = concrete -> concrete
-      rhs -> rhs_type(rhs, same_type(field, name))
+      rhs -> rhs_type(rhs, same_type(field.type, name))
     end
   end
 
@@ -664,12 +666,39 @@ defmodule AshRpc.Introspection do
     end
   end
 
-  # `:same` is the field's type, except for `has`, whose field is the array
-  # (`{:array, :same}`) and whose value is one element.
-  defp same_type(%Ash.Info.Manifest.Field{type: %Ash.Info.Manifest.Type{item_type: item}}, :has),
-    do: item
+  # The manifest's `rhs` is the value side only. `:same` is the field's type,
+  # or one element of it when Ash's signature takes the field as an array:
+  # `has` is `[{:array, :same}, :same]`, `intersects`
+  # `[{:array, :any}, {:array, :same}]`.
+  defp same_type(
+         %Ash.Info.Manifest.Type{kind: :array, item_type: %Ash.Info.Manifest.Type{} = item} = type,
+         name
+       ),
+       do: if(array_field_side?(name), do: item, else: type)
 
-  defp same_type(%Ash.Info.Manifest.Field{type: type}, _name), do: type
+  defp same_type(type, _name), do: type
+
+  # Builtins only: a data-layer function's signature needs the resource's data
+  # layer, which the runtime doesn't read.
+  defp array_field_side?(name) do
+    signatures =
+      case Ash.Filter.get_operator(name) || Ash.Filter.get_function(name, nil, false) do
+        nil -> []
+        module -> operator_signatures(module)
+      end
+
+    Enum.any?(signatures, &match?([{:array, _} | _], &1))
+  end
+
+  defp operator_signatures(module) do
+    Code.ensure_loaded!(module)
+
+    signatures =
+      if function_exported?(module, :types, 0), do: module.types(), else: module.args()
+
+    # Some operators give one signature rather than a list of them.
+    if Enum.all?(signatures, &is_list/1), do: signatures, else: [signatures]
+  end
 
   defp rhs_type(rhs, same) when rhs in [:same, :any], do: same
   defp rhs_type({:array, inner}, same), do: array_of(rhs_type(inner, same))
