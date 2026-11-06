@@ -373,7 +373,11 @@ item by item with its `nil`s kept), because Ash's `==` and `has` compare the
 value as given: a union value becomes an `%Ash.Union{}`, a keyword a keyword
 list, a tuple a tuple, as the same action input is stored. A value that fails,
 or a union value of a member that is a record, is `invalid_filter_value` at the
-operator (`test/structured_filter_test.exs`). Scalars pass as sent. Calculation `input` values are formatted with each argument's type.
+operator (`test/structured_filter_test.exs`). A scalar is cast too, without its
+constraints (`gt: -1` on a `min: 0` field stays valid), so `"2"` matches an
+integer `2` and `["a"]` for a string is `invalid_filter_value` at the operator
+("a value the field's type can't cast is invalid_filter_value at the
+operator"). Calculation `input` values are formatted with each argument's type.
 A field miss is dropped and reported as `NoSuchField` (`path` where it sits,
 e.g. `["filter", "author", "posts"]`), an operator miss as
 `NoSuchFilterPredicate` (`input` on a field that isn't a calculation
@@ -389,11 +393,10 @@ field, for a bare value) and is reported as `AshRpc.FilterInput.InvalidValue`
 a client name, or a rejected argument value, which drop the whole field; a
 calculation `input` that is not a map is `invalid_calculation_args` at
 `[filter, calc, input]`. A statement (the filter, a list entry, an
-`and`/`or`/`not` operand, a relationship's condition) that is a string, number
-or null, a relationship's condition that is a boolean, and an empty
-`and`/`or`, is dropped and reported as an `InvalidValue` rendered
-`invalid_filter` at its path ("invalid filter shapes"); a boolean statement
-elsewhere passes to Ash. Example: e.g. `%{"slug" => %{"isNil" => true}}`, also inside
+`and`/`or`/`not` operand, a relationship's condition) that is a string,
+number, boolean or null, and an empty `and`/`or`, is dropped and reported as an
+`InvalidValue` rendered `invalid_filter` at its path ("invalid filter shapes").
+Example: e.g. `%{"slug" => %{"isNil" => true}}`, also inside
 `and` / `or` ("filter with isNil"; "filter and sort reach the request with
 internal names" shows `request.filter == %{slug: %{is_nil: true}}`).
 

@@ -173,19 +173,19 @@ Behaviour worth knowing (`test/error_protocol_test.exs` unless noted):
   `invalid_filter_value`, path at the operator): a list operator (`in`)
   given a non-list (`details.expected` `A list`), or a value an operator's
   concrete right-hand type can't cast (`isNil` → `A boolean value`,
-  `contains` → `A string value`), a structured value its type can't cast or
-  whose constraints fail (`A value of the field's type`), and a union value of
+  `contains` → `A string value`), a value the field's type can't cast (a
+  list for a string, `"abc"` for an integer), or a structured one whose
+  constraints fail (`A value of the field's type`), and a union value of
   a member that is a record (`A value of a union member that is not a
   record`). An operator a field's values can't be compared with (anything but
   `isNil` on a record, ordering on a structured value;
   `AshRpc.Introspection.filter_operator_allowed?/3`) is
-  `unknown_filter_operator` at the field. A relationship given a boolean is
-  `invalid_filter` at the relationship. What still reaches Ash (a value the
-  field's type can't cast, e.g. a map in an `in` list on a uuid) is
-  `Ash.Error.Query.InvalidFilterValue`, rendered with a fixed message, no
-  `details.expected` and Ash's `["filter"]` path; Ash's message names
-  internals and echoes the value (`test/filter_sort_test.exs` "invalid
-  filter values").
+  `unknown_filter_operator` at the field. A boolean statement (the filter, a
+  list entry, an `and`/`or`/`not` operand, a relationship's condition) is
+  `invalid_filter` at its path. An `Ash.Error.Query.InvalidFilterValue` Ash
+  still raises is rendered with a fixed message, no `details.expected` and
+  Ash's `["filter"]` path; Ash's message names internals and echoes the value
+  (`test/filter_sort_test.exs` "invalid filter values").
 - A sort on a relationship (`details.reason` `relationship`), on a
   calculation with required arguments (`requires_arguments`) or on a field
   the manifest marks unsortable is `Ash.Error.Query.UnsortableField` from

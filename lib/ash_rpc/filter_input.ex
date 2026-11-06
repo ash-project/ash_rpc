@@ -16,9 +16,11 @@ defmodule AshRpc.FilterInput do
 
   Operator values are formatted as client input with the type the field's
   operator takes (its manifest `rhs`), so structured values (typed maps and
-  structs, keywords, tuples, unions) get internal keys, and are then cast and
-  their constraints applied as the same action input would be stored, since
-  Ash's `==` and `has` compare a value as given. A bare value on a field is
+  structs, keywords, tuples, unions) get internal keys, and are then cast to
+  that type, since Ash's `==` and `has` compare a value as given. Structured
+  values also get their constraints applied, as the same action input would
+  be stored; scalars don't. A value the type can't cast is
+  `AshRpc.FilterInput.InvalidValue`. A bare value on a field is
   `eq` and is formatted the same way. An operator the field's values can't be
   compared with (`AshRpc.Introspection.filter_operator_allowed?/3`: anything
   but `isNil` on a record, ordering on a structured value) is reported as
@@ -34,10 +36,9 @@ defmodule AshRpc.FilterInput do
   full path; Ash's own has only `[:filter]`.
 
   A statement (the filter, a list entry, an `and`/`or`/`not` operand, a
-  relationship's condition) that is a string, number or null, a
-  relationship's condition that is a boolean, an empty `and`/`or`, and a
-  calculation `input` that is not a map are dropped and reported as
-  `InvalidValue` too.
+  relationship's condition) that is a string, number, boolean or null, an
+  empty `and`/`or`, and a calculation `input` that is not a map are dropped
+  and reported as `InvalidValue` too.
 
   A sort that is not a string or a list, and a list entry that is not a string
   (or an atom, an internal name), is reported as `Ash.Error.Query.InvalidSort`;
@@ -172,10 +173,11 @@ defmodule AshRpc.FilterInput do
     if items == [] and list != [], do: {:drop, errors}, else: {Enum.reverse(items), errors}
   end
 
-  # A statement is a map or a list; a string, number or null is dropped and
-  # reported. Booleans, keyword tuples and structs pass to Ash.
+  # A statement is a map or a list; a string, number, boolean or null is
+  # dropped and reported (Ash takes `true` as match-all and `false` as
+  # match-none). Keyword tuples and structs pass to Ash.
   defp walk(_rt, _resource, other, path, errors)
-       when is_binary(other) or is_number(other) or is_nil(other),
+       when is_binary(other) or is_number(other) or is_boolean(other) or is_nil(other),
        do: {:drop, [invalid_statement(path) | errors]}
 
   defp walk(_rt, _resource, other, _path, errors), do: {other, errors}
@@ -432,38 +434,39 @@ defmodule AshRpc.FilterInput do
   end
 
   # Ash's `==` and `has` compare a value as given, without casting it to the
-  # field's type, so a structured value is cast and its constraints applied,
-  # as the same action input would be stored: a union value becomes an
-  # `%Ash.Union{}`, a keyword a keyword list, a tuple a tuple. A value that
-  # fails is an error rather than a filter that matches nothing, and so is a
-  # union member that is a record. Scalars pass as sent.
+  # field's type (ETS compares `2` with `"2"`), so a value is cast to the
+  # field's type. A structured one also gets its constraints applied, as the
+  # same action input would be stored: a union value becomes an
+  # `%Ash.Union{}`, a keyword a keyword list, a tuple a tuple. A scalar's
+  # constraints are not applied: `gt: -1` on a `min: 0` field is a valid
+  # filter. A value that fails is an error rather than a filter that matches
+  # nothing, and so is a union member that is a record.
   defp stored_value(value, %Type{} = type, rt) do
-    if Introspection.filter_value_kind(type, rt) == :structured do
-      with {:ok, casted} <- cast_value(value, type),
-           :ok <- comparable_members(casted, type, rt) do
-        {:ok, casted}
-      else
-        {:error, :record_member} ->
-          {:error, [{:invalid_filter_value, "A value of a union member that is not a record"}]}
+    apply_constraints? = Introspection.filter_value_kind(type, rt) == :structured
 
-        _ ->
-          {:error, [{:invalid_filter_value, "A value of the field's type"}]}
-      end
+    with {:ok, casted} <- cast_value(value, type, apply_constraints?),
+         :ok <- comparable_members(casted, type, rt) do
+      {:ok, casted}
     else
-      {:ok, value}
+      {:error, :record_member} ->
+        {:error, [{:invalid_filter_value, "A value of a union member that is not a record"}]}
+
+      _ ->
+        {:error, [{:invalid_filter_value, "A value of the field's type"}]}
     end
   end
 
   # A list is cast item by item, and its `nil` items kept: an `in` list may
   # hold `nil`, and Ash's array constraints for a NewType's items don't
   # honour `nil_items?`. A type with no Ash module passes as is.
-  defp cast_value(value, %Type{kind: :array, item_type: %Type{} = item}) when is_list(value) do
+  defp cast_value(value, %Type{kind: :array, item_type: %Type{} = item}, apply_constraints?)
+       when is_list(value) do
     Enum.reduce_while(value, {:ok, []}, fn
       nil, {:ok, acc} ->
         {:cont, {:ok, [nil | acc]}}
 
       item_value, {:ok, acc} ->
-        case cast_value(item_value, item) do
+        case cast_value(item_value, item, apply_constraints?) do
           {:ok, casted} -> {:cont, {:ok, [casted | acc]}}
           error -> {:halt, error}
         end
@@ -474,11 +477,14 @@ defmodule AshRpc.FilterInput do
     end
   end
 
-  defp cast_value(value, %Type{} = type) do
+  defp cast_value(value, %Type{} = type, apply_constraints?) do
     case ash_type(type) do
-      {module, constraints} ->
+      {module, constraints} when apply_constraints? ->
         with {:ok, casted} <- Ash.Type.cast_input(module, value, constraints),
              do: Ash.Type.apply_constraints(module, casted, constraints)
+
+      {module, constraints} ->
+        Ash.Type.cast_input(module, value, constraints)
 
       nil ->
         {:ok, value}
@@ -486,7 +492,7 @@ defmodule AshRpc.FilterInput do
   end
 
   # Every union value under `type` (arrays included) is of a member whose type
-  # is not a record, so equality can hold.
+  # is not a record, so equality can hold. Always `:ok` for a scalar.
   defp comparable_members(value, %Type{} = type, rt) do
     case Introspection.resolve_named_type(type, rt) do
       %Type{kind: :array, item_type: %Type{} = item} when is_list(value) ->

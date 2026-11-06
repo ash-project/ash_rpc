@@ -106,17 +106,16 @@ defmodule AshRpc.ErrorBuilder do
     as sent, `path` ends at the relationship).
   - `invalid_filter`: a filter statement (the `filter` param, a list entry,
     an `and`/`or`/`not` operand or a relationship's condition) is a string,
-    number or null, a relationship's condition is a boolean, or an `and`/`or`
-    is empty. `path` locates it.
+    number, boolean or null, or an `and`/`or` is empty. `path` locates it.
   - `invalid_filter_value`: an operator value has the wrong shape: a list
     operator (`in`) given a non-list (`details.expected` `A list`), or a value
     an operator's own type (`isNil`, `contains`) can't cast (`A boolean
-    value`, `A string value`), a structured value its type can't cast or
-    whose constraints fail (`A value of the field's type`), or a union value
-    of a member that is a record (`A value of a union member that is not a
-    record`). `path` ends at the operator. The same type,
-    with `path` `filter` and no `details.expected`, comes from Ash for a value
-    the field's type can't cast.
+    value`, `A string value`), a value the field's type can't cast, or a
+    structured one whose constraints fail (`A value of the field's type`), or
+    a union value of a member that is a record (`A value of a union member
+    that is not a record`). `path` ends at the operator. The same type, with `path`
+    `filter` and no `details.expected`, comes from a value Ash itself
+    rejects.
 
   Identity and `getBy`:
 

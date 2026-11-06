@@ -258,9 +258,9 @@ defmodule AshRpc.FilterInputTest do
       assert statement == %{title: %{eq: "a"}}
     end
 
-    test "a bare value on a field is eq and takes internal names", %{rt: rt} do
+    test "a bare value on a field is eq, takes internal names and is cast", %{rt: rt} do
       assert FilterInput.parse(rt, Project, %{"dueDate" => "2026-01-01"}) ==
-               {%{due_date: "2026-01-01"}, []}
+               {%{due_date: ~D[2026-01-01]}, []}
 
       assert FilterInput.parse(rt, AshRpc.Test.Widget, %{
                "attachments" => [%{"file" => %{"filename" => "a", "mimeType" => "text/plain"}}]

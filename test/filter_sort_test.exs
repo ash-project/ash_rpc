@@ -313,18 +313,27 @@ defmodule AshRpc.FilterSortTest do
                )
     end
 
-    test "an operand Ash rejects is invalid_filter_value without Ash's message" do
-      error = filter_error(%{"id" => %{"in" => [%{"a" => 1}]}})
+    test "a value the field's type can't cast is invalid_filter_value at the operator" do
+      for {filter, path} <- [
+            {%{"title" => %{"eq" => ["a"]}}, ["filter", "title", "eq"]},
+            {%{"title" => %{"eq" => %{"x" => 1}}}, ["filter", "title", "eq"]},
+            {%{"title" => ["a"]}, ["filter", "title"]},
+            {%{"viewCount" => %{"eq" => "abc"}}, ["filter", "viewCount", "eq"]},
+            {%{"viewCount" => %{"gt" => [1]}}, ["filter", "viewCount", "gt"]},
+            {%{"viewCount" => %{"in" => [1, "abc"]}}, ["filter", "viewCount", "in"]},
+            {%{"id" => %{"in" => [%{"a" => 1}]}}, ["filter", "id", "in"]}
+          ] do
+        assert filter_error(filter) == invalid_filter_value(path, "A value of the field's type"),
+               inspect(filter)
+      end
+    end
 
-      assert error == %{
-               "type" => "invalid_filter_value",
-               "message" => "Invalid filter value",
-               "shortMessage" => "Invalid filter value",
-               "vars" => %{},
-               "fields" => [],
-               "path" => ["filter"],
-               "details" => %{}
-             }
+    test "a value the field's type casts is kept as sent" do
+      seed_posts()
+
+      assert list_titles(%{"filter" => %{"viewCount" => %{"eq" => "2"}}}) == ["Bravo"]
+      assert list_titles(%{"filter" => %{"title" => %{"in" => ["Alpha", nil]}}}) == ["Alpha"]
+      assert list_titles(%{"filter" => %{"title" => "Bravo"}}) == ["Bravo"]
     end
 
     test "a relationship given a boolean is invalid_filter at the relationship" do
@@ -537,9 +546,17 @@ defmodule AshRpc.FilterSortTest do
       end
     end
 
-    test "a boolean filter still passes to Ash" do
-      seed_posts()
-      assert "Alpha" in list_titles(%{"filter" => true})
+    test "a boolean statement is invalid_filter" do
+      for {filter, path} <- [
+            {true, ["filter"]},
+            {false, ["filter"]},
+            {[%{"title" => "a"}, true], ["filter", 1]},
+            {%{"or" => [true, %{"title" => "a"}]}, ["filter", "or", 0]},
+            {%{"not" => false}, ["filter", "not"]}
+          ] do
+        assert run_error(%{"action" => "list_posts", "filter" => filter}) == invalid_filter(path),
+               inspect(filter)
+      end
     end
   end
 
