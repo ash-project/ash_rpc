@@ -353,8 +353,10 @@ value is formatted as client input (`AshRpc.ValueFormatter.format_input/3`)
 with the type the field's operator takes, read from the manifest field's
 `filter_operators` / `filter_functions` `rhs`: `:same` / `:any` is the field's
 type (the element type for `has`), `{:array, rhs}` an array of it (`in`),
-`{:concrete, mod}` is left as sent once `mod` casts it. So a typed map or
-struct, keyword, tuple or union value takes internal keys:
+`{:concrete, mod}` is left as sent once `mod` casts it
+(`AshRpc.Introspection.filter_operator_value_type/2`, public so client
+generators read the same rule). So a typed map or struct, keyword, tuple or
+union value takes internal keys:
 `%{"stats" => %{"eq" => %{"isFeatured" => true}}}` becomes
 `%{stats: %{eq: %{is_featured?: true}}}`. A bare value on a field
 (`%{"attachments" => [%{"url" => "https://a.example"}]}`) is `eq` and is

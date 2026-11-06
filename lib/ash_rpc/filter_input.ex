@@ -84,8 +84,23 @@ defmodule AshRpc.FilterInput do
 
   def parse_sort(_rt, _resource, sort), do: {nil, [invalid_sort(sort)]}
 
+  @doc """
+  Splits a sort entry's leading modifier from the field name, as `parse_sort/3`
+  reads it: `"++"` (ascending, nils first), `"--"` (descending, nils last),
+  `"+"`, `"-"`, or `""` for none.
+
+      iex> AshRpc.FilterInput.split_sort_modifier("--viewCount")
+      {"--", "viewCount"}
+  """
+  @spec split_sort_modifier(String.t()) :: {String.t(), String.t()}
+  def split_sort_modifier("++" <> name), do: {"++", name}
+  def split_sort_modifier("--" <> name), do: {"--", name}
+  def split_sort_modifier("+" <> name), do: {"+", name}
+  def split_sort_modifier("-" <> name), do: {"-", name}
+  def split_sort_modifier(name), do: {"", name}
+
   defp sort_field(rt, resource, entry) when is_binary(entry) do
-    {modifier, name} = split_modifier(entry)
+    {modifier, name} = split_sort_modifier(entry)
 
     with {:ok, field} <- ClientNames.resource_field(rt, resource, name),
          :ok <- sortable(rt, Map.get(rt.resource_lookup, resource), field, name) do
@@ -139,12 +154,6 @@ defmodule AshRpc.FilterInput do
 
   defp required_argument?(%Manifest.Argument{} = arg),
     do: arg.allow_nil? == false and not arg.has_default?
-
-  defp split_modifier("++" <> name), do: {"++", name}
-  defp split_modifier("--" <> name), do: {"--", name}
-  defp split_modifier("+" <> name), do: {"+", name}
-  defp split_modifier("-" <> name), do: {"-", name}
-  defp split_modifier(name), do: {"", name}
 
   # Resource level: field and relationship names, and and/or/not. `path` is
   # where the node sits in the request, keys as sent (for value errors).
@@ -403,32 +412,30 @@ defmodule AshRpc.FilterInput do
   # a record, ordering on a structured value) is unknown, as Ash would report
   # an operator the field doesn't have.
   defp allowed_rhs(rt, %Manifest.Field{type: %Type{} = type} = field, op, value) do
-    if Introspection.filter_operator_allowed?(type, manifest_name(op), rt),
+    if Introspection.filter_operator_allowed?(type, op, rt),
       do: format_rhs(rt, field, op, value),
       else: {:error, :not_allowed}
   end
 
   defp allowed_rhs(rt, field, op, value), do: format_rhs(rt, field, op, value)
 
-  # A list operator (`in`) takes a list, and an operator with a concrete
-  # right-hand type (`isNil`, `contains`) a value of that type; Ash's error for
-  # either names internals. Values of the field's own type are formatted, and
-  # structured ones cast (`stored_value/3`).
+  # A list operator (`in`, whose value type is an array of the field's own)
+  # takes a list, and an operator with a concrete right-hand type (`isNil`,
+  # `contains`) a value of that type; Ash's error for either names internals.
+  # Values of the field's type are formatted and cast (`stored_value/3`).
   defp format_rhs(rt, field, op, value) do
-    rhs = rhs(field, op)
-
-    case {rhs, rhs_type(rhs, same_type(field, op))} do
-      {{:array, _}, _} when not is_list(value) ->
-        {:error, [{:invalid_filter_value, "A list"}]}
-
-      {{:concrete, module}, _} ->
+    case Introspection.filter_operator_value_type(field, op) do
+      {:concrete, module} ->
         concrete_value(module, value)
 
-      {_, %Type{} = type} ->
+      %Type{kind: :array} = type when type != field.type and not is_list(value) ->
+        {:error, [{:invalid_filter_value, "A list"}]}
+
+      %Type{} = type ->
         with {:ok, formatted} <- ValueFormatter.format_input(value, type, rt),
              do: stored_value(formatted, type, rt)
 
-      {_, nil} ->
+      nil ->
         {:ok, value}
     end
   end
@@ -526,36 +533,6 @@ defmodule AshRpc.FilterInput do
 
   defp type_name(module),
     do: module |> Module.split() |> List.last() |> Macro.underscore() |> String.replace("_", " ")
-
-  # The manifest names operators by symbol (`:==`) and functions by name; the
-  # filter key is a predicate name or alias (`:eq`, `:equals`).
-  defp rhs(%Manifest.Field{} = field, op) do
-    name = manifest_name(op)
-
-    Enum.find_value(
-      List.wrap(field.filter_operators) ++ List.wrap(field.filter_functions),
-      fn applicable -> if applicable.name == name, do: applicable.rhs end
-    )
-  end
-
-  defp manifest_name(op) do
-    case Ash.Filter.get_operator(op) do
-      nil -> op
-      operator -> operator.operator()
-    end
-  end
-
-  # `:same` is the field's type, except for `has`, whose field is the array
-  # (`{:array, :same}`) and whose value is one element.
-  defp same_type(%Manifest.Field{type: %Type{item_type: item_type}}, :has), do: item_type
-  defp same_type(%Manifest.Field{type: type}, _op), do: type
-
-  defp rhs_type(rhs, same) when rhs in [:same, :any], do: same
-  defp rhs_type({:array, inner}, same), do: array_of(rhs_type(inner, same))
-  defp rhs_type(_rhs, _same), do: nil
-
-  defp array_of(nil), do: nil
-  defp array_of(%Type{} = item), do: %Type{kind: :array, item_type: item, constraints: []}
 
   defp invalid_values(reasons, path, errors) do
     Enum.reduce(reasons, errors, fn reason, errors ->

@@ -684,6 +684,7 @@ defmodule AshRpc.IntrospectionTest do
         assert Introspection.filter_value_kind(t, rt) == :record, inspect(field)
         assert Introspection.filter_operator_allowed?(t, :is_nil, rt)
         refute Introspection.filter_operator_allowed?(t, :==, rt)
+        refute Introspection.filter_operator_allowed?(t, :eq, rt)
         refute Introspection.filter_operator_allowed?(t, :in, rt)
       end
     end
@@ -703,7 +704,7 @@ defmodule AshRpc.IntrospectionTest do
         for op <- [:==, :!=, :in, :has, :is_nil],
             do: assert(Introspection.filter_operator_allowed?(t, op, rt))
 
-        for op <- [:<, :>, :<=, :>=],
+        for op <- [:<, :>, :<=, :>=, :less_than, :greater_than_or_equal],
             do: refute(Introspection.filter_operator_allowed?(t, op, rt))
       end
     end
@@ -724,6 +725,53 @@ defmodule AshRpc.IntrospectionTest do
       t = type.(AshRpc.Test.Post, :view_count)
       assert Introspection.filter_value_kind(t, rt) == :scalar
       assert Introspection.filter_operator_allowed?(t, :<, rt)
+    end
+  end
+
+  describe "filter_operator_value_type/2" do
+    setup do
+      rt = AshRpc.Runtime.from_manifest(AshRpc.Test.ManifestBuilder.manifest())
+      field = fn resource, name -> rt.resource_lookup[resource].fields[name] end
+      %{field: field}
+    end
+
+    test "an operator takes the field's type, by filter key or manifest name", %{field: field} do
+      title = field.(AshRpc.Test.Post, :title)
+
+      for op <- [:eq, :equals, :==, :not_eq, :<] do
+        assert Introspection.filter_operator_value_type(title, op) == title.type, inspect(op)
+      end
+    end
+
+    test "a list operator takes a list of the field's type", %{field: field} do
+      title = field.(AshRpc.Test.Post, :title)
+
+      assert Introspection.filter_operator_value_type(title, :in) ==
+               %Ash.Info.Manifest.Type{kind: :array, item_type: title.type, constraints: []}
+    end
+
+    test "has takes one element of an array field", %{field: field} do
+      breaks = field.(AshRpc.Test.Project, :breaks)
+
+      assert Introspection.filter_operator_value_type(breaks, :has) == breaks.type.item_type
+    end
+
+    test "an operator with a concrete type takes that type", %{field: field} do
+      title = field.(AshRpc.Test.Post, :title)
+
+      assert Introspection.filter_operator_value_type(title, :is_nil) ==
+               {:concrete, Ash.Type.Boolean}
+
+      assert Introspection.filter_operator_value_type(title, :contains) ==
+               {:concrete, Ash.Type.String}
+    end
+
+    test "an operator the field doesn't have is nil", %{field: field} do
+      assert Introspection.filter_operator_value_type(field.(AshRpc.Test.Post, :title), :bogus) ==
+               nil
+
+      assert Introspection.filter_operator_value_type(field.(AshRpc.Test.Post, :title), :has) ==
+               nil
     end
   end
 end

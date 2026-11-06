@@ -367,4 +367,19 @@ defmodule AshRpc.FilterInputTest do
       assert {nil, [_]} = FilterInput.parse_sort(rt, Post, "-view_count")
     end
   end
+
+  describe "split_sort_modifier/1" do
+    test "splits a leading sort modifier from the name" do
+      for {entry, split} <- [
+            {"++title", {"++", "title"}},
+            {"--title", {"--", "title"}},
+            {"+title", {"+", "title"}},
+            {"-title", {"-", "title"}},
+            {"title", {"", "title"}},
+            {"", {"", ""}}
+          ] do
+        assert FilterInput.split_sort_modifier(entry) == split
+      end
+    end
+  end
 end

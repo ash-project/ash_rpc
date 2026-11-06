@@ -604,19 +604,81 @@ defmodule AshRpc.Introspection do
 
   @doc """
   Whether a filter on a field of manifest type `type` takes the operator or
-  function the manifest names `name` (`:==`, `:<`, `:has`, `:is_nil`), by
-  `filter_value_kind/2`: a record takes `:is_nil` only, a structured value no
-  ordering operator. The field's own manifest operator list is not consulted.
+  function `name`, by `filter_value_kind/2`: a record takes `:is_nil` only, a
+  structured value no ordering operator. `name` is the manifest's name
+  (`:==`, `:<`, `:has`, `:is_nil`) or a filter key (`:eq`, `:less_than`). The
+  field's own manifest operator list is not consulted.
   """
   @spec filter_operator_allowed?(Ash.Info.Manifest.Type.t(), atom(), type_lookups()) ::
           boolean()
   def filter_operator_allowed?(%Ash.Info.Manifest.Type{} = type, name, lookups) do
+    name = filter_operator_name(name)
+
     case filter_value_kind(type, lookups) do
       :record -> name == :is_nil
       :structured -> name not in @ordering_operators
       :scalar -> true
     end
   end
+
+  @doc """
+  The type the value of filter operator or function `operator` takes on
+  `field`, from the field's manifest `filter_operators` and
+  `filter_functions` (their `rhs`), as `AshRpc.FilterInput` formats and casts
+  it:
+
+    * a `%Ash.Info.Manifest.Type{}`: the field's own type (`rhs` `:same` or
+      `:any`), one element of it for `has`, or an array of either for a list
+      operator (`in`, `{:array, :same}`);
+    * `{:concrete, module}`: an operator with a type of its own (`is_nil`
+      takes `Ash.Type.Boolean`, `contains` `Ash.Type.String`);
+    * `nil`: the field has no such operator or function, or its value has no
+      manifest type (an array of a concrete type).
+
+  `operator` is a filter key (`:eq`, `:equals`, `:in`) or the manifest's name
+  for it (`:==`, `:is_nil`). Reads only `field`.
+  """
+  @spec filter_operator_value_type(Ash.Info.Manifest.Field.t(), atom()) ::
+          Ash.Info.Manifest.Type.t() | {:concrete, module()} | nil
+  def filter_operator_value_type(%Ash.Info.Manifest.Field{} = field, operator) do
+    name = filter_operator_name(operator)
+
+    rhs =
+      Enum.find_value(
+        List.wrap(field.filter_operators) ++ List.wrap(field.filter_functions),
+        fn applicable -> if applicable.name == name, do: applicable.rhs end
+      )
+
+    case rhs do
+      {:concrete, _module} = concrete -> concrete
+      rhs -> rhs_type(rhs, same_type(field, name))
+    end
+  end
+
+  # The manifest's name for a filter operator (`:eq` and `:equals` are `:==`);
+  # a function's name, or a name Ash doesn't know, is returned as is.
+  defp filter_operator_name(operator) do
+    case Ash.Filter.get_operator(operator) do
+      nil -> operator
+      module -> module.operator()
+    end
+  end
+
+  # `:same` is the field's type, except for `has`, whose field is the array
+  # (`{:array, :same}`) and whose value is one element.
+  defp same_type(%Ash.Info.Manifest.Field{type: %Ash.Info.Manifest.Type{item_type: item}}, :has),
+    do: item
+
+  defp same_type(%Ash.Info.Manifest.Field{type: type}, _name), do: type
+
+  defp rhs_type(rhs, same) when rhs in [:same, :any], do: same
+  defp rhs_type({:array, inner}, same), do: array_of(rhs_type(inner, same))
+  defp rhs_type(_rhs, _same), do: nil
+
+  defp array_of(nil), do: nil
+
+  defp array_of(%Ash.Info.Manifest.Type{} = item),
+    do: %Ash.Info.Manifest.Type{kind: :array, item_type: item, constraints: []}
 
   @doc """
   `type` with its named types (`:type_ref`) resolved to their definitions

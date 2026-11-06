@@ -9,5 +9,6 @@ defmodule AshRpc.DoctestTest do
   doctest AshRpc.FieldExtractor
   doctest AshRpc.FieldFormatter
   doctest AshRpc.FieldProcessing.FieldSelector
+  doctest AshRpc.FilterInput
   doctest AshRpc.Introspection
 end
