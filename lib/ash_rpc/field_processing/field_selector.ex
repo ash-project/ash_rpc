@@ -362,34 +362,26 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
         {select, load ++ [load_spec], template ++ [{internal_name, nested_template}]}
 
       :calculation_complex ->
-        # Calculations returning complex types need different load formats depending
-        # on whether the return type is a resource (which supports load_through via
-        # Ash queries) or a non-resource type (TypedStruct/map where sub-field
-        # extraction is handled by the template).
+        # A resource value is always loaded through ({calc_name, {args_map,
+        # load_through_fields}}), and a union value when the selection loads
+        # something in a member. Any other value (TypedStruct/map) loads the
+        # calculation itself, and the template extracts its sub-fields.
         returns_resource = calculation_returns_resource?(field_type)
+        loads_through = value_loads_through?(field_type, ctx)
         check_load_allowed!(path, internal_name, ctx)
+        check_value_loadable!(:calculation, loads_through, nested_load, internal_name, path)
 
         load_spec =
-          if returns_resource do
-            # Resource-returning calculations use load_through format:
-            # {calc_name, {args_map, load_through_fields}}
-            {internal_name, {%{}, nested_select ++ nested_load}}
-          else
-            # Non-resource types (TypedStruct/map): load the calculation itself,
-            # template handles sub-field extraction
-            internal_name
-          end
+          if returns_resource or nested_load != [],
+            do: {internal_name, {%{}, nested_select ++ nested_load}},
+            else: internal_name
 
         {select, load ++ [load_spec], template ++ [{internal_name, nested_template}]}
 
-      # Ash can't load through an aggregate, so a calculation of its value
-      # (a nested load) is rejected rather than silently missing. The template
-      # extracts the selected attributes.
-      :aggregate when nested_load != [] ->
-        throw({:aggregate_value_load, internal_name, path})
-
+      # The template extracts the selected attributes of the value.
       :aggregate ->
         check_load_allowed!(path, internal_name, ctx)
+        check_value_loadable!(:aggregate, false, nested_load, internal_name, path)
         {select, load ++ [internal_name], template ++ [{internal_name, nested_template}]}
 
       :calculation_with_args ->
@@ -478,6 +470,11 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
         true ->
           {[], [], []}
       end
+
+    if is_complex_return_type do
+      loads_through = value_loads_through?(field_type, ctx)
+      check_value_loadable!(:calculation, loads_through, nested_load, internal_name, path)
+    end
 
     load_fields = nested_select ++ nested_load
 
@@ -934,8 +931,13 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
         internal_name = typed_field!(typed, field_name, path)
         sub_type = Type.find_field_type(typed.type_info, internal_name)
 
-        {_nested_select, _nested_load, nested_template} =
+        {_nested_select, nested_load, nested_template} =
           select_fields(sub_type, nested, path ++ [internal_name], ctx)
+
+        # Loads aren't carried through a typed map or struct (Ash can't load
+        # through a map, keyword or tuple), so a calculation selected under
+        # one of its fields would be missing from the result.
+        check_value_loadable!(:field_constrained_type, false, nested_load, internal_name, path)
 
         {select, load, template ++ [{internal_name, nested_template}]}
 
@@ -1428,6 +1430,24 @@ defmodule AshRpc.FieldProcessing.FieldSelector do
   # check doesn't know about.
   defp check_load_allowed!(path, internal_name, ctx) do
     LoadRestrictions.check!(path ++ [internal_name], ctx.load_restrictions)
+  end
+
+  # A calculation selected in a value that isn't loaded through (a nested
+  # load) would be missing from the result, so it is rejected.
+  defp check_value_loadable!(field_type, loads_through?, nested_load, name, path) do
+    if not loads_through? and nested_load != [],
+      do: throw({:value_calculation_load, field_type, name, path})
+  end
+
+  # Ash loads through a calculation's resource or union value (the types that
+  # implement `merge_load/4`), not through a typed map, keyword or tuple.
+  # Named types resolve first.
+  defp value_loads_through?(%Type{} = type, ctx) do
+    case Introspection.resolve_named_type(type, ctx.runtime) do
+      %Type{kind: :union} -> true
+      %Type{kind: :array, item_type: %Type{} = item} -> value_loads_through?(item, ctx)
+      resolved -> calculation_returns_resource?(resolved)
+    end
   end
 
   # Determines whether a `:calculation_complex` field returns a resource type.

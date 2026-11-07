@@ -43,6 +43,17 @@ defmodule AshRpc.Test.Project do
                   ]
     end
 
+    # `report` with an argument, for selection through a calculation with args.
+    calculate :report_for, :map, Calculations.ProjectReport do
+      public? true
+      argument :prefix, :string
+
+      constraints fields: [
+                    rows: [type: {:array, ProjectMeta}],
+                    total: [type: :integer, allow_nil?: false]
+                  ]
+    end
+
     calculate :self, :struct, Calculations.SelfRecords do
       public? true
       constraints instance_of: __MODULE__

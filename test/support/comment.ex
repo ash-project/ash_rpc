@@ -32,6 +32,15 @@ defmodule AshRpc.Test.Comment do
 
   calculations do
     calculate :weighted_rating, :integer, expr(rating * 2), public?: true
+
+    calculate :attachment_echo, :union, AshRpc.Test.Calculations.AttachmentEcho do
+      public? true
+
+      constraints types: [
+                    file: [type: AshRpc.Test.CommentAttachment],
+                    note: [type: :string]
+                  ]
+    end
   end
 
   actions do

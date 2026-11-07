@@ -332,9 +332,78 @@ defmodule AshRpc.CalculationsTest do
              single_error(run(params))
   end
 
+  describe "union calculation with an embedded member" do
+    setup do
+      post = Ash.create!(AshRpc.Test.Post, %{title: "p"})
+      Ash.create!(AshRpc.Test.Comment, %{body: "b", post_id: post.id})
+      :ok
+    end
+
+    test "a member's attributes are selected" do
+      assert %{"success" => true, "data" => [row]} =
+               run(%{
+                 "action" => "list_comments",
+                 "fields" => [%{"attachmentEcho" => %{"file" => ["url"]}}]
+               })
+
+      assert row == %{"attachmentEcho" => %{"file" => %{"url" => "a.txt"}}}
+    end
+
+    # Ash loads through a union value, as through a resource.
+    test "a member's calculation is loaded" do
+      assert %{"success" => true, "data" => [row]} =
+               run(%{
+                 "action" => "list_comments",
+                 "fields" => [%{"attachmentEcho" => %{"file" => ["url", "label"]}}]
+               })
+
+      assert row == %{
+               "attachmentEcho" => %{"file" => %{"url" => "a.txt", "label" => "file:a.txt"}}
+             }
+    end
+  end
+
   describe "typed-map calculation with an array of embedded rows" do
     setup do
       %{project: Ash.create!(AshRpc.Test.Project, %{})}
+    end
+
+    # Ash can't load through a typed map, so a calculation selected in a row
+    # would be missing from the result. The error names the typed value's
+    # field holding it.
+    test "a calculation of a row is invalid_field_selection, with or without args" do
+      for {field, selection} <- [
+            {"report", %{"report" => [%{"rows" => ["category", "displayCategory"]}]}},
+            {"reportFor",
+             %{"reportFor" => %{"args" => %{}, "fields" => [%{"rows" => ["displayCategory"]}]}}}
+          ] do
+        assert %{"success" => false, "errors" => [error]} = list_projects([selection])
+
+        assert error == %{
+                 "type" => "invalid_field_selection",
+                 "message" => "Cannot load calculations of the value of %{fieldType} %{field}",
+                 "shortMessage" => "Invalid field selection",
+                 "vars" => %{"field" => "#{field}.rows", "fieldType" => "typed value"},
+                 "path" => [field],
+                 "fields" => ["#{field}.rows"],
+                 "details" => %{"suggestion" => "Select only attributes of its value"}
+               }
+      end
+    end
+
+    test "attributes of a row through a calculation with args are selected", %{
+      project: project
+    } do
+      assert %{"success" => true, "data" => [row]} =
+               list_projects([
+                 "id",
+                 %{"reportFor" => %{"args" => %{}, "fields" => [%{"rows" => ["category"]}]}}
+               ])
+
+      assert row == %{
+               "id" => project.id,
+               "reportFor" => %{"rows" => [%{"category" => "work"}, %{"category" => "personal"}]}
+             }
     end
 
     test "a nested selection on the rows returns only the requested row fields", %{

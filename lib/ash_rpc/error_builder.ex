@@ -51,7 +51,8 @@ defmodule AshRpc.ErrorBuilder do
   - `invalid_field_selection` *(hint)*: a nested field list was given for an
     aggregate or calculation with a primitive type, or for an action whose
     return type is primitive. Also, without the hint: a calculation selected in
-    an aggregate's value, which Ash can't load.
+    a value that isn't loaded through (an aggregate's, or a field's of a
+    typed map or struct).
   - `field_does_not_support_nesting` *(hint)*: a nested specification was
     given for a primitive attribute or calculation.
   - `unsupported_field_combination` *(hint)*: a relationship's nested
@@ -462,14 +463,16 @@ defmodule AshRpc.ErrorBuilder do
     )
   end
 
-  # Not a drift hint: no generated client offers this selection.
-  defp build({:aggregate_value_load, aggregate, path}, ctx) when is_list(path) do
+  # A calculation selected in a value that isn't loaded through (an
+  # aggregate's, a typed value field's). Not a drift hint: no generated client
+  # offers this selection.
+  defp build({:value_calculation_load, field_type, field, path}, ctx) when is_list(path) do
     malformed(
       "invalid_field_selection",
-      "Cannot load calculations of the value of aggregate %{field}",
+      "Cannot load calculations of the value of %{field_type} %{field}",
       "Invalid field selection",
-      field_opts(path, aggregate, ctx) ++
-        [details: %{suggestion: "Select only attributes of the aggregate's value"}]
+      field_opts(path, field, ctx, %{field_type: format_field_type(field_type)}) ++
+        [details: %{suggestion: "Select only attributes of its value"}]
     )
   end
 

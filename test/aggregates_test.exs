@@ -328,14 +328,12 @@ defmodule AshRpc.AggregatesTest do
 
         assert error == %{
                  "type" => "invalid_field_selection",
-                 "message" => "Cannot load calculations of the value of aggregate %{field}",
+                 "message" => "Cannot load calculations of the value of %{fieldType} %{field}",
                  "shortMessage" => "Invalid field selection",
-                 "vars" => %{"field" => "firstNoteMeta"},
+                 "vars" => %{"field" => "firstNoteMeta", "fieldType" => "aggregate"},
                  "path" => [],
                  "fields" => ["firstNoteMeta"],
-                 "details" => %{
-                   "suggestion" => "Select only attributes of the aggregate's value"
-                 }
+                 "details" => %{"suggestion" => "Select only attributes of its value"}
                }
       end
     end
@@ -364,12 +362,12 @@ defmodule AshRpc.AggregatesTest do
 
       assert error == %{
                "type" => "invalid_field_selection",
-               "message" => "Cannot load calculations of the value of aggregate %{field}",
+               "message" => "Cannot load calculations of the value of %{fieldType} %{field}",
                "shortMessage" => "Invalid field selection",
-               "vars" => %{"field" => "firstNoteAuthorInfo"},
+               "vars" => %{"field" => "firstNoteAuthorInfo", "fieldType" => "aggregate"},
                "path" => [],
                "fields" => ["firstNoteAuthorInfo"],
-               "details" => %{"suggestion" => "Select only attributes of the aggregate's value"}
+               "details" => %{"suggestion" => "Select only attributes of its value"}
              }
     end
 

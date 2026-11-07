@@ -161,3 +161,17 @@ defmodule AshRpc.Test.Calculations.ChoiceLabel do
     Enum.map(records, fn _ -> to_string(value) end)
   end
 end
+
+defmodule AshRpc.Test.Calculations.AttachmentEcho do
+  @moduledoc false
+  # A union value whose `file` member is an embedded resource with a
+  # calculation (`label`).
+  use Ash.Resource.Calculation
+
+  @impl true
+  def calculate(records, _opts, _context) do
+    Enum.map(records, fn _ ->
+      %Ash.Union{type: :file, value: %AshRpc.Test.CommentAttachment{url: "a.txt"}}
+    end)
+  end
+end
